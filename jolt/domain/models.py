@@ -75,6 +75,23 @@ class TrackOrigin(str, Enum):
     JOLT = "jolt"  # curated, world-readable (LLD §5 curated-track exception)
 
 
+class AgendaStatus(str, Enum):
+    """Lifecycle of a track's agenda (the shaped syllabus)."""
+
+    NONE = "none"  # no agenda yet
+    DRAFT = "draft"  # syllabus written but not yet marked refined
+    REFINED = "refined"  # agent-shaped and current
+    LOCKED = "locked"  # frozen: refinement and auto-add are rejected/skipped
+
+
+class AgendaSource(str, Enum):
+    """Who last shaped the agenda."""
+
+    AGENT = "agent"  # written by a sync-pass agent
+    USER = "user"  # authored/edited by the learner
+    EMERGENT = "emergent"  # grew from logged concepts (auto-add)
+
+
 class FSRSGrade(int, Enum):
     """FSRS ratings — the four-button scale."""
 
@@ -94,12 +111,43 @@ class User(DocBase):
     retention_days: Optional[int] = None  # data-retention preference
 
 
+class SyllabusItem(BaseModel):
+    """One entry in an agenda's syllabus — a concept the track means to cover.
+
+    `concept_key` is the stable join key: a concept's `syllabus_ref` points at it,
+    coverage matches on it, and auto-add tests membership by it. `parent` (another
+    item's `concept_key`) makes the syllabus a shallow tree; None means a leaf/root.
+    """
+
+    concept_key: str
+    label: str
+    parent: Optional[str] = None
+
+
+class Agenda(BaseModel):
+    """A track's shaped syllabus plus its refinement lifecycle (track agenda model).
+
+    The backend only stores agendas; it never generates or infers them. Agents shape
+    the syllabus (jolt_set_agenda) and per-concept growth (auto-add on log_session)
+    extends it. `locked` freezes both write paths.
+    """
+
+    status: AgendaStatus = AgendaStatus.NONE
+    source: AgendaSource = AgendaSource.AGENT
+    syllabus: list[SyllabusItem] = Field(default_factory=list)
+    last_refined_at: Optional[datetime] = None
+    refined_from_source_id: Optional[str] = None
+
+    def keys(self) -> set[str]:
+        return {item.concept_key for item in self.syllabus}
+
+
 class Track(DocBase):
     # Curated tracks have user_id = None and are world-readable.
     user_id: Optional[str] = None
     name: str
     origin: TrackOrigin = TrackOrigin.USER
-    syllabus: list[str] = Field(default_factory=list)  # syllabus item labels
+    agenda: Agenda = Field(default_factory=Agenda)
 
 
 class Source(DocBase):

@@ -27,10 +27,12 @@ from jolt.domain.models import (
     Review,
     Session,
     Source,
+    SyllabusItem,
 )
 from jolt.domain.reconciliation import ProposedConcept, reconcile
 from jolt.domain.scheduling import fold_history
 from jolt.runtime import Runtime
+from jolt.services.tracks import TrackError, TrackService
 
 
 def _now() -> datetime:
@@ -65,6 +67,14 @@ class ConceptInput:
     title: Optional[str] = None
     syllabus_ref: Optional[str] = None
     source_id: Optional[str] = None
+    # Agenda linkage. `concept_key` is the stable key coverage/auto-add join on;
+    # it defaults to `syllabus_ref` for backward-compatible callers. `parent` is an
+    # optional existing concept_key to nest under when auto-added.
+    concept_key: Optional[str] = None
+    parent: Optional[str] = None
+
+    def effective_key(self) -> Optional[str]:
+        return self.concept_key or self.syllabus_ref
 
 
 @dataclass
@@ -172,14 +182,21 @@ class SyncService:
 
     # -- session / concepts / questions ------------------------------------
     async def log_session(self, user_id: str, source_ids: list[str], concepts: list[ConceptInput]):
-        """Create a session, its concepts, and a fresh FSRS state per concept."""
+        """Create a session, its concepts, and a fresh FSRS state per concept.
+
+        Also grows each track's agenda: any concept whose `concept_key` is not yet
+        in the track's agenda syllabus is auto-added (as a leaf, or under a supplied
+        parent). Skipped on locked agendas. Auto-add is keyed on concept_key
+        membership, so re-running a sync never duplicates entries.
+        """
         created_concepts: list[Concept] = []
         for c in concepts:
             concept = Concept(
                 track_id=c.track_id,
                 source_id=c.source_id,
                 text=c.text,
-                syllabus_ref=c.syllabus_ref,
+                # The concept's coverage key is its agenda concept_key.
+                syllabus_ref=c.effective_key(),
                 status=ConceptStatus.ACTIVE,
             )
             concept = await self._rt.repos.concepts.create(concept)
@@ -193,6 +210,8 @@ class SyncService:
             )
             await self._rt.repos.concept_states.create(state)
 
+        await self._auto_add_agenda(user_id, concepts)
+
         session = Session(
             user_id=user_id,
             source_ids=source_ids,
@@ -200,6 +219,30 @@ class SyncService:
         )
         session = await self._rt.repos.sessions.create(session)
         return session, created_concepts
+
+    async def _auto_add_agenda(self, user_id: str, concepts: list[ConceptInput]) -> None:
+        """Grow each involved track's agenda from the session's concepts.
+
+        Grouped by track so each track's agenda is a single etag-guarded
+        read-modify-write (serialised against a concurrent refine).
+        """
+        by_track: dict[str, list[SyllabusItem]] = {}
+        for c in concepts:
+            key = c.effective_key()
+            if not key:
+                continue  # no agenda linkage → nothing to add
+            by_track.setdefault(c.track_id, []).append(
+                SyllabusItem(concept_key=key, label=c.title or key, parent=c.parent)
+            )
+        if not by_track:
+            return
+        track_service = TrackService(self._rt)
+        for track_id, items in by_track.items():
+            try:
+                await track_service.auto_add_concepts(user_id, track_id, items)
+            except TrackError:
+                # A missing track shouldn't fail the whole session log.
+                continue
 
     async def create_questions(
         self, user_id: str, concept_id: str, questions: list[QuestionInput]

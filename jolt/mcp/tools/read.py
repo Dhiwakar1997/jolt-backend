@@ -7,7 +7,22 @@ enforcement, §5) and returns plain JSON-serialisable dicts.
 from __future__ import annotations
 
 from jolt.mcp.context import get_runtime, require_user
-from jolt.services.tracks import TrackService
+from jolt.services.tracks import TrackError, TrackService
+
+
+def _agenda_dict(agenda) -> dict:
+    return {
+        "status": agenda.status.value,
+        "source": agenda.source.value,
+        "syllabus": [
+            {"concept_key": i.concept_key, "label": i.label, "parent": i.parent}
+            for i in agenda.syllabus
+        ],
+        "last_refined_at": (
+            agenda.last_refined_at.isoformat() if agenda.last_refined_at else None
+        ),
+        "refined_from_source_id": agenda.refined_from_source_id,
+    }
 
 
 async def get_tracks() -> dict:
@@ -19,11 +34,22 @@ async def get_tracks() -> dict:
                 "id": t.id,
                 "name": t.name,
                 "origin": t.origin.value,
-                "syllabus": t.syllabus,
+                # Flat labels for convenience; `agenda` carries the full shape.
+                "syllabus": [i.label for i in t.agenda.syllabus],
+                "agenda": _agenda_dict(t.agenda),
             }
             for t in tracks
         ]
     }
+
+
+async def get_agenda(track_id: str) -> dict:
+    user = await require_user()
+    try:
+        agenda = await TrackService(get_runtime()).get_agenda(user.user_id, track_id)
+    except TrackError as exc:
+        return {"error": str(exc)}
+    return _agenda_dict(agenda)
 
 
 async def get_recent_concepts(track_id: str, limit: int = 20) -> dict:

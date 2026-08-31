@@ -4,9 +4,10 @@ create_questions, correct_concept (LLD §4, §7.2, §7.7).
 
 from __future__ import annotations
 
-from jolt.domain.models import ConceptStatus
+from jolt.domain.models import AgendaSource, ConceptStatus, SyllabusItem
 from jolt.mcp.context import get_runtime, require_user
 from jolt.services.sync import ConceptInput, QuestionInput, SyncService
+from jolt.services.tracks import AgendaLocked, TrackError, TrackService
 from jolt.services.uploads import UploadService
 
 
@@ -27,6 +28,8 @@ async def log_session(source_ids: list[str], concepts: list[dict]) -> dict:
             title=c.get("title"),
             syllabus_ref=c.get("syllabus_ref"),
             source_id=c.get("source_id"),
+            concept_key=c.get("concept_key"),
+            parent=c.get("parent"),
         )
         for c in concepts
     ]
@@ -81,3 +84,58 @@ async def correct_concept(track_id: str, concept_id: str, text: str) -> dict:
     concept.status = ConceptStatus.ACTIVE
     updated = await rt.repos.concepts.replace(concept, etag=concept.etag)
     return {"concept_id": concept_id, "updated": updated is not None}
+
+
+async def set_agenda(
+    track_id: str,
+    syllabus: list[dict],
+    source: str = "agent",
+    mark_refined: bool = False,
+) -> dict:
+    """Write/replace a track's agenda syllabus. Rejected on a locked agenda."""
+    user = await require_user()
+    try:
+        agenda_source = AgendaSource(source)
+    except ValueError:
+        return {"error": f"invalid source '{source}'; expected agent|user|emergent"}
+
+    items: list[SyllabusItem] = []
+    for entry in syllabus:
+        if not entry.get("concept_key") or not entry.get("label"):
+            return {"error": "each syllabus item needs concept_key and label"}
+        items.append(
+            SyllabusItem(
+                concept_key=entry["concept_key"],
+                label=entry["label"],
+                parent=entry.get("parent"),
+            )
+        )
+
+    try:
+        agenda = await TrackService(get_runtime()).set_agenda(
+            user.user_id,
+            track_id,
+            items,
+            agenda_source,
+            mark_refined=mark_refined,
+        )
+    except AgendaLocked:
+        return {"error": "agenda is locked; refinement is frozen"}
+    except TrackError as exc:
+        return {"error": str(exc)}
+    return _agenda_dict(agenda)
+
+
+def _agenda_dict(agenda) -> dict:
+    return {
+        "status": agenda.status.value,
+        "source": agenda.source.value,
+        "syllabus": [
+            {"concept_key": i.concept_key, "label": i.label, "parent": i.parent}
+            for i in agenda.syllabus
+        ],
+        "last_refined_at": (
+            agenda.last_refined_at.isoformat() if agenda.last_refined_at else None
+        ),
+        "refined_from_source_id": agenda.refined_from_source_id,
+    }
