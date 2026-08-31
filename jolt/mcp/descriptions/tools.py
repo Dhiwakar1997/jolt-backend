@@ -1,48 +1,266 @@
-"""Tool descriptions — the agent-facing contract (LLD §1: the MCP surface is the
-product). Kept as data so they are reviewed on change alongside the rubric.
+"""Tool descriptions — the agent-facing contract (LLD §1: the MCP surface *is* the
+product; the contract it presents to agents is precise, versioned, and defensive).
+
+Kept as data so they are reviewed on change alongside the rubric. These strings are
+the primary contract the calling model sees: FastMCP derives each tool's input
+schema from its Python signature, and several tools take loosely-typed arguments
+(`concepts: list[dict]`, `questions: list[dict]`, `gradings: list[dict]`) whose
+nested shape the schema cannot express. So every such shape — field names, types,
+whether required, value ranges — is spelled out here. When in doubt, over-specify:
+an under-described tool is one the model will call wrong.
+
+Conventions referenced throughout:
+  * Scope. Every tool acts only on the calling token's own user. There is no
+    user_id argument on any tool and none is accepted — identity comes from the
+    connection, never from a parameter.
+  * FSRS grade scale (integers): 1 = Again, 2 = Hard, 3 = Good, 4 = Easy.
+  * Timestamps are ISO-8601 UTC strings. IDs are opaque strings.
 """
 
 from __future__ import annotations
 
 TOOL_DESCRIPTIONS: dict[str, str] = {
-    # read
-    "jolt_get_tracks": "List the caller's tracks plus world-readable curated tracks.",
-    "jolt_get_recent_concepts": "Recent concepts for a track, newest first.",
-    "jolt_get_coverage": "Coverage of a track's syllabus by the caller's studied concepts.",
-    # write
+    # ---------------------------------------------------------------- read --
+    "jolt_get_tracks": (
+        "List the study tracks visible to the caller: their own tracks plus the "
+        "world-readable curated ('jolt') tracks. A track is a subject/course that "
+        "concepts hang off of.\n"
+        "Arguments: none.\n"
+        "Returns: { tracks: [ { id, name, origin, syllabus } ] } where `origin` is "
+        "'user' or 'jolt' (curated), and `syllabus` is a list of topic labels the "
+        "track's concepts are expected to cover. Use a track `id` as `track_id` for "
+        "the concept, coverage, question, and extraction tools. Read-only."
+    ),
+    "jolt_get_recent_concepts": (
+        "List a track's most recently created concepts, newest first — use it to see "
+        "what already exists before logging a session, so you extend coverage instead "
+        "of duplicating concepts.\n"
+        "Arguments:\n"
+        "  track_id (str, required) — the track to read, from jolt_get_tracks.\n"
+        "  limit (int, optional, default 20) — max concepts to return.\n"
+        "Returns: { concepts: [ { id, text, syllabus_ref } ] }. `syllabus_ref` is the "
+        "syllabus label the concept is filed under, or null. Read-only."
+    ),
+    "jolt_get_coverage": (
+        "Report how well the caller's studied concepts cover a track's syllabus — the "
+        "signal for what to study or extract next.\n"
+        "Arguments:\n"
+        "  track_id (str, required) — the track to measure, from jolt_get_tracks.\n"
+        "Returns: { track_id, total_concepts, studied_concepts, decaying_concepts, "
+        "coverage_ratio (0..1), uncovered_syllabus: [labels] }. `studied_concepts` are "
+        "those the user has an FSRS memory state for; `decaying_concepts` are studied "
+        "ones whose recall has weakened or fallen due; `uncovered_syllabus` lists "
+        "syllabus labels with no studied concept yet. Read-only."
+    ),
+    # --------------------------------------------------------------- write --
     "jolt_request_upload_url": (
-        "Get a short-TTL SAS URL to upload a source file straight to Blob. Jolt "
-        "compute never touches the bytes."
+        "Mint a short-TTL SAS URL for uploading one source file straight to Blob "
+        "storage. Jolt compute never receives the bytes — the holder of the URL PUTs "
+        "them directly. Call this only when you have a file to store; extraction reads "
+        "existing sources via jolt_get_source_content instead.\n"
+        "Arguments:\n"
+        "  filename (str, required) — original filename; becomes part of the blob path.\n"
+        "  content_type (str, required) — MIME type, e.g. 'application/pdf', 'image/png'.\n"
+        "  sha256 (str, required) — hex SHA-256 of the exact bytes to be uploaded; it is "
+        "checked at confirm time, so it must match the file uploaded.\n"
+        "Returns: { source_id, upload_url }. The upload_url expires (minutes) and is "
+        "scoped to exactly one blob path — PUT the bytes to it, then the app confirms "
+        "the upload over REST (POST /v1/uploads/{source_id}/confirm). The source stays "
+        "'unprocessed' until a sync claims it. Re-calling mints a new source, not a "
+        "retry of an old one."
     ),
     "jolt_log_session": (
-        "Record a study session: create concepts (each with its track_id) and a "
-        "fresh, immediately-due FSRS card per concept."
+        "Record a study session and create its concepts, each with a fresh, "
+        "immediately-due FSRS card so it enters the review rotation at once. This is "
+        "how extracted material becomes reviewable. Call it once per processed source "
+        "(or batch of sources) after jolt_store_extraction, before jolt_create_questions.\n"
+        "Arguments:\n"
+        "  source_ids (list[str], required) — the source(s) this session came from; use "
+        "[] if none. Records provenance for the timeline.\n"
+        "  concepts (list[dict], required) — one dict per concept to create. Each dict:\n"
+        "      text (str, required) — the concept statement to be learned; the atom of "
+        "recall, one idea per concept. Keep it self-contained.\n"
+        "      track_id (str, required) — the track this concept belongs to (from "
+        "jolt_get_tracks). Different concepts in one call may target different tracks.\n"
+        "      title (str, optional) — a short label for the concept.\n"
+        "      syllabus_ref (str, optional) — the syllabus label from the track's "
+        "syllabus that this concept covers; drives coverage. Omit if none applies.\n"
+        "      source_id (str, optional) — the specific source this concept came from.\n"
+        "Returns: { session_id, concept_ids }. `concept_ids` are returned in the SAME "
+        "order as the input `concepts`, so map each returned id back to its concept and "
+        "pass it as `concept_id` to jolt_create_questions. Creating a concept without "
+        "questions leaves it due but unanswerable, so always follow with "
+        "jolt_create_questions. Not idempotent — calling twice creates duplicate "
+        "concepts; check jolt_get_recent_concepts first if retrying."
     ),
     "jolt_store_extraction": (
-        "Store the markdown extraction for a source and mark it processed. Set "
-        "supersede=true to replace the source's active extraction."
+        "Persist the markdown you extracted from a source and mark the source "
+        "processed, clearing its sync lease. Call this once per source you claimed via "
+        "jolt_get_unprocessed_sources, after reading it with jolt_get_source_content and "
+        "running your own extraction (extraction runs on your compute, not Jolt's).\n"
+        "Arguments:\n"
+        "  source_id (str, required) — the claimed source this extraction is for.\n"
+        "  markdown (str, required) — the full extracted text as markdown.\n"
+        "  confidence (float, optional, default 0.0) — your 0..1 confidence in the "
+        "extraction's fidelity. Report it honestly: it feeds the silent-misextraction "
+        "canary metric, so a low value flags a page for human review rather than "
+        "failing silently.\n"
+        "  model_id (str, optional) — identifier of the model you extracted with, for "
+        "provenance.\n"
+        "  supersede (bool, optional, default false) — false for a source's FIRST "
+        "extraction. Set true ONLY to replace a source's existing active extraction "
+        "(a re-extraction). A supersede triggers concept reconciliation and is the "
+        "most dangerous write path — ALWAYS preview it with jolt_diff_extractions "
+        "first, and see that tool for what each change class does.\n"
+        "Returns: { extraction_id, status } where status is 'active'. Safe to retry: a "
+        "dropped connection can be re-driven; the source ends processed with the new "
+        "extraction active."
     ),
-    "jolt_create_questions": "Attach review questions (stem, options, correct_index, expected_answer) to a concept.",
-    "jolt_correct_concept": "Replace a concept's text with an agent-supplied correction.",
-    # sync
-    "jolt_sync": "Return the sync plan: count of unprocessed sources and pending gradings.",
+    "jolt_create_questions": (
+        "Attach review questions to a concept. Every concept needs at least one, or it "
+        "is due but cannot be reviewed. Call after jolt_log_session, using a "
+        "`concept_id` it returned.\n"
+        "Arguments:\n"
+        "  concept_id (str, required) — the concept these questions test.\n"
+        "  questions (list[dict], required) — one dict per question. Each dict:\n"
+        "      stem (str, required) — the question prompt shown to the learner.\n"
+        "      options (list[str], required) — the multiple-choice options for stage 2. "
+        "Provide at least two; include the correct option among them.\n"
+        "      correct_index (int, required) — 0-based index into `options` of the "
+        "correct choice. Must be a valid index into `options`.\n"
+        "      expected_answer (str, required) — the canonical free-text answer. This is "
+        "the reference the learner's stage-1 free text is graded against (see "
+        "jolt_get_pending_gradings), so make it a complete, gradeable answer, not just "
+        "the option label.\n"
+        "Returns: { question_ids } in input order. Not idempotent — re-calling adds more "
+        "questions to the concept."
+    ),
+    "jolt_correct_concept": (
+        "Replace a single concept's text in place — a small, in-scope wording or "
+        "accuracy fix that keeps the concept's questions, reviews, and FSRS state "
+        "intact. Use this for a typo or a clarified sentence, NOT for structural change: "
+        "if the underlying material changed enough that questions or memory state should "
+        "no longer apply, re-extract with jolt_store_extraction(supersede=true) instead, "
+        "which reconciles concepts properly.\n"
+        "Arguments:\n"
+        "  track_id (str, required) — the concept's track (concepts are keyed by track, "
+        "so this is needed to locate it).\n"
+        "  concept_id (str, required) — the concept to edit.\n"
+        "  text (str, required) — the replacement concept text.\n"
+        "Returns: { concept_id, updated } — `updated` is false if the concept was not "
+        "found or the write lost a concurrency race; re-read and retry in that case."
+    ),
+    # ---------------------------------------------------------------- sync --
+    "jolt_sync": (
+        "Start of every unattended sync. Returns the plan — how much work is waiting — "
+        "so you know whether to proceed and with what batch sizes. Does not claim or "
+        "change anything.\n"
+        "Arguments:\n"
+        "  limit (int, optional, default 50) — cap on how far to count each queue.\n"
+        "Returns: { unprocessed_sources, pending_gradings } (counts).\n"
+        "Typical choreography when counts are non-zero:\n"
+        "  1. jolt_get_unprocessed_sources { limit } — claim a batch.\n"
+        "  2. for each claimed source: jolt_get_source_content -> (extract on your own "
+        "compute) -> jolt_store_extraction -> jolt_log_session -> jolt_create_questions.\n"
+        "  3. jolt_get_pending_gradings { limit } — claim reviews to grade.\n"
+        "  4. grade each against its expected_answer using the rubric, then "
+        "jolt_submit_gradings { gradings }.\n"
+        "Everything you do runs on the user's own subscription; Jolt only writes rows."
+    ),
     "jolt_get_unprocessed_sources": (
-        "Claim up to `limit` unprocessed sources under a lease. Interrupted claims "
-        "become reclaimable automatically once their lease expires."
+        "Claim a batch of unprocessed sources for extraction, marking each 'in_flight' "
+        "under a time-limited lease (default ~15 min) so a concurrent sync will not "
+        "pick up the same rows. You must finish each claimed source by calling "
+        "jolt_store_extraction, which clears its lease and marks it processed.\n"
+        "Arguments:\n"
+        "  limit (int, optional, default 10) — max sources to claim this call. Match it "
+        "to how many you can extract before the lease expires.\n"
+        "Returns: { sources: [ { source_id, filename, content_type, lease_expires_at } ] }. "
+        "The list may be shorter than `limit` (fewer available, or rows lost to a "
+        "concurrent claimer). If you crash or the lease expires before you store the "
+        "extraction, the row becomes claimable again automatically on a later call — no "
+        "cleanup needed. Next step for each: jolt_get_source_content."
     ),
     "jolt_get_pending_gradings": (
-        "Claim up to `limit` reviews awaiting a semantic grade, with the learner's "
-        "free-text and the expected answer."
+        "Claim a batch of reviews awaiting a semantic grade — the learner has answered "
+        "(stage 1 free text + stage 2 choice) and a provisional grade already applied; "
+        "your job is the authoritative grade of the FREE TEXT against the expected "
+        "answer, per the versioned rubric.\n"
+        "Arguments:\n"
+        "  limit (int, optional, default 10) — max reviews to claim this call.\n"
+        "Returns: { gradings: [ { review_id, concept_id, question_id, free_text, "
+        "expected_answer } ] }. `free_text` is the learner's own recall (the graded "
+        "artefact); `expected_answer` is the reference. Grade the substance of the "
+        "recall against the reference, not spelling or phrasing. Feed each `review_id` "
+        "and your grade to jolt_submit_gradings. May return fewer than `limit`."
     ),
     "jolt_submit_gradings": (
-        "Submit semantic FSRS grades (see the grading rubric). Idempotent per "
-        "review_id; each affected card is re-folded inline."
+        "Submit authoritative FSRS grades for reviews from jolt_get_pending_gradings. "
+        "Each accepted grade is applied and the affected concept's card is re-folded "
+        "immediately, which is what lets your semantic grade correct the earlier "
+        "provisional one.\n"
+        "Arguments:\n"
+        "  gradings (list[dict], required) — one dict per review. Each dict:\n"
+        "      review_id (str, required) — the review being graded, from "
+        "jolt_get_pending_gradings.\n"
+        "      suggested_fsrs_grade (int, required) — 1=Again, 2=Hard, 3=Good, 4=Easy, "
+        "chosen per the rubric: grade the free-text recall's substance; when torn "
+        "between two, pick the LOWER (under-crediting only costs a slightly earlier "
+        "review, over-crediting silently erodes retention). Any value outside 1..4 is "
+        "rejected.\n"
+        "      rationale (str, optional) — a short justification for the grade.\n"
+        "      rubric_version (str, optional) — the rubric version string you graded "
+        "against, stamped for audit.\n"
+        "Returns: { applied, submitted } — `submitted` is how many you sent, `applied` "
+        "how many were newly graded. Idempotent per review_id: re-submitting an "
+        "already-graded review is a safe no-op (counted in `submitted`, not `applied`), "
+        "so retrying after a dropped connection never double-writes."
     ),
-    # extract
-    "jolt_list_sources": "List all of the caller's sources and their processing status.",
-    "jolt_get_source_content": "Get a short-TTL signed GET URL to read a source's original bytes.",
+    # ------------------------------------------------------------- extract --
+    "jolt_list_sources": (
+        "List all of the caller's sources with their processing status — an overview "
+        "for deciding what to (re-)extract.\n"
+        "Arguments: none.\n"
+        "Returns: { sources: [ { source_id, filename, processing_status, "
+        "active_extraction_id } ] } where processing_status is 'unprocessed', "
+        "'in_flight' (claimed by a sync), or 'processed'. `active_extraction_id` is the "
+        "current canonical extraction, or null if never extracted. Read-only — does not "
+        "claim anything (use jolt_get_unprocessed_sources to claim for extraction)."
+    ),
+    "jolt_get_source_content": (
+        "Get a short-TTL signed GET URL to read a source's original bytes, so you can "
+        "run extraction on your own compute. Call it for each source you claimed via "
+        "jolt_get_unprocessed_sources (or any source you want to re-read for a "
+        "supersede).\n"
+        "Arguments:\n"
+        "  source_id (str, required) — the source to read.\n"
+        "Returns: { source_id, filename, content_type, read_url }. The read_url expires "
+        "in minutes — fetch promptly and re-call for a fresh one if it lapses. Use "
+        "`content_type` to decide how to parse (PDF vs image vs text). Read-only; does "
+        "not change the source's processing status."
+    ),
     "jolt_diff_extractions": (
-        "Preview the per-concept classification (unchanged/refined/changed/removed/"
-        "new) a supersede would produce, without committing it."
+        "Preview the per-concept reconciliation a re-extraction WOULD produce, without "
+        "writing anything. Run this before jolt_store_extraction(supersede=true) to see "
+        "how your proposed concepts line up against the track's existing ones, so a "
+        "supersede never silently discards memory state.\n"
+        "Arguments:\n"
+        "  track_id (str, required) — the track whose active concepts to diff against.\n"
+        "  proposed_concepts (list[dict], required) — the concepts your new extraction "
+        "would create. Each dict: text (str, required), title (str, optional), "
+        "syllabus_ref (str, optional) — same fields as jolt_log_session concepts.\n"
+        "Returns: { deltas: [ { change, existing_concept_id, proposed_text, similarity } ] } "
+        "where `change` is one of:\n"
+        "    unchanged — matches an existing concept; no-op on commit.\n"
+        "    refined  — minor edit; existing concept's text updates, keeping its "
+        "questions, reviews, and FSRS state.\n"
+        "    changed  — materially different; existing concept is superseded by a "
+        "successor that carries the state forward, its old questions retired.\n"
+        "    removed  — an existing concept with no match in your proposal; superseded "
+        "and dropped from the due queue but kept for history.\n"
+        "    new      — no existing match; a new concept (generate questions for it).\n"
+        "`similarity` is the 0..1 text-match score behind the classification. Read-only. "
+        "If the diff is not what you intend, adjust `proposed_concepts` before "
+        "committing the supersede."
     ),
 }
