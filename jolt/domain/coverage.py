@@ -65,8 +65,10 @@ def compute_coverage(
 
     report = CoverageReport(track_id=track.id, total_concepts=len(concepts))
 
+    # Coverage maps concepts against the agenda's syllabus, keyed on concept_key.
+    keys = [item.concept_key for item in track.agenda.syllabus]
     syllabus_buckets: dict[str, SyllabusCoverage] = {
-        ref: SyllabusCoverage(syllabus_ref=ref) for ref in track.syllabus
+        key: SyllabusCoverage(syllabus_ref=key) for key in keys
     }
     covered_refs: set[str] = set()
 
@@ -85,9 +87,13 @@ def compute_coverage(
             if studied:
                 bucket.studied_concepts += 1
                 covered_refs.add(ref)
+        # TODO(agenda): a concept whose ref is not in the agenda is "off-plan".
+        # Auto-add keeps unlocked agendas in sync, so this only happens on locked
+        # tracks (auto-add is skipped there). How off-plan concepts on a locked
+        # track surface in coverage is an open question — not built here.
 
     report.by_syllabus = list(syllabus_buckets.values())
-    report.uncovered_syllabus = [ref for ref in track.syllabus if ref not in covered_refs]
+    report.uncovered_syllabus = [key for key in keys if key not in covered_refs]
     return report
 
 

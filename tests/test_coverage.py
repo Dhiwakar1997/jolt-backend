@@ -1,11 +1,25 @@
 from datetime import datetime, timedelta, timezone
 
 from jolt.domain.coverage import compute_coverage
-from jolt.domain.models import Concept, ConceptState, Track
+from jolt.domain.models import (
+    Agenda,
+    AgendaStatus,
+    Concept,
+    ConceptState,
+    SyllabusItem,
+    Track,
+)
+
+
+def _agenda(*labels: str, status: AgendaStatus = AgendaStatus.REFINED) -> Agenda:
+    return Agenda(
+        status=status,
+        syllabus=[SyllabusItem(concept_key=label, label=label) for label in labels],
+    )
 
 
 def test_coverage_counts_studied_and_uncovered():
-    track = Track(id="t1", name="Physics", syllabus=["mechanics", "thermo"])
+    track = Track(id="t1", name="Physics", agenda=_agenda("mechanics", "thermo"))
     concepts = [
         Concept(id="c1", track_id="t1", text="F=ma", syllabus_ref="mechanics"),
         Concept(id="c2", track_id="t1", text="PV=nRT", syllabus_ref="thermo"),
@@ -22,7 +36,7 @@ def test_coverage_counts_studied_and_uncovered():
 
 def test_coverage_flags_decaying_by_due_date():
     now = datetime.now(timezone.utc)
-    track = Track(id="t1", name="Bio", syllabus=["cells"])
+    track = Track(id="t1", name="Bio", agenda=_agenda("cells"))
     concepts = [Concept(id="c1", track_id="t1", text="mitochondria", syllabus_ref="cells")]
     states = [
         ConceptState(
