@@ -2,7 +2,7 @@
 
 Each screen in the Jolt 2.0 design (Figma prototype, frames listed in
 `Jolt/design/frames/index.json`; screens per pass in `Jolt/docs/v2/PLAN.md` §5 and
-the FE pass briefs) compared with the API as of BE-01 ([`API.md`](./API.md)). For
+the FE pass briefs) compared with the API as of BE-06 ([`API.md`](./API.md)). For
 each gap, the backend pass whose brief covers it.
 
 Status: **ready** (today's endpoints are enough) · **partial** (some data
@@ -16,22 +16,22 @@ Frame numbers are phone / web / tablet.
 | Screen | Frames | Needs from the backend | Today | Status | Covered by |
 |---|---|---|---|---|---|
 | Splash, Welcome | 1, 2 / 21 | — | — | client | — |
-| Sign in (Google) | 2 / 21 | `POST /v1/auth/google` → app token + user | Only anonymous `POST /v1/accounts` | missing | BE-03 |
-| Connect your model | 3 / 21 | Create an MCP token shown once, MCP server URL, per-client steps, nightly prompt | Token only from account creation, same token for app and MCP | missing | BE-03 (`/v1/mcp-tokens`, `/v1/me`), BE-04 (`docs/CONNECT.md`, `GET /v1/sync/prompt`) |
+| Sign in (Google) | 2 / 21 | `POST /v1/auth/google` → app token + user | `POST /v1/auth/google` (BE-03); dev mode: `POST /v1/auth/dev` | ready | — |
+| Connect your model | 3 / 21 | Create an MCP token shown once, MCP server URL, per-client steps, nightly prompt | `POST /v1/mcp-tokens` (token shown once), `mcp_server_url` on `GET /v1/me` (BE-03); per-client steps in `docs/CONNECT.md` (static copy for the screen; Claude's connector URL is `mcp_server_url?token=<token>`), prompt from `GET /v1/sync/prompt` (BE-04) | ready | — (client setups **deploy pending**, see `CONNECT.md`) |
 | First track | 4 / 21 | Create a notes track with name and optional outline (→ `draft`); or enrol in curated DSA | `POST /v1/tracks {name, kind: notes, outline?}` → `draft` agenda with the outline (BE-07) | partial | Curated catalog and enrol: BE-09 |
-| Waiting for first sync | — / 21 | Poll sync status; resume point for a returning user | — | missing | BE-04 (`GET /v1/sync/status`), BE-03 (`GET /v1/me` onboarding state) |
+| Waiting for first sync | — / 21 | Poll sync status; resume point for a returning user | `GET /v1/sync/status` (`health: never` until the first run), `GET /v1/me` `onboarding.first_sync_at` (set when the first run closes) | ready | — |
 
 ## Today (FE-04)
 
 | Screen part | Frames | Needs | Today | Status | Covered by |
 |---|---|---|---|---|---|
 | Due card | 5 / 22 / 37 | Due count and per-track breakdown | `GET /v1/tracks` `due_count` per track (BE-07); the total is their sum | ready | — |
-| Sync line | 5 / 22 / 37 | Last sync time, client, late / never | — | missing | BE-04 |
+| Sync line | 5 / 22 / 37 | Last sync time, client, late / never | `GET /v1/sync/status`: `last_run` (`started_at`, `finished_at`, `client_label`, counts), `health`, `next_expected_at` (pass `?tz=`) | ready | — |
 | Stats | 5 / 22 / 37 | Streak, retention, reviews this week | — | missing | BE-08 (`GET /v1/progress`) |
 | Tracks | 5 / 22 / 37 | Concepts, due and sources count per track | `GET /v1/tracks` `concept_count`, `due_count`, `source_count` (BE-07) | ready | — |
 | Tonight's uploads | 5 / 22 / 37 | Unprocessed sources with their track | `GET /v1/sources?status=unprocessed` with `track_id`, `track_name`, `title`, `page_count` (BE-05) | ready | — |
-| What's new | 5 / 22 / 37 | Concepts added by the last sync, with the source date ("Found in your 12 Sep notes") | Track detail items carry `found_in` (BE-07); no "since the last sync" list | missing | **No brief covers it.** BE-07 did not add `GET /v1/concepts?since=` (outside its brief); BE-04's sync runs recording concept ids remains the proposal |
-| Empty / first-run states | — | Same data as above, plus `GET /v1/me` | — | missing | BE-03, BE-04 |
+| What's new | 5 / 22 / 37 | Concepts added by the last sync, with the source date ("Found in your 12 Sep notes") | `changes[]` on each sync run (`GET /v1/sync/status` → `last_run`, `GET /v1/sync/runs`): `concept_added` / `concept_updated` / `question_rewritten` with `concept_title`, `track_id`, `source_id`, `source_uploaded_at`, `added_to_syllabus` (decision A25, BE-04); concepts a read-again reconciliation adds or refines, and concepts a correction rewrites, are changes too (BE-07). Track detail items also carry `found_in` (BE-07) | ready | — |
+| Empty / first-run states | — | Same data as above, plus `GET /v1/me` | `GET /v1/me` (BE-03), sync status (BE-04), `GET /v1/sources` (BE-05), `GET /v1/tracks` counts (BE-07); stats still missing | partial | BE-08 (stats) |
 
 ## Review (FE-06)
 
@@ -54,8 +54,8 @@ Frame numbers are phone / web / tablet.
 | Lock toggle | 11 / 28 / 42 | Lock / unlock | `POST /v1/tracks/{id}/agenda/lock` and `/unlock` | ready | — |
 | "Added to the syllabus from your notes" | 11 / 28 / 42 | Per-item provenance (auto-added vs authored) | Per-item `source` on every agenda item and Track detail row (BE-07) | ready | — |
 | Concept | 12 / 29 / 43 | Summary, source and page, answer timeline (date, your words, correct, grade, feedback, question version), adaptive question note, FSRS state | `GET /v1/concepts/{id}` (BE-07); `POST /v1/concepts/{id}/unretire` (BE-06) | ready | `page` is set only when the agent passes it (`jolt_log_session` / reconciliation `page`) |
-| Feedback panel gate | 12 / 29 / 43 | `has_api_key` | `GET /v1/settings/api-key` (works as a stand-in) | partial | BE-08 (`has_api_key` on `/v1/me`); panel content BE-11 |
-| "Something's wrong with this concept" | 12 / 29 / 43 | Store a correction note for the next sync | `POST /v1/concepts/{id}/correction` → `jolt_sync.pending_corrections`, `jolt_get_pending_corrections`, `jolt_correct_concept` (BE-07) | ready | — |
+| Feedback panel gate | 12 / 29 / 43 | `has_api_key` | `has_api_key` on `GET /v1/me` (added in BE-03 for BE-08) | ready | panel content BE-11 |
+| "Something's wrong with this concept" | 12 / 29 / 43 | Store a correction note for the next sync | `POST /v1/concepts/{id}/correction` → `jolt_sync.pending_corrections` (the plan is not `done` while notes wait, and lists `jolt_get_pending_corrections` → `jolt_correct_concept`), the changed text is a `concept_updated` change on the run (BE-07) | ready | — |
 | DSA track (placeholder) | 13 / 30 / 44 | Curated track, enrol, patterns as syllabus, `pattern_match` questions, decision tree, library | — | missing | BE-09 |
 
 ## Sources and reader (FE-05, FE-08)
@@ -67,7 +67,7 @@ Frame numbers are phone / web / tablet.
 | Source · Original | 15 | Signed GET URL per page | `GET /v1/sources/{id}` `pages[].url` (BE-05) | ready | — |
 | Source · What it found | 16 / 32 / 46 | Active extraction markdown | `GET /v1/sources/{id}` `active_read.markdown`, `concepts` (BE-05) | ready | — |
 | Source · Past reads | 17 / 33 / 47 | Every read: model, time, concepts found, questions written | `GET /v1/sources/{id}` `reads[]`: number, model, client label, time, confidence, concepts found, questions written (BE-05) | ready | — |
-| Read again sheet | 53 | Queue a re-read with an optional preferred model; the next `jolt_sync` plan lists it | `POST /v1/sources/{id}/reread`; `jolt_sync` `rereads[]`, `jolt_get_unprocessed_sources` `supersede`/`preferred_model` (BE-05) | ready | BE-04 may fold `rereads` into its richer plan |
+| Read again sheet | 53 | Queue a re-read with an optional preferred model; the next `jolt_sync` plan lists it | `POST /v1/sources/{id}/reread` (BE-05); the next `jolt_sync` plan lists it in `reread_sources` with `preferred_model` (BE-04 plan), and `jolt_get_unprocessed_sources` hands it out with `supersede: true`; the superseding `jolt_store_extraction` clears the request | ready | — |
 | Reader | 18 / 34 / 48 | Page URLs; screen-size images first, full size on zoom; thumbnails on web | `GET /v1/sources/{id}` `pages[].url`: the **originals** (BE-05 decision, below) | partial | Renditions: no pass (see below) |
 | Toasts | 56, 57 | — | — | client | — |
 
@@ -91,9 +91,10 @@ Frame numbers are phone / web / tablet.
   were PUT. A Blob lifecycle rule or a cleanup on the next request would fix it.
   → BE-10 (data hygiene) or BE-08 (data retention).
 - **Failure is detected, not reported.** `failed` comes from lapsed sync leases
-  (`SOURCE_MAX_ATTEMPTS`); an agent cannot yet say "this file is unreadable"
-  directly. A `jolt_report_source_failure` tool would make it immediate. → BE-04
-  (sync plan and errors).
+  (`SOURCE_MAX_ATTEMPTS`); an agent can only note "this file is unreadable" in
+  `jolt_sync errors=[...]` (recorded on the sync run, BE-04), which does not mark
+  the source. A `jolt_report_source_failure` tool would make it immediate. → a
+  later sync pass (BE-10 or its own).
 - **`preferred_model` is a hint.** Any connected client may answer a read-again
   request; the plan shows the preference.
 
@@ -113,7 +114,9 @@ Frame numbers are phone / web / tablet.
   when reading (setting on/off takes effect at once, no rewrite of cards).
 - **Rewrites happen at grading, not at the result screen.** The result screen
   cannot say "rewritten"; the next session's queue item does (`rewritten`).
-  Today → What's new could list rewrites from BE-04's sync runs.
+  Today → "New since last sync" lists them: each new version is a
+  `question_rewritten` change on the sync run (`GET /v1/sync/status`).
+- **"Today" is the UTC day** also for D6 upload sessions; see 8 below.
 - **No daily review cap yet.** → BE-08.
 
 **BE-07 decisions and follow-ups for the tracks and concept screens**
@@ -147,13 +150,27 @@ Frame numbers are phone / web / tablet.
   must be re-earned by its own answers.
 - **`enrolled`** is `true` on a curated track where the caller has concepts;
   BE-09 replaces it with real enrolment.
+- **Corrections are sync work** (on BE-04's plan): `pending_corrections` (total
+  and per track) counts the concepts `jolt_get_pending_corrections` returns; the
+  plan is not `done` while any wait, so a nightly run answers them before it
+  closes. Only a changed text is recorded as a `concept_updated` change;
+  re-confirming the text clears the notes silently.
+- **Reconciliation on the run.** New and successor concepts are `concept_added`
+  changes, refined ones `concept_updated`; unchanged and removed ones are not
+  shown in "New since last sync" (a removed concept just leaves the queue).
+- **A read again stored without `concepts` breaks the chain.** Reconciliation
+  compares against the concepts credited to the replaced read; a supersede
+  without `concepts` credits none, so the *next* read again sees every concept
+  as `new` (duplicates). The prompt, the plan and the tool description all ask
+  for `concepts` on a supersede. → a later pass: fall back to the source's
+  active concepts when the replaced read has none.
 
 ## Progress and settings (FE-09)
 
 | Screen part | Frames | Needs | Today | Status | Covered by |
 |---|---|---|---|---|---|
 | Progress | 19 / 35 / 49 | Retention and weekly series, reviews, streak, learning / mastered, daily heatmap, per-track table | Only per-concept `GET /v1/progress/concepts/{id}` | missing | BE-08 (`GET /v1/progress`) |
-| Settings · Model | 20 / 36 / 50 | MCP status, last sync and health, connected clients (create / revoke tokens), nightly prompt | — | missing | BE-03 (tokens), BE-04 (sync status, prompt), BE-08 (model status block) |
+| Settings · Model | 20 / 36 / 50 | MCP status, last sync and health, connected clients (create / revoke tokens), nightly prompt | `GET`/`POST /v1/mcp-tokens`, `DELETE /v1/mcp-tokens/{id}` with `label`, `last_used_at` (BE-03); `GET /v1/sync/status`, `GET /v1/sync/runs`, `GET /v1/sync/prompt` (BE-04) | partial | BE-08 (`model_status` block in `GET /v1/settings`, which can reuse these) |
 | Settings · API key + sheet | 20 / 36 / 50, 51, 58 | Add, list (`added_at`), remove | `POST`, `GET` (no `added_at`), `DELETE /v1/settings/api-key` | partial | BE-08 |
 | Settings · Appearance | 20 / 36 / 50 | Theme | — | missing | BE-08 (`GET/PATCH /v1/settings`) |
 | Settings · Reviews | 20 / 36 / 50 | Desired retention (FSRS), daily cap, retire mastered, allow question rewrite | `GET` / `PATCH /v1/settings {retire_mastered, allow_question_rewrite}` with their behaviour (BE-06); desired retention is still server-wide (`FSRS_DESIRED_RETENTION`), no daily cap | partial | BE-08 (desired retention, daily cap, the rest of the body) |
@@ -191,8 +208,28 @@ To fix in the pass named, or sooner.
 4. **`PUT /v1/settings/retention` naming.** It stores *data* retention in days,
    which is easy to confuse with FSRS *desired retention* (Settings · Reviews). →
    BE-08 should fold it into `PATCH /v1/settings` with explicit names.
-5. **Token lookup scans every user** (Argon2 verify per user). → BE-03.
+5. ~~**Token lookup scans every user** (Argon2 verify per user).~~ Fixed in
+   BE-03: an indexed HMAC lookup key, then one Argon2 verify.
 6. **`GET /v1/reviews/due` `limit`** counts cards, not questions; a card with
    several active questions returns them all. Kept as it is for compatibility
    (it now leaves out retired concepts); review sessions (BE-06) serve one
    question per concept and are what the app uses.
+7. **Tokens never expire, and app tokens cannot be listed.** Sign-out and MCP
+   token revocation work, but a lost device's app token stays valid until the
+   pepper rotates, and Settings has no "signed-in devices" list. → BE-10
+   (expiry / idle timeout for app tokens, optional device list).
+8. **Upload dates and the schedule have no user time zone.** Sessions are split
+   by the UTC date of each upload (D6), so a learner west of UTC who uploads late
+   in the evening sees that upload under the next day; `GET /v1/sync/status`
+   takes the zone per request (`?tz=`) for `next_expected_at`. → BE-08: a
+   `timezone` setting, used for the D6 day and as the default `tz`.
+9. **No Streamable HTTP transport.** `/mcp` speaks HTTP+SSE only (mcp 1.2.0), so
+   Codex connects through the `mcp-remote` bridge instead of its native `url =`
+   config, and every sync holds one long event stream (to check against the
+   Container Apps ingress timeout after deploy). → upgrade `mcp` (≥ 1.8, moves
+   Pydantic to 2.11+) and add Streamable HTTP at `/mcp`; BE-10 or its own pass.
+   See `CONNECT.md`.
+10. **`jolt_create_questions` accepts any number of options.** The prompt and
+    the plan ask for exactly 4 with one correct; the server only checks the
+    request shape, and a `rewritten_question` (BE-06) needs only two or more.
+    Not done in BE-07 (outside its brief). → a later pass: enforce 4 in both.

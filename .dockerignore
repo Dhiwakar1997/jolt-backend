@@ -11,7 +11,8 @@ jolt-lld.md
 .github/
 .ruff_cache/
 infra/
-docs/
+docs/*
+!docs/NIGHTLY_SYNC_PROMPT.md
 contract/
 scripts/
 README.md

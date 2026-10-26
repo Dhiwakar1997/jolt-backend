@@ -141,7 +141,7 @@ class SourceService:
             track_name=track_names.get(source.track_id) if source.track_id else None,
             kind=source.kind,
             page_count=len(pages),
-            uploaded_at=source.confirmed_at or source.created_at,
+            uploaded_at=source.uploaded_at,
             concepts_found=len(active.concepts) if active else 0,
             questions_written=active.questions_written if active else 0,
             low_confidence=bool(active) and active.confidence < self._threshold,

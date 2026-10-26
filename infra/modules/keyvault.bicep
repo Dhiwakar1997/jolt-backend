@@ -21,7 +21,7 @@ param tokenHashPepper string = ''
 param devAuthSecret string = ''
 
 @description('Principal allowed to read `dev-auth-secret` only (the GitHub deploy identity, so the deploy smoke test can sign in). Empty: nobody besides the app.')
-param devSecretReaderPrincipalId string = ''
+param devAuthReaderPrincipalId string = ''
 
 @description('Days a deleted vault or secret is kept before it can be purged.')
 param softDeleteRetentionInDays int = 7
@@ -76,15 +76,15 @@ resource devAuthCurrent 'Microsoft.KeyVault/vaults/secrets@2023-07-01' existing 
   name: devAuthSecretName
 }
 
-resource devSecretReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(devSecretReaderPrincipalId)) {
-  name: guid(vault.id, devAuthSecretName, devSecretReaderPrincipalId, secretsUserRoleId)
+resource devAuthReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(devAuthReaderPrincipalId)) {
+  name: guid(vault.id, devAuthSecretName, devAuthReaderPrincipalId, secretsUserRoleId)
   scope: devAuthCurrent
   properties: {
     roleDefinitionId: subscriptionResourceId(
       'Microsoft.Authorization/roleDefinitions',
       secretsUserRoleId
     )
-    principalId: devSecretReaderPrincipalId
+    principalId: devAuthReaderPrincipalId
     principalType: 'ServicePrincipal'
   }
   dependsOn: [

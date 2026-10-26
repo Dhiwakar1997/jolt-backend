@@ -44,6 +44,9 @@ class CorrectionResult:
     concept_id: str
     updated: bool
     corrections_cleared: int
+    # True when the text was replaced (not a re-confirmation of the same text).
+    text_changed: bool = False
+    concept: Optional[Concept] = None
 
 
 class CorrectionService:
@@ -94,12 +97,19 @@ class CorrectionService:
         `track_id`). `updated` is False when the concept write lost a race.
         """
         concept, _state = await owned_concept(self._rt, user_id, concept_id, track_id=track_id)
-        if concept.text != text:
+        changed = concept.text != text
+        if changed:
             concept.text = text
-            if await self._rt.repos.concepts.replace(concept, etag=concept.etag) is None:
+            saved = await self._rt.repos.concepts.replace(concept, etag=concept.etag)
+            if saved is None:
                 return CorrectionResult(concept_id, updated=False, corrections_cleared=0)
+            concept = saved
         return CorrectionResult(
-            concept_id, updated=True, corrections_cleared=await self._clear(user_id, concept_id)
+            concept_id,
+            updated=True,
+            corrections_cleared=await self._clear(user_id, concept_id),
+            text_changed=changed,
+            concept=concept,
         )
 
     async def _clear(self, user_id: str, concept_id: str) -> int:

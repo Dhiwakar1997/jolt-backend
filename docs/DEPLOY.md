@@ -32,7 +32,7 @@ globally unique and the same on every run.
 | User-assigned Managed Identity | `id-jolt-dev-github` | GitHub Actions signs in as this (OIDC federated credential, no secret). |
 | Log Analytics workspace | `log-jolt-dev` | Container Apps logs; 30-day retention, 1 GB/day cap. |
 | Container Registry (Basic) | `crjoltdev<sfx>` | Images `jolt-api:<git-sha>`. |
-| Cosmos DB for NoSQL, **serverless** | `cosmos-jolt-dev-<sfx>` | Database `jolt`; the 12 containers (`tokens` added by BE-03), partition keys and composite indexes of LLD §6 (from `infra/cosmos-containers.json`, kept equal to `jolt/data/cosmos.py` by `tests/test_infra.py`). Account keys disabled. Periodic backup every 24 h, kept 48 h. |
+| Cosmos DB for NoSQL, **serverless** | `cosmos-jolt-dev-<sfx>` | Database `jolt`; the 14 containers (`tokens` added by BE-03, `sync_runs` by BE-04, `review_sessions` by BE-06), partition keys and composite indexes of LLD §6 (from `infra/cosmos-containers.json`, kept equal to `jolt/data/cosmos.py` by `tests/test_infra.py`). Account keys disabled. Periodic backup every 24 h, kept 48 h. |
 | Storage account (StorageV2, LRS, Hot) | `stjoltdev<sfx>` | Private container `sources`; Blob CORS for the app origins; blob and container soft delete 7 days; shared keys disabled (uploads use user-delegation SAS). |
 | Key Vault (RBAC) | `kv-jolt-dev-<sfx8>` | Secrets `token-hash-pepper` and `dev-auth-secret` (dev sign-in, BE-03); per-user provider keys `apikey-*` written by the app. Soft delete 7 days, no purge protection (dev). |
 | Container Apps environment | `cae-jolt-dev` | Consumption plan. |
@@ -207,7 +207,9 @@ with the dev route and walks the whole loop: health, `GET /v1/me`, create an MCP
 token (and check `/mcp` refuses the app token), MCP handshake and tool list,
 upload URL → PUT a PNG to Blob → confirm, the sync tool sequence with canned
 extraction and questions, due reviews, stage 1 and stage 2, agent grading,
-coverage, then revokes the MCP token and signs out (both refused afterwards).
+coverage, a final `jolt_sync` that closes the sync run, `GET /v1/sync/status` /
+`/v1/sync/runs` / `/v1/sync/prompt`, an MCP connection with the token in the URL
+(`?token=`), then revokes the MCP token and signs out (both refused afterwards).
 Exit code 0 means pass. It needs the dev sign-in secret in `JOLT_DEV_AUTH_SECRET`
 (or `--dev-auth-secret`); `deploy-infra.sh --smoke` and the deploy workflow
 supply it. By hand, with Key Vault data access:
@@ -216,9 +218,11 @@ The first request after idle takes a few seconds (scale from zero); the script
 waits up to `--wait` seconds (default 120) for `/health`.
 
 MCP clients connect to `https://<fqdn>/mcp/sse` (the `mcpServerUrl` output, also
-shown in the app) with header `Authorization: Bearer <MCP token>`. A person
+shown in the app) with header `Authorization: Bearer <MCP token>`, or with
+`?token=<MCP token>` on that URL for Claude's URL-only custom connectors. A person
 creates MCP tokens in the app (`POST /v1/mcp-tokens`); the app's own token is
-refused on `/mcp`.
+refused on `/mcp`. Exact Claude Desktop and Codex setup, and what to confirm with
+the real clients after a deploy: [`CONNECT.md`](./CONNECT.md).
 
 ## 5. Automatic deploys from GitHub
 
@@ -277,6 +281,7 @@ container by Bicep (`infra/modules/containerapp.bicep`):
 | `APP_VERSION` | git SHA | Docker build arg | — |
 | `COSMOS_KEY`, `BLOB_*_KEY`, `BLOB_CONNECTION_STRING` | unset | — | — (keys are disabled) |
 | `BLOB_SAS_TTL_SECONDS`, `LEASE_TTL_SECONDS`, `FSRS_DESIRED_RETENTION`, `APP_TOKEN_PREFIX`, `MCP_TOKEN_PREFIX`, `*_API_BASE` | defaults | code | — |
+| `SYNC_RUN_IDLE_SECONDS` (1800), `SYNC_LATE_AFTER_HOURS` (30), `SYNC_SCHEDULE_TIME` (`00:15`), `MCP_QUERY_TOKEN_ENABLED` (`true`) | defaults | code (BE-04) | — |
 
 To change a value without a code change, edit the Bicep parameter and run
 `scripts/deploy-infra.sh --skip-build`. To rotate the pepper (logs every user

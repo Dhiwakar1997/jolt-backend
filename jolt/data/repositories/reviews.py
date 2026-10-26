@@ -82,3 +82,11 @@ class SessionsRepository(Repository[Session]):
         return await self._query(
             "SELECT * FROM c ORDER BY c.created_at DESC", [], partition_value=user_id
         )
+
+    async def for_sync_run(self, user_id: str, sync_run_id: str) -> list[Session]:
+        """Sessions logged during one sync run (one per upload date, D6)."""
+        return await self._query(
+            "SELECT * FROM c WHERE c.sync_run_id = @run ORDER BY c.created_at ASC",
+            [{"name": "@run", "value": sync_run_id}],
+            partition_value=user_id,
+        )

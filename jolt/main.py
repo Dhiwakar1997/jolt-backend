@@ -22,13 +22,14 @@ from jolt.api.routes import (
     progress,
     review,
     sources,
+    sync,
     tracks,
     upload,
 )
 from jolt.api.routes import settings as settings_routes
 from jolt.config import Settings, get_settings
 from jolt.mcp.context import set_runtime as set_mcp_runtime
-from jolt.mcp.server import build_mcp_app
+from jolt.mcp.server import build_mcp_app, install_log_redaction
 from jolt.runtime import Runtime
 
 logger = logging.getLogger("jolt")
@@ -47,6 +48,7 @@ async def lifespan(app: FastAPI):
     runtime = getattr(app.state, "runtime", None) or await Runtime.create(cfg)
     app.state.runtime = runtime
     set_mcp_runtime(runtime)  # share the same gateways with the MCP tools
+    install_log_redaction()  # MCP tokens in ?token= never reach the access log
     try:
         yield
     finally:
@@ -59,7 +61,7 @@ def create_app(settings: Settings | None = None, runtime: Runtime | None = None)
     cfg = settings or get_settings()
     app = FastAPI(
         title="Jolt API",
-        version="0.2.0",
+        version="0.7.0",
         lifespan=lifespan,
         # Stable, readable operationIds (the handler name) for generated clients.
         generate_unique_id_function=lambda route: route.name,
@@ -98,6 +100,7 @@ def create_app(settings: Settings | None = None, runtime: Runtime | None = None)
     app.include_router(sources.storage_router)
     app.include_router(progress.router)
     app.include_router(settings_routes.router)
+    app.include_router(sync.router)
     if cfg.storage_mode == "memory":
         # Serves the in-memory blob fake's upload/read URLs (dev only).
         app.include_router(dev_blob.router)

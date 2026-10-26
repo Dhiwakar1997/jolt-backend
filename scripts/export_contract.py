@@ -75,8 +75,10 @@ def build_mcp_tools() -> dict:
         "transport": "sse",
         "endpoint": "/mcp/sse",
         "auth": (
-            "Authorization: Bearer <MCP token> (jolt_live_..., from POST /v1/mcp-tokens). "
-            "App tokens are refused: opening /mcp/sse answers 401, tool calls fail."
+            "Authorization: Bearer <MCP token> (jolt_live_..., from POST /v1/mcp-tokens), or "
+            "?token=<MCP token> on /mcp/sse for URL-only connectors (MCP_QUERY_TOKEN_ENABLED). "
+            "App tokens are refused: opening /mcp/sse answers 401, tool calls fail. See "
+            "docs/CONNECT.md."
         ),
         "errors": (
             "Tools whose output_schema is a union with {error} return that object for "

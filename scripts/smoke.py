@@ -1,4 +1,4 @@
-"""End-to-end smoke test against a running Jolt backend (BE-02, BE-03, BE-05 to BE-07).
+"""End-to-end smoke test against a running Jolt backend (BE-02 to BE-07).
 
     python scripts/smoke.py --base-url https://<dev-host>
     python scripts/smoke.py --base-url http://localhost:8000      # local, see below
@@ -19,7 +19,8 @@ share it, with a fresh test user:
     jolt_get_unprocessed_sources, jolt_get_source_content (and GET every page's
     signed read URL back), jolt_store_extraction, jolt_log_session,
     jolt_create_questions; then GET /v1/sources/{id} (originals, active read, past
-    reads), POST /v1/sources/{id}/reread and jolt_sync lists it, GET /v1/storage
+    reads), POST /v1/sources/{id}/reread and jolt_sync lists it in reread_sources,
+    claim it again (supersede=true) and store the new read, GET /v1/storage
  8. The review loop (BE-06): GET /v1/reviews/due; PATCH /v1/settings to allow
     question rewrites; POST /v1/review-sessions -> stage 1 and stage 2 (each sent
     twice with the same client_request_id: same answer back) -> POST
@@ -32,11 +33,15 @@ share it, with a fresh test user:
     PATCH rename and archive, GET /v1/tracks counts, GET /v1/tracks/{id} (items,
     due today, recent sources), GET /v1/concepts/{id} (timeline, versions,
     adaptive note), POST /v1/concepts/{id}/correction -> jolt_sync counts it ->
-    jolt_get_pending_corrections -> jolt_correct_concept clears it; the read-again
-    request answered with jolt_store_extraction(supersede, concepts) ->
+    jolt_get_pending_corrections -> jolt_correct_concept clears it; read again once
+    more, answered with jolt_store_extraction(supersede, concepts) ->
     reconciliation (unchanged + new) and jolt_continue_reconciliation
-11. GET /v1/me shows the onboarding progress; revoke the MCP token (/mcp then
-    refuses it); sign out (/v1 then refuses the app token)
+11. jolt_sync again: done, which closes the sync run; GET /v1/sync/status and
+    /v1/sync/runs show it (client label, counts, the question_rewritten change and
+    the concept the reconciliation added), GET /v1/sync/prompt
+12. MCP with the token in the URL (?token=, how a URL-only connector connects)
+13. GET /v1/me shows the onboarding progress (incl. first_sync_at); revoke the
+    MCP token (/mcp then refuses it); sign out (/v1 then refuses the app token)
 
 Exit code 0 when every step passes, 1 otherwise. It leaves the test user and its
 data behind (there is no account delete yet); each run uses a new user.
@@ -326,9 +331,16 @@ async def run(
                     check(row["processing_status"] == "unprocessed", f"source: {row}")
                     check(row["page_count"] == 2, f"source: {row}")
 
-                with rep.step("jolt_sync"):
+                with rep.step("jolt_sync (opens a sync run, returns the plan)"):
                     plan = await _tool(mcp, "jolt_sync")
                     check(plan["unprocessed_sources"] >= 1, f"plan: {plan}")
+                    check(not plan["done"], f"plan says done with work waiting: {plan}")
+                    tools = [st["tool"] for st in plan["steps"]]
+                    check(
+                        tools[0] == "jolt_get_unprocessed_sources" and tools[-1] == "jolt_sync",
+                        f"plan steps: {tools}",
+                    )
+                    run_id = plan["run_id"]
 
                 with rep.step("jolt_get_unprocessed_sources (claim)"):
                     claimed = await _tool(mcp, "jolt_get_unprocessed_sources")
@@ -402,8 +414,35 @@ async def run(
                         )
                     )
                     plan = await _tool(mcp, "jolt_sync")
-                    rereads = {r["source_id"]: r["preferred_model"] for r in plan["rereads"]}
+                    rereads = {r["source_id"]: r["preferred_model"] for r in plan["reread_sources"]}
                     check(rereads.get(source_id) == "claude", f"plan: {plan}")
+                    check(plan["rereads"] == 1 and not plan["done"], f"plan: {plan}")
+                    check(plan["run_id"] == run_id, f"re-read opened another run: {plan}")
+
+                with rep.step("Read again: claim (supersede) + jolt_store_extraction"):
+                    claimed = await _tool(mcp, "jolt_get_unprocessed_sources")
+                    by_id = {s["source_id"]: s for s in claimed["sources"]}
+                    item = by_id.get(source_id)
+                    check(item is not None, f"re-read source not claimed: {claimed}")
+                    check(item["supersede"] and item["preferred_model"] == "claude", f"{item}")
+                    ext = await _tool(
+                        mcp,
+                        "jolt_store_extraction",
+                        source_id=source_id,
+                        markdown=CANNED_MARKDOWN,
+                        confidence=0.95,
+                        model_id="smoke-canned",
+                        supersede=True,
+                        concepts=[{"text": CANNED_CONCEPT, "title": "Consistent hashing"}],
+                    )
+                    check(ext["status"] == "active", f"extraction: {ext}")
+                    rec = ext["reconciliation"] or {}
+                    changes = [d["change"] for d in rec.get("deltas", [])]
+                    check(changes == ["unchanged"], f"reconciliation: {rec}")
+                    detail = _json(await http.get(f"/v1/sources/{source_id}"))
+                    check(detail["processing_status"] == "processed", f"status: {detail}")
+                    check(detail["reread_requested"] is None, f"re-read still pending: {detail}")
+                    check(len(detail["reads"]) == 2, f"reads: {detail['reads']}")
 
                 with rep.step("GET /v1/storage"):
                     storage = _json(await http.get("/v1/storage"))
@@ -598,7 +637,8 @@ async def run(
                     )
                     check(fixed["corrections_cleared"] == 1, f"correct: {fixed}")
 
-                with rep.step("jolt_store_extraction(supersede, concepts) -> reconciliation"):
+                with rep.step("Read again + jolt_store_extraction(supersede, concepts)"):
+                    _json(await http.post(f"/v1/sources/{source_id}/reread", json={}))
                     claimed = await _tool(mcp, "jolt_get_unprocessed_sources", limit=10)
                     check(
                         any(
@@ -631,10 +671,54 @@ async def run(
                     check(rec["concept_ids"][0] == concept_id, f"ids: {rec['concept_ids']}")
                     again = await _tool(mcp, "jolt_continue_reconciliation", source_id=source_id)
                     check(again["applied_steps"] == 2, f"continue: {again}")
+                    new_concept_id = rec["concept_ids"][1]
+
+                with rep.step("jolt_sync (done: closes the run)"):
+                    final = await _tool(mcp, "jolt_sync")
+                    check(final["done"] and final["run_id"] == run_id, f"final plan: {final}")
+
+        with rep.step("GET /v1/sync/status + /v1/sync/runs"):
+            status = _json(await http.get("/v1/sync/status", params={"tz": "UTC"}))
+            run = status["last_run"]
+            check(status["health"] == "ok", f"health: {status}")
+            check(run and run["id"] == run_id and run["status"] == "finished", f"run: {run}")
+            check(run["client_label"] == "smoke test", f"client_label: {run['client_label']}")
+            counts = (run["sources_processed"], run["questions_written"], run["gradings_submitted"])
+            check(counts == (1, 1, 1), f"run counts (sources, questions, gradings): {counts}")
+            check(
+                [(c["kind"], c["concept_id"]) for c in run["changes"]]
+                == [
+                    ("concept_added", concept_id),
+                    ("question_rewritten", concept_id),
+                    ("concept_added", new_concept_id),
+                ],
+                f"changes: {run['changes']}",
+            )
+            runs = _json(await http.get("/v1/sync/runs", params={"limit": 5}))
+            check([r["id"] for r in runs] == [run_id], f"runs: {[r['id'] for r in runs]}")
+            out["sync_run_id"] = run_id
+
+        with rep.step("GET /v1/sync/prompt"):
+            prompt = _json(await http.get("/v1/sync/prompt"))
+            check("jolt_sync" in prompt["prompt"], "prompt does not mention jolt_sync")
+            check(prompt["schedule_time"] and prompt["version"], f"prompt meta: {prompt}")
+            out["prompt_version"] = prompt["version"]
+
+        with rep.step("MCP with ?token= (URL-only connector)"):
+            url = f"{base_url}/mcp/sse?token={mcp_token}"
+            async with sse_client(url, timeout=timeout) as streams:
+                async with ClientSession(*streams) as mcp:
+                    await mcp.initialize()
+                    tracks = await _tool(mcp, "jolt_get_tracks")
+                    check(
+                        any(t["id"] == track_id for t in tracks["tracks"]),
+                        f"track {track_id} not visible over ?token=",
+                    )
 
         with rep.step("GET /v1/me (onboarding progress)"):
             onboarding = _json(await http.get("/v1/me"))["onboarding"]
             check(onboarding["has_track"] and onboarding["has_mcp_token"], f"{onboarding}")
+            check(onboarding["first_sync_at"], f"first_sync_at not set: {onboarding}")
             listed = _json(await http.get("/v1/mcp-tokens"))
             check([t["id"] for t in listed] == [mcp_token_id], f"mcp tokens: {listed}")
             check(listed[0]["last_used_at"], "MCP token has no last_used_at after use")

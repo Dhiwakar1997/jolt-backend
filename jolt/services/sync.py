@@ -17,6 +17,7 @@ from typing import Optional
 from jolt.data.leases import SourceLeases
 from jolt.domain.grading import GradingInput
 from jolt.domain.models import (
+    AgendaStatus,
     Concept,
     ConceptState,
     ConceptStatus,
@@ -28,9 +29,21 @@ from jolt.domain.models import (
     Session,
     Source,
     SyllabusItem,
+    TrackOrigin,
+)
+from jolt.domain.sync import (
+    PlanCorrection,
+    PlanGrading,
+    PlanReread,
+    PlanSource,
+    PlanTrackInfo,
+    SyncPlan,
+    build_plan,
+    upload_day,
 )
 from jolt.runtime import Runtime
 from jolt.services.cards import refresh_card_questions
+from jolt.services.corrections import CorrectionService
 from jolt.services.gradings import GradingService
 from jolt.services.ownership import NotOwned, owned_card, owned_track
 from jolt.services.reviews import ReviewService
@@ -49,21 +62,6 @@ class SyncError(Exception):
 # DTOs crossing the MCP boundary
 # --------------------------------------------------------------------------- #
 @dataclass
-class RereadItem:
-    source_id: str
-    title: str
-    preferred_model: Optional[str]
-    requested_at: datetime
-
-
-@dataclass
-class SyncPlan:
-    unprocessed_sources: int
-    pending_gradings: int
-    # Sources the user asked to read again (BE-05 §4); also counted above.
-    rereads: list[RereadItem] = field(default_factory=list)
-
-
 @dataclass
 class PageContent:
     index: int
@@ -109,6 +107,18 @@ class QuestionInput:
 
 
 @dataclass
+class LoggedSession:
+    """What `log_session` wrote. One session per upload date (decision D6)."""
+
+    sessions: list[Session]  # oldest upload date first; a source-less session last
+    concepts: list[Concept]  # input order
+    # (track_id, concept_key) pairs this call added to an agenda.
+    added_to_agenda: set[tuple[str, str]]
+    # The caller's sources the call referenced, by id.
+    sources: dict[str, Source]
+
+
+@dataclass
 class PendingGrading:
     review_id: str
     concept_id: str
@@ -130,22 +140,82 @@ class SyncService:
         self._source_leases = SourceLeases(rt.repos.sources)
 
     # -- plan ---------------------------------------------------------------
-    async def plan(self, user_id: str, limit: int = 50) -> SyncPlan:
-        sources = await self._rt.repos.sources.list_unprocessed(user_id, limit)
-        claimable = [s for s in sources if self._is_claimable(s) and not self._exhausted(s)]
-        pending = await self._rt.repos.reviews.list_pending_gradings(user_id, limit)
-        rereads = [
-            RereadItem(
-                source_id=s.id,
-                title=s.title or s.filename,
-                preferred_model=s.reread_preferred_model,
-                requested_at=s.reread_requested_at,
+    async def plan(
+        self,
+        user_id: str,
+        *,
+        claimed_ids: set[str] | frozenset[str] = frozenset(),
+        limit: int = 50,
+    ) -> SyncPlan:
+        """The `jolt_sync` plan (BE-04). `claimed_ids` are the sources the caller's
+        sync run already claimed: still-leased ones keep the run open, while
+        sources leased by another client do not.
+
+        Read-again requests (BE-05) are source work like any other (asking puts
+        the source back to `unprocessed`); the ones this caller can take are also
+        listed in `reread_sources` with their preferred model. Concepts with
+        correction notes waiting (BE-07) are work too. A source whose
+        lease lapsed `source_max_attempts` times is left out: the next claim marks
+        it `failed`.
+        """
+        rows = await self._rt.repos.sources.list_unprocessed(user_id, limit)
+        claimable: list[PlanSource] = []
+        mine: list[PlanSource] = []
+        rereads: list[PlanReread] = []
+        elsewhere = 0
+        for source in rows:
+            item = PlanSource(
+                source_id=source.id,
+                filename=source.filename,
+                track_id=source.track_id,
+                uploaded_at=source.uploaded_at,
+                lease_expires_at=source.lease_expires_at,
             )
-            for s in claimable
-            if s.reread_requested_at is not None
+            if self._is_claimable(source):
+                if self._exhausted(source):
+                    continue
+                claimable.append(item)
+            elif source.id in claimed_ids:
+                mine.append(item)
+            else:
+                elsewhere += 1
+                continue
+            if source.reread_requested_at is not None:
+                rereads.append(
+                    PlanReread(
+                        source_id=source.id,
+                        title=source.title or source.filename,
+                        filename=source.filename,
+                        track_id=source.track_id,
+                        preferred_model=source.reread_preferred_model,
+                        requested_at=source.reread_requested_at,
+                    )
+                )
+
+        gradings: list[PlanGrading] = []
+        for review in await self._rt.repos.reviews.list_pending_gradings(user_id, limit):
+            state = await self._rt.repos.concept_states.for_concept(user_id, review.concept_id)
+            gradings.append(PlanGrading(review.id, state.track_id if state else None))
+
+        # BE-07: concepts the learner flagged, waiting for jolt_correct_concept.
+        # The same list jolt_get_pending_corrections returns, so `done` can be
+        # reached by working through it.
+        corrections = [
+            PlanCorrection(p.concept_id, p.track_id)
+            for p in await CorrectionService(self._rt).pending(user_id)
         ]
-        return SyncPlan(
-            unprocessed_sources=len(claimable), pending_gradings=len(pending), rereads=rereads
+
+        tracks = await TrackService(self._rt).list_tracks(user_id)
+        return build_plan(
+            claimable=claimable,
+            claimed_by_run=mine,
+            in_flight_elsewhere=elsewhere,
+            gradings=gradings,
+            rereads=rereads,
+            corrections=corrections,
+            tracks={t.id: PlanTrackInfo(t.id, t.name, t.agenda.status.value) for t in tracks},
+            user_track_ids=[t.id for t in tracks if t.origin == TrackOrigin.USER],
+            lease_seconds=self._rt.settings.lease_ttl_seconds,
         )
 
     @staticmethod
@@ -265,31 +335,65 @@ class SyncService:
         return extraction
 
     # -- session / concepts / questions ------------------------------------
-    async def log_session(self, user_id: str, source_ids: list[str], concepts: list[ConceptInput]):
-        """Create a session, its concepts, and a fresh FSRS state per concept.
+    async def log_session(
+        self,
+        user_id: str,
+        source_ids: list[str],
+        concepts: list[ConceptInput],
+        *,
+        sync_run_id: Optional[str] = None,
+    ) -> LoggedSession:
+        """Create the concepts (each with a fresh, due-now FSRS state) and the
+        session(s) they belong to.
+
+        Decision D6: one session per upload date. Each concept goes to the session
+        of its `source_id`'s upload date; a concept without a (known) source goes
+        to the date of the first known source in `source_ids`. A call that spans
+        three upload days therefore writes three sessions, oldest first; inside a
+        sync run, later calls for a date already seen extend that date's session.
 
         Also grows each track's agenda: any concept whose `concept_key` is not yet
         in the track's agenda syllabus is auto-added (as a leaf, or under a supplied
         parent). Skipped on locked agendas. Auto-add is keyed on concept_key
         membership, so re-running a sync never duplicates entries.
         """
-        created_concepts: list[Concept] = []
-        read_of: dict[str, Optional[str]] = {}  # source_id -> its active extraction id
-        touched: dict[tuple[str, str], list[ExtractionConcept]] = {}
         # Ownership first (BE-07, A16): every track must be the caller's own and
-        # every source theirs, before anything is written.
-        for track_id in {c.track_id for c in concepts}:
+        # every source this call mentions theirs, before anything is written.
+        for track_id in dict.fromkeys(c.track_id for c in concepts):
             try:
                 await owned_track(self._rt, user_id, track_id)
             except NotOwned as exc:
                 raise SyncError(f"{exc}: {track_id}") from exc
-        for source_id in {*source_ids, *(c.source_id for c in concepts if c.source_id)}:
-            src = await self._rt.repos.sources.get_source(source_id, user_id)
-            if src is None:
-                raise SyncError(f"source not found: {source_id}")
-            read_of[source_id] = src.active_extraction_id
+        wanted = list(dict.fromkeys([*source_ids, *(c.source_id for c in concepts if c.source_id)]))
+        sources: dict[str, Source] = {}
+        for sid in wanted:
+            source = await self._rt.repos.sources.get_source(sid, user_id)
+            if source is None:
+                raise SyncError(f"source not found: {sid}")
+            sources[sid] = source
+
+        def day_of(sid: Optional[str]) -> Optional[str]:
+            source = sources.get(sid) if sid else None
+            return upload_day(source.uploaded_at) if source else None
+
+        fallback = next((d for d in map(day_of, source_ids) if d), None)
+        groups: dict[Optional[str], dict[str, list[str]]] = {}
+
+        def group(day: Optional[str]) -> dict[str, list[str]]:
+            return groups.setdefault(day, {"source_ids": [], "concept_ids": []})
+
+        for sid in source_ids:
+            g = group(day_of(sid) or fallback)
+            if sid not in g["source_ids"]:
+                g["source_ids"].append(sid)
+
+        created_concepts: list[Concept] = []
+        # BE-05: a concept logged from a source is credited to that source's
+        # active read (Past reads: "Found N concepts").
+        touched: dict[tuple[str, str], list[ExtractionConcept]] = {}
         for c in concepts:
-            extraction_id = read_of.get(c.source_id) if c.source_id else None
+            source = sources.get(c.source_id) if c.source_id else None
+            extraction_id = source.active_extraction_id if source else None
             concept = Concept(
                 track_id=c.track_id,
                 source_id=c.source_id,
@@ -322,27 +426,69 @@ class SyncService:
                 active_question_ids=[],
             )
             await self._rt.repos.concept_states.create(state)
+            g = group(day_of(c.source_id) or fallback)
+            g["concept_ids"].append(concept.id)
+            if c.source_id and c.source_id not in g["source_ids"]:
+                g["source_ids"].append(c.source_id)
 
         for (source_id, extraction_id), items in touched.items():
             await self._update_read(
                 source_id, extraction_id, lambda e, items=items: e.concepts.extend(items)
             )
 
-        await self._auto_add_agenda(user_id, concepts)
+        added = await self._auto_add_agenda(user_id, concepts)
 
-        session = Session(
-            user_id=user_id,
-            source_ids=source_ids,
-            concept_ids=[c.id for c in created_concepts],
+        if not groups:
+            group(None)  # an empty call still records one (empty) session
+        # Inside a sync run, a later call for the same upload date extends that
+        # date's session instead of starting another one.
+        existing: dict[Optional[str], Session] = {}
+        if sync_run_id:
+            for prior in await self._rt.repos.sessions.for_sync_run(user_id, sync_run_id):
+                existing.setdefault(prior.upload_date, prior)
+        sessions: list[Session] = []
+        for day in sorted(groups, key=lambda d: (d is None, d or "")):
+            g = groups[day]
+            if day is not None and day in existing:
+                sessions.append(await self._extend_session(existing[day], g))
+                continue
+            session = Session(
+                user_id=user_id,
+                source_ids=g["source_ids"],
+                concept_ids=g["concept_ids"],
+                upload_date=day,
+                sync_run_id=sync_run_id,
+            )
+            sessions.append(await self._rt.repos.sessions.create(session))
+        return LoggedSession(
+            sessions=sessions,
+            concepts=created_concepts,
+            added_to_agenda=added,
+            sources=sources,
         )
-        session = await self._rt.repos.sessions.create(session)
-        return session, created_concepts
 
-    async def _auto_add_agenda(self, user_id: str, concepts: list[ConceptInput]) -> None:
+    async def _extend_session(self, session: Session, g: dict[str, list[str]]) -> Session:
+        """Append sources and concepts to a session (etag-guarded, retried)."""
+        for _ in range(4):
+            session.source_ids += [s for s in g["source_ids"] if s not in session.source_ids]
+            session.concept_ids += [c for c in g["concept_ids"] if c not in session.concept_ids]
+            saved = await self._rt.repos.sessions.replace(session, etag=session.etag)
+            if saved is not None:
+                return saved
+            fresh = await self._rt.repos.sessions.get(session.id, session.user_id)
+            if fresh is None:
+                break
+            session = fresh
+        raise SyncError("could not extend the session; retry jolt_log_session")
+
+    async def _auto_add_agenda(
+        self, user_id: str, concepts: list[ConceptInput]
+    ) -> set[tuple[str, str]]:
         """Grow each involved track's agenda from the session's concepts.
 
         Grouped by track so each track's agenda is a single etag-guarded
-        read-modify-write (serialised against a concurrent refine).
+        read-modify-write (serialised against a concurrent refine). Returns the
+        (track_id, concept_key) pairs that were added.
         """
         by_track: dict[str, list[SyllabusItem]] = {}
         for c in concepts:
@@ -352,15 +498,21 @@ class SyncService:
             by_track.setdefault(c.track_id, []).append(
                 SyllabusItem(concept_key=key, label=c.title or key, parent=c.parent)
             )
+        added: set[tuple[str, str]] = set()
         if not by_track:
-            return
+            return added
         track_service = TrackService(self._rt)
         for track_id, items in by_track.items():
             try:
-                await track_service.auto_add_concepts(user_id, track_id, items)
+                before = await track_service.get_agenda(user_id, track_id)
+                if before.status == AgendaStatus.LOCKED:
+                    continue
+                after = await track_service.auto_add_concepts(user_id, track_id, items)
             except TrackError:
                 # A missing track shouldn't fail the whole session log.
                 continue
+            added |= {(track_id, k) for k in after.keys() - before.keys()}
+        return added
 
     async def create_questions(
         self, user_id: str, concept_id: str, questions: list[QuestionInput]

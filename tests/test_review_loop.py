@@ -489,3 +489,30 @@ async def test_mastered_concepts_stay_with_the_setting_off(api, runtime, mcp_use
     _, s2 = await answer(api, queue["items"][0], correct=False)
     state = await runtime.repos.concept_states.for_concept(mcp_user.user_id, concept)
     assert state.mastered_at is None
+
+
+async def test_rewrites_are_recorded_on_the_sync_run(api, runtime, mcp_user):
+    """BE-04 x BE-06: gradings count on the run; a new version is a change once."""
+    t = await new_track(api, "T")
+    concept, _ = await new_concept(t, "Hashing")
+    await ok(await api.patch("/v1/settings", json={"allow_question_rewrite": True}))
+    _, s1 = await _practise(api, concept)
+
+    run_id = (await call("jolt_sync"))["run_id"]
+    grading = {
+        "review_id": s1["review_id"],
+        "suggested_fsrs_grade": 3,
+        "rationale": "Right idea.",
+        "rewritten_question": rewrite("Which keys move?"),
+    }
+    out = await call("jolt_submit_gradings", gradings=[grading])
+    assert out["applied"] == 1 and len(out["rewritten"]) == 1
+    retry = await call("jolt_submit_gradings", gradings=[grading])
+    assert retry["applied"] == 0 and retry["rewritten"] == out["rewritten"]
+
+    run = (await ok(await api.get("/v1/sync/status")))["last_run"]
+    assert run["id"] == run_id and run["gradings_submitted"] == 1
+    rewrites = [c for c in run["changes"] if c["kind"] == "question_rewritten"]
+    assert [(c["concept_id"], c["concept_title"], c["track_id"]) for c in rewrites] == [
+        (concept, "Hashing", t)
+    ]

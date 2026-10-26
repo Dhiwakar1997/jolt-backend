@@ -243,12 +243,9 @@ async def test_upload_sync_detail_and_read_again(api, runtime, mcp_user):
 
     # Agent: plan, claim, read every page.
     plan = await call("jolt_sync")
-    assert plan == {
-        "unprocessed_sources": 1,
-        "pending_gradings": 0,
-        "pending_corrections": 0,
-        "rereads": [],
-    }
+    assert (plan["unprocessed_sources"], plan["pending_gradings"]) == (1, 0)
+    assert (plan["rereads"], plan["reread_sources"]) == (0, [])
+    assert plan["pending_corrections"] == 0
     (claimed,) = (await call("jolt_get_unprocessed_sources"))["sources"]
     assert claimed["source_id"] == sid and claimed["page_count"] == 2
     assert claimed["track_id"] == tid and claimed["title"] == "Lecture 4"
@@ -319,8 +316,14 @@ async def test_upload_sync_detail_and_read_again(api, runtime, mcp_user):
 
     # The next sync's plan lists it with the preferred model.
     plan = await call("jolt_sync")
-    assert plan["unprocessed_sources"] == 1
-    assert [(r["source_id"], r["preferred_model"]) for r in plan["rereads"]] == [(sid, "codex")]
+    assert plan["unprocessed_sources"] == 1 and plan["rereads"] == 1
+    (reread,) = plan["reread_sources"]
+    assert (reread["source_id"], reread["preferred_model"]) == (sid, "codex")
+    assert (reread["title"], reread["track_id"]) == ("Lecture 4", tid)
+    tools = [st["tool"] for st in plan["steps"]]
+    assert tools.index("jolt_diff_extractions") < tools.index("jolt_store_extraction")
+    (line,) = plan["tracks"]
+    assert (line["track_id"], line["unprocessed_sources"], line["rereads"]) == (tid, 1, 1)
     (claimed,) = (await call("jolt_get_unprocessed_sources"))["sources"]
     assert claimed["supersede"] is True and claimed["preferred_model"] == "codex"
 
@@ -352,7 +355,8 @@ async def test_upload_sync_detail_and_read_again(api, runtime, mcp_user):
     ] == [(2, "active", 1, 0), (1, "superseded", 2, 2)]
     history = (await api.get(f"/v1/sources/{sid}/extractions")).json()
     assert [h["status"] for h in history] == ["active", "superseded"]
-    assert (await call("jolt_sync"))["rereads"] == []
+    final = await call("jolt_sync")
+    assert (final["rereads"], final["reread_sources"], final["done"]) == (0, [], True)
 
 
 async def test_read_again_while_a_sync_holds_the_source_waits_for_the_next_sync(api, runtime):
@@ -369,7 +373,7 @@ async def test_read_again_while_a_sync_holds_the_source_waits_for_the_next_sync(
     assert row["processing_status"] == "unprocessed"  # the request still stands
     assert row["reread_requested"] is not None
     plan = await call("jolt_sync")
-    assert [r["source_id"] for r in plan["rereads"]] == [sid]
+    assert [r["source_id"] for r in plan["reread_sources"]] == [sid]
 
 
 async def test_lapsed_leases_mark_a_source_failed_and_read_again_revives_it(api, runtime):

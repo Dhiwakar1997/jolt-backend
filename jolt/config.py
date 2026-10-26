@@ -96,6 +96,20 @@ class Settings(BaseSettings):
     # ---- Leases ----
     lease_ttl_seconds: int = 900
 
+    # ---- Nightly sync (BE-04) ----
+    # A running sync run with no tool call for this long is closed as
+    # `incomplete` (the client stopped before its final jolt_sync).
+    sync_run_idle_seconds: int = 1800
+    # GET /v1/sync/status reports `late` when the last run started longer ago
+    # than this (a daily schedule plus slack for a missed or slow night).
+    sync_late_after_hours: int = 30
+    # Recommended local time for the scheduled task (decision D5).
+    sync_schedule_time: str = "00:15"
+    # Accept the MCP token as `?token=` on GET /mcp/sse, for clients whose
+    # connector settings take only a URL (Claude custom connectors). The token
+    # is redacted from access logs. See docs/CONNECT.md.
+    mcp_query_token_enabled: bool = True
+
     # ---- FSRS ----
     fsrs_desired_retention: float = Field(default=0.9, ge=0.70, le=0.97)
     # A concept is mastered once its FSRS stability (days) reaches this after a

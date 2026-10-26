@@ -32,6 +32,8 @@ class UserContext:
     user: User
     token_id: str
     token_kind: TokenKind
+    # The token's label ("Claude Desktop"); names the client on sync runs (BE-04).
+    token_label: Optional[str] = None
 
 
 class AuthError(Exception):
@@ -68,7 +70,13 @@ async def authenticate(
     if user is None:
         raise AuthError("invalid token")
     await _touch(record, tokens)
-    return UserContext(user_id=user.id, user=user, token_id=record.id, token_kind=record.kind)
+    return UserContext(
+        user_id=user.id,
+        user=user,
+        token_id=record.id,
+        token_kind=record.kind,
+        token_label=record.label,
+    )
 
 
 async def _touch(record: AuthToken, tokens: TokensRepository) -> None:

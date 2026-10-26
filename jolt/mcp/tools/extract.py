@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from jolt.domain.reconciliation import ProposedConcept, reconcile
 from jolt.mcp.context import get_runtime, require_user
-from jolt.mcp.tools.write import reconciliation_dict
+from jolt.mcp.tools.write import reconciliation_dict, record_reconciliation
 from jolt.services.ownership import NotOwned, visible_concepts
 from jolt.services.reconcile import ReconcileError, ReconcileService
 from jolt.services.sync import SyncService
@@ -86,10 +86,12 @@ async def diff_extractions(track_id: str, proposed_concepts: list[dict]) -> dict
 async def continue_reconciliation(source_id: str) -> dict:
     """Resume a supersede reconciliation from its checkpoint (BE-07 §6)."""
     user = await require_user()
+    rt = get_runtime()
     try:
-        view = await ReconcileService(get_runtime()).resume(user.user_id, source_id)
+        view = await ReconcileService(rt).resume(user.user_id, source_id)
     except ReconcileError as exc:
         return {"error": str(exc)}
     except NotOwned as exc:
         raise ValueError(str(exc)) from exc
+    await record_reconciliation(rt, user, source_id, view)
     return reconciliation_dict(view)

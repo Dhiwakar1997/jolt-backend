@@ -44,6 +44,9 @@ class Rewritten:
     question_id: str
     version: int
     previous_version_id: Optional[str]
+    concept_id: str = ""
+    # False when a retried grading only echoes the version its first try made.
+    created: bool = True
 
 
 @dataclass
@@ -104,7 +107,14 @@ class GradingService:
             )
             if q is not None:
                 outcome.rewritten.append(
-                    Rewritten(review.id, q.id, q.version, q.previous_version_id)
+                    Rewritten(
+                        review.id,
+                        q.id,
+                        q.version,
+                        q.previous_version_id,
+                        concept_id=review.concept_id,
+                        created=False,
+                    )
                 )
                 return
         outcome.rewrites_skipped.append(RewriteSkipped(review.id, "review already graded"))
@@ -129,7 +139,13 @@ class GradingService:
         # The card lists the concept's active questions for the read models.
         await refresh_card_questions(self._rt, review.user_id, review.concept_id)
         outcome.rewritten.append(
-            Rewritten(review.id, created.id, created.version, created.previous_version_id)
+            Rewritten(
+                review.id,
+                created.id,
+                created.version,
+                created.previous_version_id,
+                concept_id=review.concept_id,
+            )
         )
 
     async def create_version(self, review: Review, rewrite: QuestionRewrite) -> Optional[Question]:
