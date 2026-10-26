@@ -43,7 +43,7 @@ def sha(data: bytes) -> str:
 
 @pytest.fixture(autouse=True)
 def no_network_key_checks(monkeypatch):
-    async def fake_validate(self, key):
+    async def fake_validate(self, key, **_):
         return ValidationResult(ok=True, last4=key[-4:])
 
     monkeypatch.setattr(providers.AnthropicAdapter, "validate", fake_validate)

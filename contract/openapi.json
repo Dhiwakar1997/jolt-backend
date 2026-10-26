@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Jolt API",
-    "version": "1.0.0"
+    "version": "1.1.0"
   },
   "paths": {
     "/v1/auth/google": {
@@ -1814,6 +1814,175 @@
         }
       }
     },
+    "/v1/concepts/{concept_id}/feedback": {
+      "post": {
+        "tags": [
+          "concepts"
+        ],
+        "summary": "Concept Feedback",
+        "description": "Feedback on your understanding, from your answer timeline, on your own API key.\n\nSynchronous (runs while the app waits). Cached on your card until your next\nanswer or grade, so asking again costs nothing. Without a stored key:\n403 `key_required` and no outbound call.",
+        "operationId": "concept_feedback",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "concept_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Concept Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/FeedbackRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeedbackResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, or not owned by the caller",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "`out_of_credit`: the provider account behind the key has no credit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeyBackedErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`key_required`: no API key stored (no outbound call was made)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeyBackedErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`key_invalid`: the provider rejected the stored key; or request validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/KeyBackedErrorResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/HTTPValidationError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited` (the provider) or `spend_limit` (the daily cap), with Retry-After; or Jolt's own rate limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/KeyBackedErrorResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ErrorResponse"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "`provider_error`: the provider failed or its answer could not be used",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeyBackedErrorResponse"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`provider_error`: the provider did not answer in time",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeyBackedErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`no_answers`: the concept has no answer yet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeyBackedErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body larger than REQUEST_MAX_BYTES",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/tracks": {
       "get": {
         "tags": [
@@ -3161,6 +3330,192 @@
         }
       }
     },
+    "/v1/sources/{source_id}/read-now": {
+      "post": {
+        "tags": [
+          "sources"
+        ],
+        "summary": "Read Source Now",
+        "description": "Read this note now on your own API key instead of waiting for the night's sync.\n\nSame storage path as the sync's `jolt_store_extraction`: one active read,\nreconciliation against the previous read, questions for new concepts.\nSynchronous. Without a stored key: 403 `key_required` and no outbound call.",
+        "operationId": "read_source_now",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "source_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Source Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/ReadNowRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadNowResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, or not owned by the caller",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "`out_of_credit`: the provider account behind the key has no credit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeyBackedErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`key_required`: no API key stored (no outbound call was made)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeyBackedErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`key_invalid`: the provider rejected the stored key; or request validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/KeyBackedErrorResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/HTTPValidationError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited` (the provider) or `spend_limit` (the daily cap), with Retry-After; or Jolt's own rate limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/KeyBackedErrorResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ErrorResponse"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "`provider_error`: the provider failed or its answer could not be used",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeyBackedErrorResponse"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`provider_error`: the provider did not answer in time",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeyBackedErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`source_busy` (a sync or another read now holds it), `track_required` (no track to file concepts under), `source_unreadable`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeyBackedErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "`source_too_large`: a page or the note is over the read-now caps (or the request body is over REQUEST_MAX_BYTES)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/KeyBackedErrorResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ErrorResponse"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`unsupported_page_type`: a page providers cannot read (HEIC)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeyBackedErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/sources/{source_id}/extractions": {
       "get": {
         "tags": [
@@ -4213,6 +4568,16 @@
             "type": "array",
             "title": "Concepts"
           },
+          "via": {
+            "type": "string",
+            "enum": [
+              "sync",
+              "read_now"
+            ],
+            "title": "Via",
+            "description": "sync: a nightly client over MCP; read_now: POST /read-now on your key",
+            "default": "sync"
+          },
           "markdown": {
             "type": "string",
             "title": "Markdown"
@@ -5199,6 +5564,15 @@
             "type": "string",
             "format": "date-time",
             "title": "Created At"
+          },
+          "via": {
+            "type": "string",
+            "enum": [
+              "sync",
+              "read_now"
+            ],
+            "title": "Via",
+            "default": "sync"
           }
         },
         "type": "object",
@@ -5211,6 +5585,123 @@
           "created_at"
         ],
         "title": "ExtractionResponse"
+      },
+      "FeedbackRequest": {
+        "properties": {
+          "review_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Id",
+            "description": "Explain this one answer (the result screen) instead of the whole timeline"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "anthropic",
+                  "openai"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider",
+            "description": "Whose key pays; default: the most recently added key"
+          }
+        },
+        "type": "object",
+        "title": "FeedbackRequest"
+      },
+      "FeedbackResponse": {
+        "properties": {
+          "concept_id": {
+            "type": "string",
+            "title": "Concept Id"
+          },
+          "review_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Id",
+            "description": "The answer explained; null: the whole timeline"
+          },
+          "feedback": {
+            "type": "string",
+            "title": "Feedback",
+            "description": "How your understanding has moved (2–4 sentences)"
+          },
+          "next_step": {
+            "type": "string",
+            "title": "Next Step",
+            "description": "One concrete thing to try next"
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "anthropic",
+              "openai"
+            ],
+            "title": "Provider"
+          },
+          "model_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Id",
+            "description": "The model that wrote it"
+          },
+          "answers": {
+            "type": "integer",
+            "title": "Answers",
+            "description": "Answers in the timeline it read"
+          },
+          "generated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Generated At"
+          },
+          "cached": {
+            "type": "boolean",
+            "title": "Cached",
+            "description": "Served from the cache (no model call): the timeline has not changed since"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/ModelUsageResponse"
+          }
+        },
+        "type": "object",
+        "required": [
+          "concept_id",
+          "review_id",
+          "feedback",
+          "next_step",
+          "provider",
+          "model_id",
+          "answers",
+          "generated_at",
+          "cached",
+          "usage"
+        ],
+        "title": "FeedbackResponse"
       },
       "FoundInResponse": {
         "properties": {
@@ -5312,6 +5803,24 @@
         },
         "type": "object",
         "title": "HTTPValidationError"
+      },
+      "KeyBackedErrorResponse": {
+        "properties": {
+          "detail": {
+            "type": "string",
+            "title": "Detail"
+          },
+          "code": {
+            "type": "string",
+            "title": "Code"
+          }
+        },
+        "type": "object",
+        "required": [
+          "detail",
+          "code"
+        ],
+        "title": "KeyBackedErrorResponse"
       },
       "LibraryPatternResponse": {
         "properties": {
@@ -5499,6 +6008,50 @@
           "next_expected_at"
         ],
         "title": "ModelStatusResponse"
+      },
+      "ModelUsageResponse": {
+        "properties": {
+          "input_tokens": {
+            "type": "integer",
+            "title": "Input Tokens",
+            "description": "Input tokens of this call (0 when served from cache)"
+          },
+          "output_tokens": {
+            "type": "integer",
+            "title": "Output Tokens",
+            "description": "Output tokens of this call (0 when cached)"
+          },
+          "requests_today": {
+            "type": "integer",
+            "title": "Requests Today",
+            "description": "Model requests on your key today (UTC)"
+          },
+          "daily_request_cap": {
+            "type": "integer",
+            "title": "Daily Request Cap",
+            "description": "MODEL_DAILY_REQUEST_CAP"
+          },
+          "tokens_today": {
+            "type": "integer",
+            "title": "Tokens Today",
+            "description": "Input + output tokens on your key today (UTC)"
+          },
+          "daily_token_cap": {
+            "type": "integer",
+            "title": "Daily Token Cap",
+            "description": "MODEL_DAILY_TOKEN_CAP"
+          }
+        },
+        "type": "object",
+        "required": [
+          "input_tokens",
+          "output_tokens",
+          "requests_today",
+          "daily_request_cap",
+          "tokens_today",
+          "daily_token_cap"
+        ],
+        "title": "ModelUsageResponse"
       },
       "MovedResponse": {
         "properties": {
@@ -5996,6 +6549,151 @@
         ],
         "title": "QueueItemResponse"
       },
+      "ReadNowConcept": {
+        "properties": {
+          "concept_id": {
+            "type": "string",
+            "title": "Concept Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "change": {
+            "type": "string",
+            "enum": [
+              "new",
+              "unchanged",
+              "refined",
+              "changed"
+            ],
+            "title": "Change",
+            "description": "new on a first read; against the previous read on a re-read (reconciliation)"
+          },
+          "questions_written": {
+            "type": "integer",
+            "title": "Questions Written",
+            "description": "Questions written for it by this read"
+          }
+        },
+        "type": "object",
+        "required": [
+          "concept_id",
+          "title",
+          "change",
+          "questions_written"
+        ],
+        "title": "ReadNowConcept"
+      },
+      "ReadNowRequest": {
+        "properties": {
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "anthropic",
+                  "openai"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider",
+            "description": "Whose key pays; default: the most recently added key"
+          }
+        },
+        "type": "object",
+        "title": "ReadNowRequest"
+      },
+      "ReadNowResponse": {
+        "properties": {
+          "source_id": {
+            "type": "string",
+            "title": "Source Id"
+          },
+          "extraction_id": {
+            "type": "string",
+            "title": "Extraction Id",
+            "description": "The new active read (GET /v1/sources/{id} shows it)"
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "anthropic",
+              "openai"
+            ],
+            "title": "Provider"
+          },
+          "model_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Id",
+            "description": "The model that read the note"
+          },
+          "confidence": {
+            "type": "number",
+            "title": "Confidence"
+          },
+          "low_confidence": {
+            "type": "boolean",
+            "title": "Low Confidence"
+          },
+          "reconciliation": {
+            "type": "string",
+            "enum": [
+              "complete",
+              "partial"
+            ],
+            "title": "Reconciliation"
+          },
+          "concepts": {
+            "items": {
+              "$ref": "#/components/schemas/ReadNowConcept"
+            },
+            "type": "array",
+            "title": "Concepts",
+            "description": "In the order the read listed them"
+          },
+          "removed_concept_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Removed Concept Ids",
+            "description": "Concepts of the previous read this read no longer holds (superseded)"
+          },
+          "questions_written": {
+            "type": "integer",
+            "title": "Questions Written"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/ModelUsageResponse"
+          }
+        },
+        "type": "object",
+        "required": [
+          "source_id",
+          "extraction_id",
+          "provider",
+          "model_id",
+          "confidence",
+          "low_confidence",
+          "reconciliation",
+          "concepts",
+          "removed_concept_ids",
+          "questions_written",
+          "usage"
+        ],
+        "title": "ReadNowResponse"
+      },
       "ReadResponse": {
         "properties": {
           "id": {
@@ -6069,6 +6767,16 @@
             },
             "type": "array",
             "title": "Concepts"
+          },
+          "via": {
+            "type": "string",
+            "enum": [
+              "sync",
+              "read_now"
+            ],
+            "title": "Via",
+            "description": "sync: a nightly client over MCP; read_now: POST /read-now on your key",
+            "default": "sync"
           }
         },
         "type": "object",

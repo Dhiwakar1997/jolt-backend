@@ -73,6 +73,8 @@ class ReadSummary:
     concepts_found: int
     questions_written: int
     concepts: list[TouchedConcept]
+    # BE-11: "sync" (a nightly client over MCP) or "read_now" (the user's key).
+    via: str = "sync"
 
 
 @dataclass
@@ -186,6 +188,7 @@ class SourceService:
             concepts_found=len(e.concepts),
             questions_written=e.questions_written,
             concepts=[TouchedConcept(c.concept_id, c.title, c.is_new) for c in e.concepts],
+            via=e.via or "sync",
         )
 
     async def detail(self, user_id: str, source_id: str) -> SourceDetail:

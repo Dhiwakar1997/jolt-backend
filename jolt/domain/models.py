@@ -192,6 +192,8 @@ class User(DocBase):
     # BE-09: curated tracks the learner enrolled in (kept on the user document:
     # /v1/me, Tracks and the review queue read it with the user, no extra query).
     enrolments: list[Enrolment] = Field(default_factory=list)
+    # BE-11: today's key-backed model usage (the per-user spend guard).
+    model_usage: Optional["ModelUsage"] = None
 
     def enrolled_track_ids(self) -> set[str]:
         return {e.track_id for e in self.enrolments}
@@ -203,6 +205,22 @@ class User(DocBase):
                 self.settings.data_retention_days = self.retention_days
             self.retention_days = None
         return self
+
+
+class ModelUsage(BaseModel):
+    """Key-backed model calls one user made on one UTC day (BE-11 spend guard).
+
+    `requests` counts every call that reached a provider (a failed one too);
+    tokens are what the provider reported. A new day starts from zero."""
+
+    day: str  # YYYY-MM-DD, UTC
+    requests: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+    @property
+    def tokens(self) -> int:
+        return self.input_tokens + self.output_tokens
 
 
 def user_id_for(provider: str, subject: str) -> str:
@@ -426,6 +444,10 @@ class Extraction(DocBase):
     # BE-07: the supersede reconciliation this read drives, with its checkpoint
     # (None when the read was stored without `concepts`).
     reconciliation: Optional["ReconciliationCheckpoint"] = None
+    # BE-11: how the read was made: None = a nightly sync (MCP), "read_now" =
+    # POST /v1/sources/{id}/read-now on the user's own key; `provider` names it.
+    via: Optional[str] = None
+    provider: Optional[str] = None
 
 
 class ProposedConceptDoc(BaseModel):
@@ -589,6 +611,24 @@ class ConceptState(DocBase):
     # while any are pending (the sync's single-partition query keys on it).
     corrections: list[CorrectionNote] = Field(default_factory=list)
     correction_requested_at: Optional[datetime] = None
+    # BE-11: the last understanding feedback (concept page) and the last
+    # explanation of one answer (result screen), each kept until the answer
+    # timeline changes (`fingerprint`: a new answer, or a grade landing).
+    feedback: Optional["FeedbackCache"] = None
+    explanation: Optional["FeedbackCache"] = None
+
+
+class FeedbackCache(BaseModel):
+    """A key-backed feedback answer cached on the learner's card (BE-11)."""
+
+    fingerprint: str
+    review_id: Optional[str] = None  # the answer explained (explanations only)
+    feedback: str
+    next_step: str
+    provider: str
+    model_id: Optional[str] = None
+    answers: int = 0
+    generated_at: datetime = Field(default_factory=_now)
 
 
 class QuestionType(str, Enum):
@@ -780,3 +820,8 @@ class SyncRun(DocBase):
     @property
     def did_work(self) -> bool:
         return bool(self.processed_source_ids or self.questions_written or self.gradings_submitted)
+
+
+# BE-11 forward references.
+User.model_rebuild()
+ConceptState.model_rebuild()

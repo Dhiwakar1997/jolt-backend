@@ -176,9 +176,39 @@ class Settings(BaseSettings):
     # larger supersede is checkpointed and resumed by the next call.
     reconcile_max_concepts: int = Field(default=25, ge=1, le=500)
 
-    # ---- Key-backed providers (dormant) ----
+    # ---- Key-backed model calls (BE-11) ----
+    # Provider base URLs. Tests and local runs point them at a fake provider
+    # (scripts/fake_provider.py); production leaves the defaults.
     anthropic_api_base: str = "https://api.anthropic.com"
     openai_api_base: str = "https://api.openai.com"
+    # The model each provider is asked for (a setting, so a newer model is a
+    # config change). Anthropic: the Messages API; OpenAI: the Responses API.
+    anthropic_model: str = "claude-opus-5-5"
+    openai_model: str = "gpt-5.1"
+    # Send a reasoning-effort hint (Anthropic `output_config.effort`, OpenAI
+    # `reasoning.effort`): low for feedback, medium for reading. Turn off for a
+    # model that does not accept it.
+    anthropic_send_effort: bool = True
+    openai_send_reasoning: bool = True
+    # Anthropic server-side refusal fallback (`fallbacks: "default"`): a
+    # declined request is re-run on a fallback model inside the same call.
+    anthropic_refusal_fallback: bool = True
+    # Per-user spend guard, per UTC day: model requests, and input + output
+    # tokens. Over either: 429 `spend_limit` until midnight UTC.
+    model_daily_request_cap: int = Field(default=50, ge=0)
+    model_daily_token_cap: int = Field(default=2_000_000, ge=0)
+    # Request timeouts (seconds). Feedback is short; reading a multi-page note
+    # takes longer. Both stay under the Container Apps ingress timeout (240 s).
+    model_feedback_timeout_seconds: float = Field(default=45.0, gt=0, le=200)
+    model_read_timeout_seconds: float = Field(default=150.0, gt=0, le=230)
+    # Output ceilings per call (tokens, reasoning included).
+    model_feedback_max_tokens: int = Field(default=4000, ge=256)
+    model_read_max_tokens: int = Field(default=16000, ge=1024)
+    # Read now sends the original files: images (JPEG, PNG, WebP) up to this
+    # size each, and at most this much in one request (providers cap a
+    # request near 32 MB once base64-encoded). Larger notes wait for the sync.
+    read_now_max_image_bytes: int = Field(default=3_750_000, ge=1024)
+    read_now_max_total_bytes: int = Field(default=20 * 1024 * 1024, ge=1024)
 
     @model_validator(mode="after")
     def _dev_auth_is_safe(self) -> "Settings":

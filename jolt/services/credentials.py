@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
 
+import httpx
+
 from jolt.credentials.providers import get_adapter
 from jolt.domain.models import ApiKeyRef
 from jolt.runtime import Runtime
@@ -34,7 +36,11 @@ class CredentialService:
 
     async def capture(self, user_id: str, provider: str, key: str) -> StoredKey:
         adapter = get_adapter(provider)  # raises ValueError on unsupported provider
-        result = await adapter.validate(key)
+        # The runtime's settings (ANTHROPIC_API_BASE / OPENAI_API_BASE) and HTTP
+        # transport: the same as the model calls (BE-11), so tests and local
+        # runs against a fake provider never reach a real one.
+        async with httpx.AsyncClient(transport=self._rt.model_transport) as client:
+            result = await adapter.validate(key, settings=self._rt.settings, client=client)
         if not result.ok:
             # Reject at capture; store nothing (LLD §5.1).
             raise CredentialError(f"key validation failed: {result.detail}")

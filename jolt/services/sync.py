@@ -302,6 +302,8 @@ class SyncService:
         model_id: str | None = None,
         supersede: bool = False,
         client_label: str | None = None,
+        via: str | None = None,
+        provider: str | None = None,
     ) -> Extraction:
         """Persist an extraction and move the source's active pointer (LLD §7.7).
 
@@ -314,7 +316,8 @@ class SyncService:
         previous active read is marked superseded even when `supersede` is false
         (before BE-05 it stayed `active` beside the new one). Concept
         reconciliation runs after this, in `jolt.services.reconcile`, when the
-        agent passes the read's concepts (BE-07).
+        agent passes the read's concepts (BE-07). "Read now" on the user's key
+        (BE-11) stores through here too, with `via="read_now"`.
         """
         source = await self._rt.repos.sources.get_source(source_id, user_id)
         if source is None:
@@ -327,6 +330,8 @@ class SyncService:
             model_id=model_id,
             status=ExtractionStatus.ACTIVE,
             client_label=client_label,
+            via=via,
+            provider=provider,
         )
         extraction = await self._rt.repos.extractions.create(extraction)
         telemetry.record_extraction(

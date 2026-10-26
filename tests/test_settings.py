@@ -176,7 +176,7 @@ async def test_api_key_list_has_added_at_and_me_has_api_key(api, monkeypatch):
     from jolt.credentials import providers
     from jolt.credentials.providers import ValidationResult
 
-    async def fake_validate(self, key):  # no network in tests
+    async def fake_validate(self, key, **_):  # no network in tests
         return ValidationResult(ok=True, last4=key[-4:])
 
     monkeypatch.setattr(providers.OpenAIAdapter, "validate", fake_validate)

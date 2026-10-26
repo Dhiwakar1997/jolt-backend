@@ -357,7 +357,7 @@ def test_me_reports_onboarding_progress(client, auth, monkeypatch):
     client.post("/v1/tracks", json={"name": "Systems"}, headers=auth)
     client.post("/v1/mcp-tokens", json={"label": "Codex"}, headers=auth)
 
-    async def fake_validate(self, key):  # no network in tests
+    async def fake_validate(self, key, **_):  # no network in tests
         return ValidationResult(ok=True, last4=key[-4:])
 
     monkeypatch.setattr(providers.AnthropicAdapter, "validate", fake_validate)

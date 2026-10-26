@@ -326,6 +326,40 @@
         "visualization": "barchart"
       },
       "customWidth": "50"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "customMetrics | where name == \"jolt.model.calls\"\n| extend provider = tostring(customDimensions.provider), kind = tostring(customDimensions.kind), outcome = tostring(customDimensions.outcome)\n| summarize calls = sum(valueSum) by bin(timestamp, 1d), outcome\n| render columnchart",
+        "size": 0,
+        "title": "Key-backed model calls per day (BE-11)",
+        "timeContext": {
+          "durationMs": 0
+        },
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components",
+        "visualization": "barchart"
+      },
+      "customWidth": "50"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "customMetrics | where name == \"jolt.model.tokens\"\n| extend provider = tostring(customDimensions.provider), direction = tostring(customDimensions.direction)\n| summarize tokens = sum(valueSum) by bin(timestamp, 1d), provider, direction\n| render columnchart",
+        "size": 0,
+        "title": "Tokens on users' keys per day (BE-11)",
+        "timeContext": {
+          "durationMs": 0
+        },
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components",
+        "visualization": "barchart"
+      },
+      "customWidth": "50"
     }
   ],
   "isLocked": false,

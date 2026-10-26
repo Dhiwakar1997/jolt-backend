@@ -48,6 +48,14 @@ param mcpServerUrl = ''
 param devAuthEnabled = true
 param devAuthSecret = readEnvironmentVariable('JOLT_DEV_AUTH_SECRET_INIT', '')
 
+// BE-11: feedback and read now on users' own API keys. Empty model = the app
+// default (jolt/config.py, .env.example); set one here to move to a newer model
+// without a release. Per-user daily caps on model requests and tokens.
+param anthropicModel = ''
+param openaiModel = ''
+param modelDailyRequestCap = 50
+param modelDailyTokenCap = 2000000
+
 param cosmosDatabaseName = 'jolt'
 param blobContainerName = 'sources'
 

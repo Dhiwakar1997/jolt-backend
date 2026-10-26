@@ -124,7 +124,7 @@ def test_retention_round_trips(client, auth, runtime, account):
 
 
 def test_api_key_capture_list_delete(client, auth, runtime, monkeypatch):
-    async def fake_validate(self, key):  # no network in tests
+    async def fake_validate(self, key, **_):  # no network in tests
         return ValidationResult(ok=key.startswith("sk-"), last4=key[-4:])
 
     monkeypatch.setattr(providers.AnthropicAdapter, "validate", fake_validate)

@@ -1,4 +1,4 @@
-"""End-to-end smoke test against a running Jolt backend (BE-02 to BE-09).
+"""End-to-end smoke test against a running Jolt backend (BE-02 to BE-11).
 
     python scripts/smoke.py --base-url https://<dev-host>
     python scripts/smoke.py --base-url http://localhost:8000      # local, see below
@@ -51,7 +51,15 @@ share it, with a fresh test user:
     the enrolled DSA track); PATCH /v1/settings round trip (theme, desired
     retention, daily cap, data retention, time zone) and the model status block;
     POST /v1/export and download the bundle from its signed URL
-16. Revoke the MCP token (/mcp then refuses it); sign in a second device and
+16. Key-backed features (BE-11): POST /v1/concepts/{id}/feedback and POST
+    /v1/sources/{id}/read-now answer 403 key_required without a key. With
+    --api-key (or $JOLT_SMOKE_API_KEY; --api-key-provider anthropic|openai) the
+    key is added, feedback runs (then is served from the cache), read now
+    stores a new active read (via read_now), and the key is deleted again;
+    without one those steps are skipped. A real key is billed a few cents.
+    Locally, scripts/fake_provider.py stands in for the providers (point
+    ANTHROPIC_API_BASE / OPENAI_API_BASE at it and pass --api-key sk-fake-...)
+17. Revoke the MCP token (/mcp then refuses it); sign in a second device and
     sign the first out (/v1 then refuses its token); DELETE /v1/me deletes the
     throwaway user (its last token then gets 401)
 
@@ -236,6 +244,8 @@ async def run(
     dev_auth_secret: str | None = None,
     skip_dsa: bool = False,
     require_dsa: bool = False,
+    api_key: str | None = None,
+    api_key_provider: str = "anthropic",
 ) -> dict:
     """Run every step; raise on the first failure. Returns ids for the record."""
     base_url = base_url.rstrip("/")
@@ -808,6 +818,16 @@ async def run(
             check(mcp_token not in download.text and app_token not in download.text, "tokens")
             out["export_bytes"] = export["bytes"]
 
+        await _key_backed_steps(
+            rep,
+            http,
+            out,
+            concept_id=concept_id,
+            source_id=source_id,
+            api_key=api_key,
+            provider=api_key_provider,
+        )
+
         with rep.step("DELETE /v1/mcp-tokens/{id} (revoked at once)"):
             resp = await http.delete(f"/v1/mcp-tokens/{mcp_token_id}")
             check(resp.status_code == 204, f"revoke -> {resp.status_code}: {resp.text[:200]}")
@@ -836,6 +856,62 @@ async def run(
 
     out["steps_passed"] = rep.passed
     return out
+
+
+async def _key_backed_steps(
+    rep: Reporter,
+    http: httpx.AsyncClient,
+    out: dict,
+    *,
+    concept_id: str,
+    source_id: str,
+    api_key: str | None,
+    provider: str,
+) -> None:
+    """BE-11: feedback and read now. Without a key both answer 403 key_required
+    (and make no outbound call); with --api-key the real calls run on that key,
+    which costs a few cents on a real one, and the key is removed after."""
+    feedback_url = f"/v1/concepts/{concept_id}/feedback"
+    read_url = f"/v1/sources/{source_id}/read-now"
+    with rep.step("Key-backed routes without a key -> key_required"):
+        for url in (feedback_url, read_url):
+            resp = await http.post(url)
+            body = _json(resp, expected=403)
+            check(body.get("code") == "key_required", f"{url}: {body}")
+    if not api_key:
+        print("[skip] key-backed feedback and read now: no --api-key", flush=True)
+        return
+
+    with rep.step(f"POST /v1/settings/api-key ({provider})"):
+        added = _json(
+            await http.post("/v1/settings/api-key", json={"provider": provider, "key": api_key})
+        )
+        check(added["last4"] == api_key[-4:], f"api key: {added}")
+
+    with rep.step("POST /v1/concepts/{id}/feedback (on the key, then cached)"):
+        first = _json(await http.post(feedback_url))
+        check(first["feedback"] and first["next_step"], f"feedback: {first}")
+        check(first["provider"] == provider and first["cached"] is False, f"feedback: {first}")
+        again = _json(await http.post(feedback_url))
+        check(again["cached"] is True and again["feedback"] == first["feedback"], "not cached")
+        out["feedback_model"] = first["model_id"]
+
+    with rep.step("POST /v1/sources/{id}/read-now (stored like a sync read)"):
+        read = _json(await http.post(read_url))
+        check(read["provider"] == provider and read["model_id"], f"read now: {read}")
+        detail = _json(await http.get(f"/v1/sources/{source_id}"))
+        active = detail["active_read"]
+        check(active["id"] == read["extraction_id"], f"active read: {active['id']}")
+        check(active["via"] == "read_now" and active["client_label"] == "Read now", "read label")
+        check(sum(r["status"] == "active" for r in detail["reads"]) == 1, "one active read")
+        out["read_now_model"] = read["model_id"]
+        out["read_now_requests_today"] = read["usage"]["requests_today"]
+
+    with rep.step(f"DELETE /v1/settings/api-key/{provider}"):
+        resp = await http.delete(f"/v1/settings/api-key/{provider}")
+        check(resp.status_code == 204, f"delete key -> {resp.status_code}: {resp.text[:200]}")
+        body = _json(await http.post(feedback_url), expected=403)
+        check(body.get("code") == "key_required", f"after delete: {body}")
 
 
 async def run_public(
@@ -1017,6 +1093,18 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="fail when the catalog has no DSA track (default: skip those steps)",
     )
+    parser.add_argument(
+        "--api-key",
+        default=os.environ.get("JOLT_SMOKE_API_KEY") or None,
+        help="BE-11: a provider API key (default: $JOLT_SMOKE_API_KEY) to run feedback and "
+        "read now on; billed to that key. Without one those steps only check key_required",
+    )
+    parser.add_argument(
+        "--api-key-provider",
+        choices=("anthropic", "openai"),
+        default=os.environ.get("JOLT_SMOKE_API_KEY_PROVIDER") or "anthropic",
+        help="whose key --api-key is (default anthropic)",
+    )
     args = parser.parse_args(argv)
 
     print(f"Jolt smoke test against {args.base_url}", flush=True)
@@ -1039,6 +1127,8 @@ def main(argv: list[str] | None = None) -> int:
                 dev_auth_secret=args.dev_auth_secret,
                 skip_dsa=args.skip_dsa,
                 require_dsa=args.require_dsa,
+                api_key=args.api_key,
+                api_key_provider=args.api_key_provider,
             )
         out = asyncio.run(coro)
     except SmokeFailure as exc:

@@ -1,8 +1,9 @@
 """Blob Storage access — signed URL generation, existence/size checks (LLD §6, §7.1).
 
-Jolt compute never streams the file bytes: the app PUTs straight to Blob against a
-short-TTL SAS URL, and agents GET the source via a signed read URL. This module
-only mints those URLs and verifies uploads.
+The app PUTs straight to Blob against a short-TTL SAS URL, and agents GET the
+source via a signed read URL. This module mints those URLs and verifies uploads;
+the only server-side read of a file's bytes besides the confirm hash is "read
+now" on the user's own key (BE-11, `read_bytes`).
 """
 
 from __future__ import annotations
@@ -142,6 +143,22 @@ class BlobGateway:
         async for chunk in downloader.chunks():
             digest.update(chunk)
         return digest.hexdigest()
+
+    async def read_bytes(self, blob_path: str, max_bytes: int) -> Optional[bytes]:
+        """The stored bytes, or None if missing or larger than `max_bytes`.
+
+        Only "read now" (BE-11) reads a file on Jolt's side: it sends the
+        original pages to the user's own model provider. The size is checked
+        before the download, so nothing over the cap is held in memory."""
+        info = await self.stat(blob_path)
+        if info is None or info["size"] > max_bytes:
+            return None
+        blob = self.service.get_blob_client(self.container, blob_path)
+        try:
+            downloader = await blob.download_blob()
+            return await downloader.readall()
+        except Exception:
+            return None
 
     async def delete(self, blob_path: str) -> None:
         """Delete a blob; missing is fine (used to drop a rejected upload)."""

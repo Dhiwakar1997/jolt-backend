@@ -354,6 +354,12 @@ class InMemoryBlobGateway:
         blob = self._blobs.get(blob_path)
         return hashlib.sha256(blob.data).hexdigest() if blob is not None else None
 
+    async def read_bytes(self, blob_path: str, max_bytes: int) -> Optional[bytes]:
+        blob = self._blobs.get(blob_path)
+        if blob is None or len(blob.data) > max_bytes:
+            return None
+        return blob.data
+
     async def delete(self, blob_path: str) -> None:
         self._blobs.pop(blob_path, None)
 

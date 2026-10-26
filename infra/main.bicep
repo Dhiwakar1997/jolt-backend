@@ -88,6 +88,18 @@ param googleOAuthClientId string = ''
 @description('MCP address shown to users by GET /v1/me (MCP_SERVER_URL). Empty: https://<app FQDN>/mcp/sse.')
 param mcpServerUrl string = ''
 
+@description('BE-11: model id for key-backed calls on users\' Anthropic keys (ANTHROPIC_MODEL). Empty: the app default (jolt/config.py).')
+param anthropicModel string = ''
+
+@description('BE-11: model id for key-backed calls on users\' OpenAI keys (OPENAI_MODEL). Empty: the app default.')
+param openaiModel string = ''
+
+@description('BE-11: per-user daily cap on key-backed model requests (MODEL_DAILY_REQUEST_CAP). 0 turns feedback and read now off.')
+param modelDailyRequestCap int = 50
+
+@description('BE-11: per-user daily cap on key-backed input + output tokens (MODEL_DAILY_TOKEN_CAP).')
+param modelDailyTokenCap int = 2000000
+
 @description('Dev-only sign-in by email (POST /v1/auth/dev), for the deploy smoke test. Guarded by the Key Vault secret `dev-auth-secret`. Must stay false in prod (the app refuses to start).')
 param devAuthEnabled bool = false
 
@@ -321,6 +333,10 @@ module app 'modules/containerapp.bicep' = if (!empty(containerImage)) {
     corsOriginRegex: corsOriginRegex
     googleOAuthClientId: googleOAuthClientId
     mcpServerUrl: mcpServerUrl
+    anthropicModel: anthropicModel
+    openaiModel: openaiModel
+    modelDailyRequestCap: modelDailyRequestCap
+    modelDailyTokenCap: modelDailyTokenCap
     devAuthEnabled: devAuth
     devAuthSecretName: keyVault.outputs.devAuthSecretName
     minReplicas: minReplicas

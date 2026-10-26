@@ -10,9 +10,10 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from jolt.api.limits import install_limits
 from jolt.api.routes import (
@@ -35,6 +36,7 @@ from jolt.api.security import (
     validation_error_handler,
 )
 from jolt.config import Settings, get_settings
+from jolt.credentials.providers import ModelCallError
 from jolt.mcp.context import set_runtime as set_mcp_runtime
 from jolt.mcp.server import build_mcp_app, install_log_redaction
 from jolt.runtime import Runtime
@@ -43,7 +45,7 @@ from jolt.telemetry import install_telemetry
 logger = logging.getLogger("jolt")
 
 # The REST + MCP contract version (contract/openapi.json `info.version`).
-API_VERSION = "1.0.0"
+API_VERSION = "1.1.0"
 
 
 @asynccontextmanager
@@ -69,6 +71,16 @@ async def lifespan(app: FastAPI):
     finally:
         await runtime.close()
         logger.info("Stopped jolt-api")
+
+
+async def model_call_error_handler(request: Request, exc: Exception) -> JSONResponse:
+    """`{detail, code}` with the error's status (and Retry-After when it has one).
+    The detail is Jolt's own text: never the provider's, never a key."""
+    assert isinstance(exc, ModelCallError)
+    headers = {"Retry-After": str(exc.retry_after)} if exc.retry_after else None
+    return JSONResponse(
+        {"detail": exc.detail, "code": exc.code}, status_code=exc.status, headers=headers
+    )
 
 
 async def _seed_curated(runtime: Runtime, cfg: Settings) -> None:
@@ -105,6 +117,8 @@ def create_app(settings: Settings | None = None, runtime: Runtime | None = None)
     )
     # 422 bodies without the rejected input (it can be a key or an ID token).
     app.add_exception_handler(RequestValidationError, validation_error_handler)
+    # BE-11: typed errors of the key-backed routes ({detail, code}).
+    app.add_exception_handler(ModelCallError, model_call_error_handler)
     document_validation_errors(app)
     app.state.settings = cfg
     if runtime is not None:

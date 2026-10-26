@@ -36,8 +36,28 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
+def _load_fake_provider():
+    spec = importlib.util.spec_from_file_location(
+        "jolt_fake_provider", ROOT / "scripts" / "fake_provider.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 @pytest.fixture
-def live_server(tmp_path):
+def fake_provider():
+    """scripts/fake_provider.py on a free port (BE-11), for both providers."""
+    server = _load_fake_provider().serve(_free_port())
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield f"http://127.0.0.1:{server.server_address[1]}"
+    server.shutdown()
+    thread.join(timeout=10)
+
+
+@pytest.fixture
+def live_server(tmp_path, fake_provider):
     port = _free_port()
     base_url = f"http://127.0.0.1:{port}"
     settings = Settings(
@@ -48,6 +68,9 @@ def live_server(tmp_path):
         dev_auth_enabled=True,
         # BE-09: the curated DSA track, from a synthetic Jolt checkout.
         dsa_seed_from=str(dsa_fixture.write_repo(tmp_path / "Jolt")),
+        # BE-11: model calls go to the fake provider, never the network.
+        anthropic_api_base=fake_provider,
+        openai_api_base=fake_provider,
     )
     server = uvicorn.Server(
         uvicorn.Config(create_app(settings=settings), port=port, log_level="warning")
@@ -69,11 +92,27 @@ async def test_smoke_round_trip(live_server):
     out = await smoke.run(
         live_server, wait_seconds=10, expect_version="smoke-test", require_dsa=True
     )
-    assert out["steps_passed"] == 54
+    assert out["steps_passed"] == 55  # BE-11: key_required checked, keyed steps skipped
+    assert "read_now_model" not in out
     assert out["user_deleted"] is True and out["export_bytes"] > 0
     assert out["dsa_track_id"] == "dsa" and out["dsa_match"]
     assert out["version"] == "smoke-test"
     assert out["mcp_server_url"] == f"{live_server}/mcp/sse"
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "openai"])
+async def test_smoke_runs_the_key_backed_steps_with_a_key(live_server, provider):
+    smoke = _load_smoke()
+    out = await smoke.run(
+        live_server,
+        wait_seconds=10,
+        skip_dsa=True,
+        api_key="sk-fake-smoke-0001",
+        api_key_provider=provider,
+    )
+    assert out["read_now_model"].endswith("-fake") and out["feedback_model"].endswith("-fake")
+    assert out["read_now_requests_today"] == 2
+    assert out["user_deleted"] is True
 
 
 def test_smoke_cli_reports_failure_for_an_unreachable_server(capsys):

@@ -129,6 +129,14 @@ class _Instruments:
         self.maintenance_deleted = meter.create_counter(
             "jolt.maintenance.deleted", unit="1", description="Items removed by maintenance"
         )
+        # BE-11: key-backed model calls (billed to the user's key). Attributes
+        # are provider, kind and outcome only: never a key, never a user's text.
+        self.model_calls = meter.create_counter(
+            "jolt.model.calls", unit="1", description="Key-backed model calls by outcome"
+        )
+        self.model_tokens = meter.create_counter(
+            "jolt.model.tokens", unit="1", description="Tokens of key-backed model calls"
+        )
 
 
 # The global meter is a proxy until a provider is installed, so instruments
@@ -208,6 +216,18 @@ def record_tool_call(tool: str, outcome: str, request_charge: float) -> None:
 @_safe
 def record_rate_limited(surface: str, scope: str) -> None:
     _instruments.rate_limited.add(1, {"surface": surface, "scope": scope})
+
+
+@_safe
+def record_model_call(*, provider: str, kind: str, outcome: str) -> None:
+    _instruments.model_calls.add(1, {"provider": provider, "kind": kind, "outcome": outcome})
+
+
+@_safe
+def record_model_tokens(*, provider: str, kind: str, input_tokens: int, output_tokens: int) -> None:
+    base = {"provider": provider, "kind": kind}
+    _instruments.model_tokens.add(max(0, input_tokens), {**base, "direction": "input"})
+    _instruments.model_tokens.add(max(0, output_tokens), {**base, "direction": "output"})
 
 
 @_safe

@@ -14,10 +14,18 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from jolt.api.deps import RuntimeDep, UserDep
-from jolt.api.errors import CONFLICT, NOT_FOUND, UNAUTHORIZED
+from jolt.api.errors import (
+    CONFLICT,
+    KEY_BACKED_ERRORS,
+    NOT_FOUND,
+    UNAUTHORIZED,
+    KeyBackedErrorResponse,
+)
+from jolt.api.key_backed import ModelUsageResponse, Provider, usage_response
 from jolt.api.routes.tracks import PatternLibraryResponse
 from jolt.domain.models import Question, QuestionStatus
 from jolt.services.corrections import CorrectionConflict, CorrectionService
+from jolt.services.feedback import FeedbackService
 from jolt.services.ownership import NotOwned
 from jolt.services.read_models import ReadModelService
 from jolt.services.reviews import ReviewConflict, ReviewError, ReviewService
@@ -225,3 +233,73 @@ async def request_correction(
     except CorrectionConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     return CorrectionResponse(concept_id=concept_id, note=entry.note, created_at=entry.created_at)
+
+
+# --------------------------------------------------------------------------- #
+# Understanding feedback on the user's own key (BE-11)
+# --------------------------------------------------------------------------- #
+class FeedbackRequest(BaseModel):
+    review_id: Optional[str] = Field(
+        default=None,
+        max_length=64,
+        description="Explain this one answer (the result screen) instead of the whole timeline",
+    )
+    provider: Optional[Provider] = Field(
+        default=None, description="Whose key pays; default: the most recently added key"
+    )
+
+
+class FeedbackResponse(BaseModel):
+    concept_id: str
+    review_id: Optional[str] = Field(description="The answer explained; null: the whole timeline")
+    feedback: str = Field(description="How your understanding has moved (2–4 sentences)")
+    next_step: str = Field(description="One concrete thing to try next")
+    provider: Provider
+    model_id: Optional[str] = Field(description="The model that wrote it")
+    answers: int = Field(description="Answers in the timeline it read")
+    generated_at: datetime
+    cached: bool = Field(
+        description="Served from the cache (no model call): the timeline has not changed since"
+    )
+    usage: ModelUsageResponse
+
+
+@router.post(
+    "/{concept_id}/feedback",
+    response_model=FeedbackResponse,
+    responses={
+        **NOT_FOUND,
+        **KEY_BACKED_ERRORS,
+        409: {
+            "model": KeyBackedErrorResponse,
+            "description": "`no_answers`: the concept has no answer yet",
+        },
+    },
+)
+async def concept_feedback(
+    concept_id: str, user: UserDep, rt: RuntimeDep, body: FeedbackRequest | None = None
+) -> FeedbackResponse:
+    """Feedback on your understanding, from your answer timeline, on your own API key.
+
+    Synchronous (runs while the app waits). Cached on your card until your next
+    answer or grade, so asking again costs nothing. Without a stored key:
+    403 `key_required` and no outbound call."""
+    body = body or FeedbackRequest()
+    try:
+        r = await FeedbackService(rt).feedback(
+            user.user_id, concept_id, review_id=body.review_id, provider=body.provider
+        )
+    except NotOwned as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return FeedbackResponse(
+        concept_id=r.concept_id,
+        review_id=r.review_id,
+        feedback=r.feedback,
+        next_step=r.next_step,
+        provider=r.provider,
+        model_id=r.model_id,
+        answers=r.answers,
+        generated_at=r.generated_at,
+        cached=r.cached,
+        usage=usage_response(r.usage, r.input_tokens, r.output_tokens),
+    )

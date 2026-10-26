@@ -12,6 +12,9 @@ Azure-free).
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Optional
+
+import httpx
 
 from jolt.auth.google import GoogleIdTokenVerifier
 from jolt.config import Settings, get_settings
@@ -88,6 +91,9 @@ class Runtime:
         # Google ID token verifier for sign-in (BE-03). Fetches Google's keys
         # lazily, so building it does no I/O; tests swap in one with their own key.
         self.google = GoogleIdTokenVerifier(settings.google_client_ids)
+        # BE-11: the HTTP transport of key-backed model calls. None = the
+        # network; tests swap in an httpx.MockTransport (no request leaves).
+        self.model_transport: Optional[httpx.AsyncBaseTransport] = None
 
     @classmethod
     async def create(cls, settings: Settings | None = None) -> "Runtime":

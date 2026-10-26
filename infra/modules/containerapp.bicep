@@ -66,6 +66,21 @@ param customDomainName string = ''
 @description('false: the domain is added to the app unbound, so the managed certificate can be issued (certificate.bicep). true (later deploys): the certificate exists and is bound with SNI. scripts/deploy-infra.sh detects it.')
 param customDomainCertificateReady bool = false
 
+// BE-11: key-backed model calls on users' own keys (feedback, read now). The
+// keys stay in Key Vault (read by the app per call); these are only settings.
+// Outbound HTTPS to the providers needs no ingress or egress change.
+@description('Model id for users\' Anthropic keys (ANTHROPIC_MODEL). Empty: the app default.')
+param anthropicModel string = ''
+
+@description('Model id for users\' OpenAI keys (OPENAI_MODEL). Empty: the app default.')
+param openaiModel string = ''
+
+@description('Per-user daily cap on key-backed model requests (MODEL_DAILY_REQUEST_CAP).')
+param modelDailyRequestCap int = 50
+
+@description('Per-user daily cap on key-backed tokens (MODEL_DAILY_TOKEN_CAP).')
+param modelDailyTokenCap int = 2000000
+
 @description('Create the scheduled maintenance job (abandoned uploads, data retention).')
 param maintenanceEnabled bool = true
 
@@ -166,6 +181,14 @@ var baseEnv = [
   // per-IP rate limit reads that entry, not one the client wrote (BE-10).
   { name: 'TRUSTED_PROXY_HOPS', value: '1' }
 ]
+var modelEnv = concat(
+  [
+    { name: 'MODEL_DAILY_REQUEST_CAP', value: string(modelDailyRequestCap) }
+    { name: 'MODEL_DAILY_TOKEN_CAP', value: string(modelDailyTokenCap) }
+  ],
+  empty(anthropicModel) ? [] : [{ name: 'ANTHROPIC_MODEL', value: anthropicModel }],
+  empty(openaiModel) ? [] : [{ name: 'OPENAI_MODEL', value: openaiModel }]
+)
 var devAuthEnv = devAuthEnabled ? [
   { name: 'DEV_AUTH_SECRET', secretRef: 'dev-auth-secret' }
 ] : []
@@ -220,7 +243,7 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
             cpu: json(cpu)
             memory: memory
           }
-          env: concat(storeEnv, baseEnv, devAuthEnv, telemetryEnv)
+          env: concat(storeEnv, baseEnv, modelEnv, devAuthEnv, telemetryEnv)
           probes: [
             {
               type: 'Startup'
