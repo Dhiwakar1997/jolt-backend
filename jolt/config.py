@@ -183,8 +183,11 @@ class Settings(BaseSettings):
     openai_api_base: str = "https://api.openai.com"
     # The model each provider is asked for (a setting, so a newer model is a
     # config change). Anthropic: the Messages API; OpenAI: the Responses API.
-    anthropic_model: str = "claude-opus-5-5"
-    openai_model: str = "gpt-5.1"
+    # No default: the owner picks the model at deploy time. While a provider's
+    # model is unset, its key-backed calls answer `provider_error` without
+    # making a request.
+    anthropic_model: str = ""
+    openai_model: str = ""
     # Send a reasoning-effort hint (Anthropic `output_config.effort`, OpenAI
     # `reasoning.effort`): low for feedback, medium for reading. Turn off for a
     # model that does not accept it.

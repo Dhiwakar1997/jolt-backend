@@ -37,6 +37,9 @@ def settings() -> Settings:
         storage_mode="memory",
         dev_auth_enabled=True,
         google_oauth_client_id=GOOGLE_CLIENT_ID,
+        # BE-11 calls go to fake providers; any model name works there.
+        anthropic_model="test-anthropic-model",
+        openai_model="test-openai-model",
     )
 
 

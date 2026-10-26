@@ -618,7 +618,7 @@ container by Bicep (`infra/modules/containerapp.bicep`):
 | `APP_TOKEN_IDLE_DAYS` (30) | default | code (BE-10 security review): app tokens unused this long are refused and swept | — |
 | `API_DOCS_ENABLED` | unset: `/docs`, `/redoc`, `/openapi.json` on in dev, off in prod | code (BE-10 security review) | — |
 | `MODEL_DAILY_REQUEST_CAP` (50), `MODEL_DAILY_TOKEN_CAP` (2,000,000) | `modelDailyRequestCap`, `modelDailyTokenCap` | Bicep param (BE-11) | — (per-user daily spend guard on users' own keys; 0 turns feedback and read now off) |
-| `ANTHROPIC_MODEL`, `OPENAI_MODEL` | `anthropicModel`, `openaiModel` (empty: the code default, `.env.example`) | Bicep param (BE-11) | — (set to move to a newer model) |
+| `ANTHROPIC_MODEL`, `OPENAI_MODEL` | `anthropicModel`, `openaiModel` | Bicep param (BE-11) | **OWNER**: a current model id from each provider's model list. No default: while empty, that provider's feedback and read now answer `provider_error` (503) without a request. |
 | `ANTHROPIC_SEND_EFFORT`, `OPENAI_SEND_REASONING`, `ANTHROPIC_REFUSAL_FALLBACK`, `MODEL_*_TIMEOUT_SECONDS`, `MODEL_*_MAX_TOKENS`, `READ_NOW_MAX_*_BYTES` | defaults | code (BE-11) | — ([`API.md`](./API.md) section 8) |
 
 With `STORAGE_MODE=azure` the API refuses to start if `TOKEN_HASH_PEPPER` is the

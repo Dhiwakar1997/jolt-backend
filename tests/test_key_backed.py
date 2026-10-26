@@ -506,6 +506,18 @@ async def test_without_a_key_no_route_attempts_an_outbound_call(api, runtime, no
     assert detail["processing_status"] == "unprocessed"  # not claimed either
 
 
+async def test_an_unset_model_answers_provider_error_without_a_request(api, runtime, fake):
+    await add_key(api, "anthropic", ANTHROPIC_KEY)
+    c = await answered_concept(api)
+    runtime.settings.anthropic_model = ""
+    before = len(fake.requests)
+    detail = error(
+        await api.post(f"/v1/concepts/{c['concept_id']}/feedback"), 503, "provider_error"
+    )
+    assert "ANTHROPIC_MODEL" in detail["detail"]
+    assert len(fake.requests) == before
+
+
 async def test_a_key_for_the_other_provider_is_not_used(api, runtime, fake):
     await add_key(api, "openai", OPENAI_KEY)
     c = await answered_concept(api)

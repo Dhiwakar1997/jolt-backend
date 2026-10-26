@@ -73,6 +73,17 @@ class ModelCallError(Exception):
         self.retry_after = retry_after
 
 
+def _configured_model(model: str, setting: str) -> str:
+    """The configured model id, or a typed error before any request is made."""
+    if not model.strip():
+        raise ModelCallError(
+            "provider_error",
+            f"No model is configured for this provider; set {setting} on the server.",
+            status=503,
+        )
+    return model.strip()
+
+
 # --------------------------------------------------------------------------- #
 # Request / response
 # --------------------------------------------------------------------------- #
@@ -249,7 +260,7 @@ class AnthropicAdapter(ProviderAdapter):
         return await self._probe(f"{base}/v1/models", headers, key, client)
 
     def model_for(self, settings: Settings) -> str:
-        return settings.anthropic_model
+        return _configured_model(settings.anthropic_model, "ANTHROPIC_MODEL")
 
     async def complete(
         self,
@@ -338,7 +349,7 @@ class OpenAIAdapter(ProviderAdapter):
         return await self._probe(f"{base}/v1/models", headers, key, client)
 
     def model_for(self, settings: Settings) -> str:
-        return settings.openai_model
+        return _configured_model(settings.openai_model, "OPENAI_MODEL")
 
     async def complete(
         self,

@@ -71,6 +71,8 @@ def live_server(tmp_path, fake_provider):
         # BE-11: model calls go to the fake provider, never the network.
         anthropic_api_base=fake_provider,
         openai_api_base=fake_provider,
+        anthropic_model="test-anthropic-model",
+        openai_model="test-openai-model",
     )
     server = uvicorn.Server(
         uvicorn.Config(create_app(settings=settings), port=port, log_level="warning")
