@@ -35,6 +35,8 @@ class SyllabusItemOut(_Out):
     concept_key: str
     label: str
     parent: Optional[str]
+    # BE-07: per-item provenance (falls back to the agenda's source).
+    source: Literal["agent", "user", "emergent"]
 
 
 class AgendaOut(_Out):
@@ -43,12 +45,16 @@ class AgendaOut(_Out):
     syllabus: list[SyllabusItemOut]
     last_refined_at: Optional[str]  # ISO-8601 UTC
     refined_from_source_id: Optional[str]
+    # BE-07: the learner's outline from track creation (a `draft` to tidy), or null.
+    outline: Optional[str]
 
 
 class TrackOut(_Out):
     id: str
     name: str
     origin: Literal["user", "jolt"]
+    kind: Literal["notes", "dsa_patterns"]
+    archived: bool
     syllabus: list[str]
     agenda: AgendaOut
 
@@ -60,6 +66,7 @@ class GetTracksOut(_Out):
 class RecentConceptOut(_Out):
     id: str
     text: str
+    title: Optional[str]
     syllabus_ref: Optional[str]
 
 
@@ -72,8 +79,26 @@ class GetCoverageOut(_Out):
     total_concepts: int
     studied_concepts: int
     decaying_concepts: int
+    off_plan_concepts: int  # BE-07: on a locked track, outside the syllabus; not counted
     coverage_ratio: float
     uncovered_syllabus: list[str]
+
+
+class CorrectionNoteOut(_Out):
+    note: str
+    created_at: str  # ISO-8601 UTC
+
+
+class PendingCorrectionOut(_Out):
+    concept_id: str
+    track_id: str
+    title: str
+    text: str
+    notes: list[CorrectionNoteOut]
+
+
+class GetPendingCorrectionsOut(_Out):
+    corrections: list[PendingCorrectionOut]
 
 
 # -- writes ----------------------------------------------------------------
@@ -87,9 +112,30 @@ class LogSessionOut(_Out):
     concept_ids: list[str]
 
 
+class ReconcileDeltaOut(_Out):
+    index: Optional[int]  # position in `concepts`; null for a removed concept
+    change: Literal["unchanged", "refined", "changed", "removed", "new"]
+    concept_id: Optional[str]  # the concept that carries on; null when removed
+    existing_concept_id: Optional[str]
+    similarity: float
+    applied: bool
+
+
+class ReconciliationOut(_Out):
+    status: Literal["complete", "partial"]
+    total_steps: int
+    applied_steps: int
+    remaining_steps: int
+    max_steps_per_call: int
+    concept_ids: list[Optional[str]]  # input order
+    deltas: list[ReconcileDeltaOut]
+
+
 class StoreExtractionOut(_Out):
     extraction_id: str
     status: Literal["active", "superseded"]
+    # BE-07: present when the call passed `concepts`, else null.
+    reconciliation: Optional[ReconciliationOut]
 
 
 class CreateQuestionsOut(_Out):
@@ -99,6 +145,7 @@ class CreateQuestionsOut(_Out):
 class CorrectConceptOut(_Out):
     concept_id: str
     updated: bool
+    corrections_cleared: int  # BE-07: the learner's notes this answered
 
 
 # -- sync ------------------------------------------------------------------
@@ -112,6 +159,7 @@ class RereadOut(_Out):
 class SyncOut(_Out):
     unprocessed_sources: int
     pending_gradings: int
+    pending_corrections: int  # BE-07: concepts with correction notes waiting
     rereads: list[RereadOut]
 
 
@@ -217,10 +265,11 @@ TOOL_OUTPUTS: dict[str, Any] = {
     "jolt_get_recent_concepts": GetRecentConceptsOut,
     "jolt_get_coverage": GetCoverageOut,
     "jolt_get_agenda": Union[AgendaOut, ToolError],
+    "jolt_get_pending_corrections": GetPendingCorrectionsOut,
     "jolt_request_upload_url": Union[RequestUploadUrlOut, ToolError],
     "jolt_log_session": LogSessionOut,
     "jolt_set_agenda": Union[AgendaOut, ToolError],
-    "jolt_store_extraction": StoreExtractionOut,
+    "jolt_store_extraction": Union[StoreExtractionOut, ToolError],
     "jolt_create_questions": CreateQuestionsOut,
     "jolt_correct_concept": Union[CorrectConceptOut, ToolError],
     "jolt_sync": SyncOut,
@@ -230,6 +279,7 @@ TOOL_OUTPUTS: dict[str, Any] = {
     "jolt_list_sources": ListSourcesOut,
     "jolt_get_source_content": GetSourceContentOut,
     "jolt_diff_extractions": DiffExtractionsOut,
+    "jolt_continue_reconciliation": Union[ReconciliationOut, ToolError],
 }
 
 

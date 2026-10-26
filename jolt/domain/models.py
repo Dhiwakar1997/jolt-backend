@@ -183,6 +183,10 @@ class SyllabusItem(BaseModel):
     concept_key: str
     label: str
     parent: Optional[str] = None
+    # Per-item provenance (BE-07): who added this item — the learner (an outline
+    # or a syllabus at creation), an agent's refine, or auto-add from uploads
+    # (emergent). None on items written before BE-07: read as the agenda's source.
+    source: Optional[AgendaSource] = None
 
 
 class Agenda(BaseModel):
@@ -198,9 +202,21 @@ class Agenda(BaseModel):
     syllabus: list[SyllabusItem] = Field(default_factory=list)
     last_refined_at: Optional[datetime] = None
     refined_from_source_id: Optional[str] = None
+    # BE-07: the learner's rough outline from track creation, kept verbatim for
+    # the next sync to tidy into a refined syllabus (the draft items are a
+    # mechanical first cut of it).
+    outline: Optional[str] = None
 
     def keys(self) -> set[str]:
         return {item.concept_key for item in self.syllabus}
+
+    def item_source(self, item: SyllabusItem) -> AgendaSource:
+        return item.source or self.source
+
+
+class TrackKind(str, Enum):
+    NOTES = "notes"
+    DSA_PATTERNS = "dsa_patterns"  # curated DSA tracks (BE-09)
 
 
 class Track(DocBase):
@@ -209,6 +225,10 @@ class Track(DocBase):
     name: str
     origin: TrackOrigin = TrackOrigin.USER
     agenda: Agenda = Field(default_factory=Agenda)
+    # BE-07: what the track holds, and when the learner archived it (None:
+    # active). An archived track's concepts leave the review queue.
+    kind: TrackKind = TrackKind.NOTES
+    archived_at: Optional[datetime] = None
 
 
 class SourcePage(BaseModel):
@@ -307,6 +327,53 @@ class Extraction(DocBase):
     client_label: Optional[str] = None
     concepts: list[ExtractionConcept] = Field(default_factory=list)
     questions_written: int = 0
+    # BE-07: the supersede reconciliation this read drives, with its checkpoint
+    # (None when the read was stored without `concepts`).
+    reconciliation: Optional["ReconciliationCheckpoint"] = None
+
+
+class ProposedConceptDoc(BaseModel):
+    """A concept a re-read proposes (the `concepts` of jolt_store_extraction)."""
+
+    text: str
+    track_id: str
+    title: Optional[str] = None
+    concept_key: Optional[str] = None
+    parent: Optional[str] = None
+    page: Optional[int] = None
+
+
+class ReconcileStep(BaseModel):
+    """One planned reconciliation change. `concept_id` is fixed when the plan is
+    made (existing id, or a deterministic id for a new or successor concept), so
+    re-applying a step after a crash converges on the same documents."""
+
+    change: str  # unchanged | refined | changed | removed | new
+    index: Optional[int] = None  # position in the proposed list; None for removed
+    existing_concept_id: Optional[str] = None
+    existing_track_id: Optional[str] = None
+    concept_id: Optional[str] = None  # the concept that carries on (None: removed)
+    proposed: Optional[ProposedConceptDoc] = None
+    similarity: float = 0.0
+
+
+class ReconciliationCheckpoint(BaseModel):
+    """Resumable supersede reconciliation (BE-07 §6, LLD §11 atomicity ceiling).
+
+    The whole plan is classified up front and stored on the new read; steps are
+    applied in order, at most `RECONCILE_MAX_CONCEPTS` per call, and `cursor`
+    (steps applied) is saved after each one. `jolt_continue_reconciliation`
+    resumes from the cursor.
+    """
+
+    status: str = "in_progress"  # in_progress | complete
+    previous_extraction_id: Optional[str] = None
+    steps: list[ReconcileStep] = Field(default_factory=list)
+    cursor: int = 0
+    updated_at: datetime = Field(default_factory=_now)
+
+
+Extraction.model_rebuild()
 
 
 class Session(DocBase):
@@ -325,6 +392,31 @@ class Concept(DocBase):
     status: ConceptStatus = ConceptStatus.ACTIVE
     successor_id: Optional[str] = None  # set when superseded
     syllabus_ref: Optional[str] = None  # coverage linkage
+    # BE-07: the 1-based page of the source it was found on ("where found").
+    page: Optional[int] = None
+    superseded_at: Optional[datetime] = None
+
+
+class CarriedCard(BaseModel):
+    """The FSRS card a successor concept inherits from the concept it replaced
+    (supersede, change class `changed`). The successor's fold starts from it
+    instead of a blank card, so its schedule carries on."""
+
+    stability: float = 0.0
+    difficulty: float = 0.0
+    due_at: Optional[datetime] = None
+    last_review_at: Optional[datetime] = None
+    reps: int = 0
+    lapses: int = 0
+    fsrs_state: int = 0
+    step: int = 0
+
+
+class CorrectionNote(BaseModel):
+    """ "Something's wrong with this concept": a note for the next sync (BE-07 §4)."""
+
+    note: str
+    created_at: datetime = Field(default_factory=_now)
 
 
 class ConceptState(DocBase):
@@ -354,6 +446,23 @@ class ConceptState(DocBase):
     # `retire_mastered` setting: see `jolt.domain.mastery.is_retired`.
     mastered_at: Optional[datetime] = None
     unretired_at: Optional[datetime] = None
+    # BE-07 read-model denormalisation, so Track detail needs no query per
+    # concept. `active_question_ids` are the concept's active questions in
+    # rotation order (the queue serves `[reps % n]`); None on cards written
+    # before BE-07 (backfilled on first read). `question_version` is the newest
+    # active version. `last_answer` is the free text of the latest folded review.
+    active_question_ids: Optional[list[str]] = None
+    question_version: Optional[int] = None
+    last_answer: Optional[str] = None
+    # Supersede (BE-07): the concept was replaced or removed by a re-read; the
+    # card stays for history but is never due again.
+    superseded_at: Optional[datetime] = None
+    carried: Optional[CarriedCard] = None
+    carried_from: Optional[str] = None
+    # Pending corrections for the next sync; `correction_requested_at` is set
+    # while any are pending (the sync's single-partition query keys on it).
+    corrections: list[CorrectionNote] = Field(default_factory=list)
+    correction_requested_at: Optional[datetime] = None
 
 
 class Question(DocBase):

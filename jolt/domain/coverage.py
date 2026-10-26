@@ -5,6 +5,13 @@ user's concept_states, and joins them in memory — no cross-partition query. Th
 module is that in-memory join, kept pure so it needs neither Cosmos nor a track
 loaded from the network to test.
 
+**Off-plan concepts** (BE-07 §5). Auto-add keeps an unlocked agenda in step
+with what is learned, so a concept outside the syllabus only appears on a
+*locked* track (auto-add is skipped there). Such a concept is kept, reviewed as
+usual and listed on Track detail flagged `off_plan`, but it is outside the plan,
+so it does not count towards coverage: it is left out of every total here and
+reported as `off_plan_concepts`.
+
 "Decay" is the share of a track's concepts whose retrievability has fallen below a
 threshold — a cheap health signal for the app's progress view.
 """
@@ -14,7 +21,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from jolt.domain.models import Concept, ConceptState, Track
+from jolt.domain.models import AgendaStatus, Concept, ConceptState, Track
 
 _DECAY_RETRIEVABILITY = 0.7  # below this a concept is "decaying"
 
@@ -38,6 +45,7 @@ class CoverageReport:
     total_concepts: int = 0
     studied_concepts: int = 0
     decaying_concepts: int = 0
+    off_plan_concepts: int = 0
     by_syllabus: list[SyllabusCoverage] = field(default_factory=list)
     uncovered_syllabus: list[str] = field(default_factory=list)
 
@@ -52,6 +60,13 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def is_off_plan(track: Track, concept: Concept) -> bool:
+    """A concept on a locked track whose key is not in the agenda (BE-07 §5)."""
+    return track.agenda.status == AgendaStatus.LOCKED and (
+        concept.syllabus_ref not in track.agenda.keys()
+    )
+
+
 def compute_coverage(
     track: Track,
     concepts: list[Concept],
@@ -63,7 +78,12 @@ def compute_coverage(
     now = now or _now()
     state_by_concept = {s.concept_id: s for s in states}
 
-    report = CoverageReport(track_id=track.id, total_concepts=len(concepts))
+    on_plan = [c for c in concepts if not is_off_plan(track, c)]
+    report = CoverageReport(
+        track_id=track.id,
+        total_concepts=len(on_plan),
+        off_plan_concepts=len(concepts) - len(on_plan),
+    )
 
     # Coverage maps concepts against the agenda's syllabus, keyed on concept_key.
     keys = [item.concept_key for item in track.agenda.syllabus]
@@ -72,7 +92,7 @@ def compute_coverage(
     }
     covered_refs: set[str] = set()
 
-    for concept in concepts:
+    for concept in on_plan:
         state = state_by_concept.get(concept.id)
         studied = state is not None
         if studied:
@@ -87,10 +107,6 @@ def compute_coverage(
             if studied:
                 bucket.studied_concepts += 1
                 covered_refs.add(ref)
-        # TODO(agenda): a concept whose ref is not in the agenda is "off-plan".
-        # Auto-add keeps unlocked agendas in sync, so this only happens on locked
-        # tracks (auto-add is skipped there). How off-plan concepts on a locked
-        # track surface in coverage is an open question — not built here.
 
     report.by_syllabus = list(syllabus_buckets.values())
     report.uncovered_syllabus = [key for key in keys if key not in covered_refs]

@@ -1,4 +1,4 @@
-"""End-to-end smoke test against a running Jolt backend (BE-02, BE-03, BE-05, BE-06).
+"""End-to-end smoke test against a running Jolt backend (BE-02, BE-03, BE-05 to BE-07).
 
     python scripts/smoke.py --base-url https://<dev-host>
     python scripts/smoke.py --base-url http://localhost:8000      # local, see below
@@ -28,7 +28,14 @@ share it, with a fresh test user:
     version 2 (GET /v1/concepts/{id}/questions), the next session serves it, the
     review shows `graded` with feedback; POST /v1/concepts/{id}/unretire; then
     jolt_get_coverage
-10. GET /v1/me shows the onboarding progress; revoke the MCP token (/mcp then
+10. Tracks and concepts (BE-07): POST /v1/tracks with an outline (draft agenda),
+    PATCH rename and archive, GET /v1/tracks counts, GET /v1/tracks/{id} (items,
+    due today, recent sources), GET /v1/concepts/{id} (timeline, versions,
+    adaptive note), POST /v1/concepts/{id}/correction -> jolt_sync counts it ->
+    jolt_get_pending_corrections -> jolt_correct_concept clears it; the read-again
+    request answered with jolt_store_extraction(supersede, concepts) ->
+    reconciliation (unchanged + new) and jolt_continue_reconciliation
+11. GET /v1/me shows the onboarding progress; revoke the MCP token (/mcp then
     refuses it); sign out (/v1 then refuses the app token)
 
 Exit code 0 when every step passes, 1 otherwise. It leaves the test user and its
@@ -90,6 +97,8 @@ EXPECTED_TOOLS = {
     "jolt_list_sources",
     "jolt_get_source_content",
     "jolt_diff_extractions",
+    "jolt_get_pending_corrections",
+    "jolt_continue_reconciliation",
 }
 
 # Canned "agent" output: what a real agent would extract from the page.
@@ -515,6 +524,113 @@ async def run(
                 with rep.step("jolt_get_coverage"):
                     cov = await _tool(mcp, "jolt_get_coverage", track_id=track_id)
                     check(cov["studied_concepts"] == 1, f"coverage: {cov}")
+
+                # ---- BE-07: tracks and concept read models --------------------
+                with rep.step("POST /v1/tracks (outline -> draft) + PATCH rename, archive"):
+                    drafted = _json(
+                        await http.post(
+                            "/v1/tracks",
+                            json={
+                                "name": "Smoke outline",
+                                "kind": "notes",
+                                "outline": "Replication\n  Quorums\nConsistency",
+                            },
+                        )
+                    )
+                    agenda = drafted["agenda"]
+                    check(agenda["status"] == "draft", f"outline agenda: {agenda}")
+                    check(len(agenda["syllabus"]) == 3 and agenda["outline"], f"{agenda}")
+                    renamed = _json(
+                        await http.patch(
+                            f"/v1/tracks/{drafted['id']}", json={"name": "Smoke outline 2"}
+                        )
+                    )
+                    check(renamed["name"] == "Smoke outline 2", f"rename: {renamed}")
+                    archived = _json(
+                        await http.patch(f"/v1/tracks/{drafted['id']}", json={"archived": True})
+                    )
+                    check(archived["archived"] is True, f"archive: {archived}")
+
+                with rep.step("GET /v1/tracks (counts)"):
+                    rows = {t["id"]: t for t in _json(await http.get("/v1/tracks"))}
+                    row = rows[track_id]
+                    counts = (row["concept_count"], row["source_count"])
+                    check(counts == (1, 1), f"track counts: {row}")
+                    check(rows[drafted["id"]]["archived"] is True, "archived flag missing")
+
+                with rep.step("GET /v1/tracks/{id} (Track detail)"):
+                    td = _json(await http.get(f"/v1/tracks/{track_id}"))
+                    item = next(i for i in td["items"] if i["concept_id"] == concept_id)
+                    check(item["question_count"] == 1, f"item: {item}")
+                    check(item["question_version"] == 2, f"item: {item}")
+                    check(item["found_in"]["source_id"] == source_id, f"item: {item}")
+                    check([s["id"] for s in td["recent_sources"]] == [source_id], f"{td}")
+
+                with rep.step("GET /v1/concepts/{id} (Concept)"):
+                    cd = _json(await http.get(f"/v1/concepts/{concept_id}"))
+                    check(cd["summary"] == CANNED_CONCEPT, f"summary: {cd['summary']}")
+                    check(len(cd["timeline"]) >= 1 and cd["timeline"][0]["free_text"], f"{cd}")
+                    check(cd["current_question"]["version"] == 2, f"current: {cd}")
+                    check(cd["adaptive_note"], f"no adaptive note: {cd}")
+                    check(cd["found_in"]["source_id"] == source_id, f"found_in: {cd}")
+
+                with rep.step("POST /v1/concepts/{id}/correction -> jolt_correct_concept"):
+                    queued = _json(
+                        await http.post(
+                            f"/v1/concepts/{concept_id}/correction",
+                            json={"note": "Say 'clockwise' explicitly."},
+                        )
+                    )
+                    check(queued["status"] == "queued", f"correction: {queued}")
+                    plan = await _tool(mcp, "jolt_sync")
+                    check(plan["pending_corrections"] == 1, f"plan: {plan}")
+                    pending = await _tool(mcp, "jolt_get_pending_corrections")
+                    check(
+                        [c["concept_id"] for c in pending["corrections"]] == [concept_id],
+                        f"pending: {pending}",
+                    )
+                    fixed = await _tool(
+                        mcp,
+                        "jolt_correct_concept",
+                        track_id=track_id,
+                        concept_id=concept_id,
+                        text=CANNED_CONCEPT,
+                    )
+                    check(fixed["corrections_cleared"] == 1, f"correct: {fixed}")
+
+                with rep.step("jolt_store_extraction(supersede, concepts) -> reconciliation"):
+                    claimed = await _tool(mcp, "jolt_get_unprocessed_sources", limit=10)
+                    check(
+                        any(
+                            s["source_id"] == source_id and s["supersede"]
+                            for s in claimed["sources"]
+                        ),
+                        f"read-again not offered: {claimed}",
+                    )
+                    ext2 = await _tool(
+                        mcp,
+                        "jolt_store_extraction",
+                        source_id=source_id,
+                        markdown=CANNED_MARKDOWN + "\n\nVirtual nodes even out the load.",
+                        confidence=0.9,
+                        model_id="smoke-canned",
+                        supersede=True,
+                        concepts=[
+                            {"text": CANNED_CONCEPT, "title": "Consistent hashing"},
+                            {
+                                "text": "Virtual nodes give each server many ring positions.",
+                                "title": "Virtual nodes",
+                                "concept_key": "virtual-nodes",
+                            },
+                        ],
+                    )
+                    rec = ext2["reconciliation"]
+                    check(rec["status"] == "complete", f"reconciliation: {rec}")
+                    changes = [d["change"] for d in rec["deltas"]]
+                    check(changes == ["unchanged", "new"], f"changes: {changes}")
+                    check(rec["concept_ids"][0] == concept_id, f"ids: {rec['concept_ids']}")
+                    again = await _tool(mcp, "jolt_continue_reconciliation", source_id=source_id)
+                    check(again["applied_steps"] == 2, f"continue: {again}")
 
         with rep.step("GET /v1/me (onboarding progress)"):
             onboarding = _json(await http.get("/v1/me"))["onboarding"]

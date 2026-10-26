@@ -12,6 +12,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Callable, Optional
 
+from jolt.domain.agenda import outline_to_syllabus
 from jolt.domain.coverage import CoverageReport, compute_coverage
 from jolt.domain.models import (
     Agenda,
@@ -19,9 +20,11 @@ from jolt.domain.models import (
     AgendaStatus,
     SyllabusItem,
     Track,
+    TrackKind,
     TrackOrigin,
 )
 from jolt.runtime import Runtime
+from jolt.services.ownership import NotOwned, visible_concepts, visible_track
 
 # How many times to re-read and retry an agenda write that lost the etag race.
 _AGENDA_WRITE_RETRIES = 5
@@ -49,22 +52,73 @@ class TrackService:
         curated = await self._rt.repos.tracks.list_curated()
         return own + curated
 
-    async def create_track(self, user_id: str, name: str, syllabus: list[str]) -> Track:
-        # A syllabus supplied at creation is a deliberate, user-authored agenda.
-        items = [SyllabusItem(concept_key=label, label=label) for label in syllabus]
-        agenda = Agenda(
-            status=AgendaStatus.REFINED if items else AgendaStatus.NONE,
-            source=AgendaSource.USER,
-            syllabus=items,
-            last_refined_at=_now() if items else None,
-        )
+    async def create_track(
+        self,
+        user_id: str,
+        name: str,
+        syllabus: list[str],
+        *,
+        kind: TrackKind = TrackKind.NOTES,
+        outline: Optional[str] = None,
+    ) -> Track:
+        """Create a learner's track (BE-07 §1).
+
+        * A syllabus (labels) is a deliberate, user-authored agenda: `refined`.
+        * An outline gives a `draft` agenda (source `user`) for the model to tidy
+          at the next sync: the outline is kept verbatim and cut mechanically
+          into draft items (`jolt.domain.agenda`).
+        * Neither leaves the agenda `none`; it grows from uploads (auto-add).
+        """
+        outline = (outline or "").strip() or None
+        if outline is not None:
+            items = outline_to_syllabus(outline)
+            agenda = Agenda(
+                status=AgendaStatus.DRAFT,
+                source=AgendaSource.USER,
+                syllabus=items,
+                outline=outline,
+            )
+        else:
+            items = [
+                SyllabusItem(concept_key=label, label=label, source=AgendaSource.USER)
+                for label in syllabus
+            ]
+            agenda = Agenda(
+                status=AgendaStatus.REFINED if items else AgendaStatus.NONE,
+                source=AgendaSource.USER,
+                syllabus=items,
+                last_refined_at=_now() if items else None,
+            )
         track = Track(
             user_id=user_id,
             name=name,
             origin=TrackOrigin.USER,
             agenda=agenda,
+            kind=kind,
         )
         return await self._rt.repos.tracks.create_track(track)
+
+    async def update_track(
+        self,
+        user_id: str,
+        track_id: str,
+        *,
+        name: Optional[str] = None,
+        archived: Optional[bool] = None,
+    ) -> Track:
+        """Rename and/or archive (unarchive) one of the caller's tracks."""
+
+        def mutate(track: Track) -> bool:
+            changed = False
+            if name is not None and name != track.name:
+                track.name = name
+                changed = True
+            if archived is not None and archived != (track.archived_at is not None):
+                track.archived_at = _now() if archived else None
+                changed = True
+            return changed
+
+        return await self._mutate_agenda(user_id, track_id, mutate, owned_only=True)
 
     # -- agenda reads -------------------------------------------------------
     async def _get_track_any(self, user_id: str, track_id: str) -> Track:
@@ -129,7 +183,16 @@ class TrackService:
         def mutate(track: Track) -> bool:
             if track.agenda.status == AgendaStatus.LOCKED:
                 raise AgendaLocked("agenda is locked; refinement is frozen")
-            track.agenda.syllabus = list(syllabus)
+            # Per-item provenance: an item that keeps an existing key keeps its
+            # origin (an auto-added item stays "from your notes"); a new item is
+            # credited to this write's source, unless it names its own.
+            before = {i.concept_key: track.agenda.item_source(i) for i in track.agenda.syllabus}
+            track.agenda.syllabus = [
+                item.model_copy(
+                    update={"source": item.source or before.get(item.concept_key) or source}
+                )
+                for item in syllabus
+            ]
             track.agenda.source = source
             if mark_refined:
                 track.agenda.status = AgendaStatus.REFINED
@@ -140,7 +203,8 @@ class TrackService:
                 track.agenda.refined_from_source_id = refined_from_source_id
             return True
 
-        track = await self._mutate_agenda(user_id, track_id, mutate)
+        # Curated tracks are read-only: only the caller's own agenda can be written.
+        track = await self._mutate_agenda(user_id, track_id, mutate, owned_only=True)
         return track.agenda
 
     async def auto_add_concepts(
@@ -170,6 +234,7 @@ class TrackService:
                         concept_key=item.concept_key,
                         label=item.label,
                         parent=parent,
+                        source=AgendaSource.EMERGENT,
                     )
                 )
                 existing.add(item.concept_key)
@@ -180,7 +245,7 @@ class TrackService:
                 track.agenda.source = AgendaSource.EMERGENT
             return added
 
-        track = await self._mutate_agenda(user_id, track_id, mutate)
+        track = await self._mutate_agenda(user_id, track_id, mutate, owned_only=True)
         return track.agenda
 
     async def set_lock(self, user_id: str, track_id: str, locked: bool) -> Agenda:
@@ -207,14 +272,15 @@ class TrackService:
         return track.agenda
 
     async def coverage(self, user_id: str, track_id: str) -> CoverageReport:
-        # Curated tracks read globally; user tracks read within the user partition.
-        track = await self._rt.repos.tracks.get_track(track_id, user_id)
-        if track is None:
-            track = await self._rt.repos.tracks.get_track(track_id, None)
-        if track is None:
-            raise TrackError("track not found")
+        """Coverage of a visible track by the caller's own concepts.
 
-        concepts = await self._rt.repos.concepts.list_for_track(track_id)
-        states = await self._rt.repos.concept_states.all_for_user(user_id)
-        # Join in memory — no cross-partition query (LLD §6 query discipline).
-        return compute_coverage(track, concepts, states)
+        Two single-partition queries joined in memory (LLD §6): the track's
+        concepts and the caller's cards on it. Concepts without the caller's
+        card (other learners' rows on a curated track) are not counted.
+        """
+        try:
+            track = await visible_track(self._rt, user_id, track_id)
+            concepts, states = await visible_concepts(self._rt, user_id, track_id)
+        except NotOwned as exc:
+            raise TrackError(str(exc)) from exc
+        return compute_coverage(track, concepts, list(states.values()))

@@ -17,10 +17,14 @@ from jolt.services.sync import SyncService
 async def sync(limit: int = 50) -> dict:
     """Return the sync plan: how many sources and gradings are waiting."""
     user = await require_user()
-    plan = await SyncService(get_runtime()).plan(user.user_id, limit=limit)
+    rt = get_runtime()
+    plan = await SyncService(rt).plan(user.user_id, limit=limit)
+    # BE-07: correction notes waiting (read them with jolt_get_pending_corrections).
+    corrections = await rt.repos.concept_states.with_corrections(user.user_id)
     return {
         "unprocessed_sources": plan.unprocessed_sources,
         "pending_gradings": plan.pending_gradings,
+        "pending_corrections": len(corrections),
         "rereads": [
             {
                 "source_id": r.source_id,

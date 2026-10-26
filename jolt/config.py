@@ -103,6 +103,12 @@ class Settings(BaseSettings):
     # review queue (BE-06 §5, jolt/domain/mastery.py).
     mastery_stability_days: float = Field(default=21.0, gt=0)
 
+    # ---- Supersede reconciliation (BE-07 §6) ----
+    # The most reconciliation steps (one per proposed or removed concept) one
+    # jolt_store_extraction / jolt_continue_reconciliation call applies; a
+    # larger supersede is checkpointed and resumed by the next call.
+    reconcile_max_concepts: int = Field(default=25, ge=1, le=500)
+
     # ---- Key-backed providers (dormant) ----
     anthropic_api_base: str = "https://api.anthropic.com"
     openai_api_base: str = "https://api.openai.com"

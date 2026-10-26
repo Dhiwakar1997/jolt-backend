@@ -126,6 +126,18 @@ def fold_history(state: ConceptState, reviews: Iterable[Review]) -> ConceptState
         track_id=state.track_id,
         etag=state.etag,
     )
+    if state.carried is not None:
+        # A successor concept (supersede, BE-07) starts from the card it
+        # inherited, not from a blank one.
+        c = state.carried
+        fresh.stability = c.stability
+        fresh.difficulty = c.difficulty
+        fresh.due_at = c.due_at
+        fresh.last_review_at = c.last_review_at
+        fresh.reps = c.reps
+        fresh.lapses = c.lapses
+        fresh.fsrs_state = c.fsrs_state
+        fresh.step = c.step
     for review in reviews:
         grade_value = review.final_fsrs_grade or review.provisional_fsrs_grade
         if grade_value is None:
@@ -134,6 +146,36 @@ def fold_history(state: ConceptState, reviews: Iterable[Review]) -> ConceptState
         fresh = apply_grade(fresh, FSRSGrade(grade_value), reviewed_at=reviewed_at)
     fresh.dirty = False
     return fresh
+
+
+# The fields `fold_history` computes; everything else on a card is carried over
+# unchanged by a recompute.
+FOLDED_FIELDS = (
+    "stability",
+    "difficulty",
+    "retrievability",
+    "due_at",
+    "last_review_at",
+    "reps",
+    "lapses",
+    "fsrs_state",
+    "step",
+    "dirty",
+)
+
+
+# FSRS forgetting curve (py-fsrs 4.x / FSRS-4.5+ constants).
+_DECAY = -0.5
+_FACTOR = 0.9 ** (1 / _DECAY) - 1
+
+
+def predicted_recall(state: ConceptState, now: datetime | None = None) -> float | None:
+    """Probability of recall now (0..1), or None for a card never reviewed."""
+    if not state.last_review_at or state.stability <= 0:
+        return None
+    now = now or _now()
+    elapsed = max(0.0, (now - state.last_review_at).total_seconds() / 86400)
+    return (1 + _FACTOR * elapsed / state.stability) ** _DECAY
 
 
 # TODO(global-reparameterization): if the FSRS default parameters change in a

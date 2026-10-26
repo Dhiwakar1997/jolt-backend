@@ -30,7 +30,9 @@ from jolt.domain.models import (
     SyllabusItem,
 )
 from jolt.runtime import Runtime
+from jolt.services.cards import refresh_card_questions
 from jolt.services.gradings import GradingService
+from jolt.services.ownership import NotOwned, owned_card, owned_track
 from jolt.services.reviews import ReviewService
 from jolt.services.tracks import TrackError, TrackService
 
@@ -91,6 +93,8 @@ class ConceptInput:
     # optional existing concept_key to nest under when auto-added.
     concept_key: Optional[str] = None
     parent: Optional[str] = None
+    # BE-07: the 1-based page of the source the concept was found on.
+    page: Optional[int] = None
 
     def effective_key(self) -> Optional[str]:
         return self.concept_key or self.syllabus_ref
@@ -225,9 +229,9 @@ class SyncService:
 
         A source has one active read (BE-05): the pointer always moves, so the
         previous active read is marked superseded even when `supersede` is false
-        (before BE-05 it stayed `active` beside the new one). `supersede` is still
-        the agent's statement that this is a re-extraction; concept
-        reconciliation on supersede is not implemented yet (docs/GAPS.md).
+        (before BE-05 it stayed `active` beside the new one). Concept
+        reconciliation runs after this, in `jolt.services.reconcile`, when the
+        agent passes the read's concepts (BE-07).
         """
         source = await self._rt.repos.sources.get_source(source_id, user_id)
         if source is None:
@@ -272,13 +276,20 @@ class SyncService:
         created_concepts: list[Concept] = []
         read_of: dict[str, Optional[str]] = {}  # source_id -> its active extraction id
         touched: dict[tuple[str, str], list[ExtractionConcept]] = {}
+        # Ownership first (BE-07, A16): every track must be the caller's own and
+        # every source theirs, before anything is written.
+        for track_id in {c.track_id for c in concepts}:
+            try:
+                await owned_track(self._rt, user_id, track_id)
+            except NotOwned as exc:
+                raise SyncError(f"{exc}: {track_id}") from exc
+        for source_id in {*source_ids, *(c.source_id for c in concepts if c.source_id)}:
+            src = await self._rt.repos.sources.get_source(source_id, user_id)
+            if src is None:
+                raise SyncError(f"source not found: {source_id}")
+            read_of[source_id] = src.active_extraction_id
         for c in concepts:
-            extraction_id = None
-            if c.source_id:
-                if c.source_id not in read_of:
-                    src = await self._rt.repos.sources.get_source(c.source_id, user_id)
-                    read_of[c.source_id] = src.active_extraction_id if src else None
-                extraction_id = read_of[c.source_id]
+            extraction_id = read_of.get(c.source_id) if c.source_id else None
             concept = Concept(
                 track_id=c.track_id,
                 source_id=c.source_id,
@@ -288,6 +299,7 @@ class SyncService:
                 # The concept's coverage key is its agenda concept_key.
                 syllabus_ref=c.effective_key(),
                 status=ConceptStatus.ACTIVE,
+                page=c.page if isinstance(c.page, int) and c.page >= 1 else None,
             )
             concept = await self._rt.repos.concepts.create(concept)
             created_concepts.append(concept)
@@ -307,6 +319,7 @@ class SyncService:
                 concept_id=concept.id,
                 track_id=c.track_id,
                 due_at=_now(),
+                active_question_ids=[],
             )
             await self._rt.repos.concept_states.create(state)
 
@@ -352,6 +365,11 @@ class SyncService:
     async def create_questions(
         self, user_id: str, concept_id: str, questions: list[QuestionInput]
     ) -> list[Question]:
+        # Only the caller's concepts (they hold its card): BE-07, A16.
+        try:
+            await owned_card(self._rt, user_id, concept_id)
+        except NotOwned as exc:
+            raise SyncError(str(exc)) from exc
         created: list[Question] = []
         for q in questions:
             question = Question(
@@ -364,6 +382,7 @@ class SyncService:
             created.append(await self._rt.repos.questions.create(question))
         if created:
             await self._count_questions(user_id, concept_id, len(created))
+            await refresh_card_questions(self._rt, user_id, concept_id)
         return created
 
     async def _count_questions(self, user_id: str, concept_id: str, n: int) -> None:

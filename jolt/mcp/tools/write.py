@@ -1,12 +1,19 @@
 """MCP write tools: request_upload_url, log_session, store_extraction,
-create_questions, correct_concept (LLD §4, §7.2, §7.7).
+create_questions, correct_concept, set_agenda (LLD §4, §7.2, §7.7).
+
+Every concept-, question- and track-keyed write checks that the row is the
+caller's (BE-07, decision A16): see `jolt.services.ownership`.
 """
 
 from __future__ import annotations
 
-from jolt.domain.models import AgendaSource, ConceptStatus, SyllabusItem
+from jolt.domain.models import AgendaSource, SyllabusItem
 from jolt.mcp.context import get_runtime, require_user
-from jolt.services.sync import ConceptInput, QuestionInput, SyncService
+from jolt.mcp.tools.read import agenda_dict
+from jolt.services.corrections import CorrectionService
+from jolt.services.ownership import NotOwned
+from jolt.services.reconcile import ReconcileError, ReconcileService, ReconcileView
+from jolt.services.sync import ConceptInput, QuestionInput, SyncError, SyncService
 from jolt.services.tracks import AgendaLocked, TrackError, TrackService
 from jolt.services.uploads import PageSpec, UploadInvalid, UploadService
 
@@ -35,6 +42,7 @@ async def log_session(source_ids: list[str], concepts: list[dict]) -> dict:
             source_id=c.get("source_id"),
             concept_key=c.get("concept_key"),
             parent=c.get("parent"),
+            page=c.get("page"),
         )
         for c in concepts
     ]
@@ -47,15 +55,51 @@ async def log_session(source_ids: list[str], concepts: list[dict]) -> dict:
     }
 
 
+def reconciliation_dict(view: ReconcileView) -> dict:
+    return {
+        "status": view.status,
+        "total_steps": view.total_steps,
+        "applied_steps": view.applied_steps,
+        "remaining_steps": view.remaining_steps,
+        "max_steps_per_call": view.max_steps_per_call,
+        "concept_ids": view.concept_ids,
+        "deltas": [
+            {
+                "index": d.index,
+                "change": d.change,
+                "concept_id": d.concept_id,
+                "existing_concept_id": d.existing_concept_id,
+                "similarity": d.similarity,
+                "applied": d.applied,
+            }
+            for d in view.deltas
+        ],
+    }
+
+
 async def store_extraction(
     source_id: str,
     markdown: str,
     confidence: float = 0.0,
     model_id: str | None = None,
     supersede: bool = False,
+    concepts: list[dict] | None = None,
 ) -> dict:
     user = await require_user()
     rt = get_runtime()
+    reconcile = ReconcileService(rt)
+    proposed = None
+    if concepts is not None:
+        # Validate before anything is written: a bad concept stores nothing.
+        source = await rt.repos.sources.get_source(source_id, user.user_id)
+        if source is None:
+            raise SyncError("source not found")
+        try:
+            proposed = await reconcile.prepare(user.user_id, source, concepts)
+        except ReconcileError as exc:
+            return {"error": str(exc)}
+        except NotOwned as exc:
+            raise SyncError(str(exc)) from exc
     # The connected client's name for "Past reads" (the MCP token's label).
     token = await rt.repos.tokens.get_token(user.user_id, user.token_id)
     extraction = await SyncService(rt).store_extraction(
@@ -67,7 +111,16 @@ async def store_extraction(
         supersede=supersede,
         client_label=token.label if token else None,
     )
-    return {"extraction_id": extraction.id, "status": extraction.status.value}
+    result: dict = {
+        "extraction_id": extraction.id,
+        "status": extraction.status.value,
+        "reconciliation": None,
+    }
+    if proposed is not None:
+        source = await rt.repos.sources.get_source(source_id, user.user_id)
+        view = await reconcile.start(user.user_id, source, extraction, proposed)
+        result["reconciliation"] = reconciliation_dict(view)
+    return result
 
 
 async def create_questions(concept_id: str, questions: list[dict]) -> dict:
@@ -86,17 +139,19 @@ async def create_questions(concept_id: str, questions: list[dict]) -> dict:
 
 
 async def correct_concept(track_id: str, concept_id: str, text: str) -> dict:
-    """Apply an agent-supplied correction to a concept's text in place."""
-    # Auth gate only: concepts are track-partitioned, not user-scoped (see docs/GAPS.md).
-    await require_user()
-    rt = get_runtime()
-    concept = await rt.repos.concepts.get_concept(concept_id, track_id)
-    if concept is None:
+    """Apply a correction to the caller's concept text in place; clears its notes."""
+    user = await require_user()
+    try:
+        result = await CorrectionService(get_runtime()).correct(
+            user.user_id, track_id, concept_id, text
+        )
+    except NotOwned:
         return {"error": "concept not found"}
-    concept.text = text
-    concept.status = ConceptStatus.ACTIVE
-    updated = await rt.repos.concepts.replace(concept, etag=concept.etag)
-    return {"concept_id": concept_id, "updated": updated is not None}
+    return {
+        "concept_id": result.concept_id,
+        "updated": result.updated,
+        "corrections_cleared": result.corrections_cleared,
+    }
 
 
 async def set_agenda(
@@ -116,11 +171,15 @@ async def set_agenda(
     for entry in syllabus:
         if not entry.get("concept_key") or not entry.get("label"):
             return {"error": "each syllabus item needs concept_key and label"}
+        item_source = entry.get("source")
+        if item_source is not None and item_source not in {s.value for s in AgendaSource}:
+            return {"error": f"invalid item source '{item_source}'; expected agent|user|emergent"}
         items.append(
             SyllabusItem(
                 concept_key=entry["concept_key"],
                 label=entry["label"],
                 parent=entry.get("parent"),
+                source=AgendaSource(item_source) if item_source else None,
             )
         )
 
@@ -136,17 +195,4 @@ async def set_agenda(
         return {"error": "agenda is locked; refinement is frozen"}
     except TrackError as exc:
         return {"error": str(exc)}
-    return _agenda_dict(agenda)
-
-
-def _agenda_dict(agenda) -> dict:
-    return {
-        "status": agenda.status.value,
-        "source": agenda.source.value,
-        "syllabus": [
-            {"concept_key": i.concept_key, "label": i.label, "parent": i.parent}
-            for i in agenda.syllabus
-        ],
-        "last_refined_at": (agenda.last_refined_at.isoformat() if agenda.last_refined_at else None),
-        "refined_from_source_id": agenda.refined_from_source_id,
-    }
+    return agenda_dict(agenda)

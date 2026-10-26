@@ -34,7 +34,7 @@ from jolt.domain.models import (
     Track,
     UserSettings,
 )
-from jolt.domain.scheduling import fold_history
+from jolt.domain.scheduling import FOLDED_FIELDS, fold_history
 from jolt.runtime import Runtime
 
 DAY = timedelta(days=1)
@@ -261,10 +261,16 @@ class ReviewService:
         """Due cards, most overdue first, without retired (mastered) concepts."""
         settings = settings or await self.user_settings(user_id)
         states = await self._rt.repos.concept_states.due(user_id, _now(), limit=_DUE_SCAN)
+        # An archived track is paused (BE-07): its concepts are out of the queue.
+        archived = {
+            t.id for t in await self._rt.repos.tracks.list_for_user(user_id) if t.archived_at
+        }
         return [
             s
             for s in states
             if not is_retired(s, settings.retire_mastered)
+            and s.superseded_at is None
+            and s.track_id not in archived
             and (track_id is None or s.track_id == track_id)
         ]
 
@@ -295,7 +301,8 @@ class ReviewService:
             # "Practise this concept": its next question, due or not, retired or not.
             state = await self.owned_state(user_id, concept_id)
             question = self.pick_question(await self._active_questions(concept_id), state)
-            if question is not None:
+            # A concept a re-read superseded has no questions to serve (BE-07).
+            if question is not None and state.superseded_at is None:
                 picked.append((state, question))
         elif kind != "dsa_patterns":  # no DSA tracks before BE-09
             due = await self.due_states(user_id, track_id=track_id, settings=settings)
@@ -574,13 +581,16 @@ class ReviewService:
                 state = await self._rt.repos.concept_states.create(
                     ConceptState(user_id=user_id, concept_id=concept_id)
                 )
-            folded = fold_history(state, history)
-            folded.id = state.id
-            folded.etag = state.etag
-            folded.track_id = state.track_id
-            folded.created_at = state.created_at
-            folded.unretired_at = state.unretired_at
+            fold = fold_history(state, history)
+            # Only the FSRS fields change; everything else on the card (identity,
+            # unretire, BE-07 read-model fields, corrections) carries over.
+            folded = state.model_copy(update={name: getattr(fold, name) for name in FOLDED_FIELDS})
             folded.mastered_at = mastered_at(folded, history, threshold)
+            answered = [r for r in history if r.free_text is not None]
+            if answered:
+                folded.last_answer = answered[-1].free_text
+            if folded.superseded_at is not None:
+                folded.due_at = None  # a superseded concept is never due again
             saved = await self._rt.repos.concept_states.replace(folded, etag=state.etag)
             if saved is not None:
                 return saved

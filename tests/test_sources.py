@@ -243,7 +243,12 @@ async def test_upload_sync_detail_and_read_again(api, runtime, mcp_user):
 
     # Agent: plan, claim, read every page.
     plan = await call("jolt_sync")
-    assert plan == {"unprocessed_sources": 1, "pending_gradings": 0, "rereads": []}
+    assert plan == {
+        "unprocessed_sources": 1,
+        "pending_gradings": 0,
+        "pending_corrections": 0,
+        "rereads": [],
+    }
     (claimed,) = (await call("jolt_get_unprocessed_sources"))["sources"]
     assert claimed["source_id"] == sid and claimed["page_count"] == 2
     assert claimed["track_id"] == tid and claimed["title"] == "Lecture 4"
