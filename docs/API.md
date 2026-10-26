@@ -250,6 +250,13 @@ provisional grade and recomputes FSRS inline. The agent later replaces the
 provisional grade (section 2): `grading` goes from `provisional` to `graded`,
 with the model's feedback.
 
+**Provisional grade.** Incorrect choice → 1 Again; correct choice with blank own
+words (empty after trimming, e.g. "I don't know yet") → 2 Hard; any other
+correct choice → 3 Good. Length and speed do not change it. **Scheduling** has
+no learning or relearning steps and no fuzz: every answer, a lapse included, is
+due again in whole days, at least one, so `interval_days` always matches
+`due_at`, and re-grading with the same grade does not move the date.
+
 **Queue order.** Due concepts (FSRS `due_at` ≤ now, retired ones left out),
 most overdue first, interleaving tracks: each round takes the most overdue
 concept of every track, the most overdue of those first. **One question per
@@ -322,7 +329,7 @@ per concept).
 | POST | `/v1/tracks/{track_id}/agenda/unlock` | token | — | `Agenda` (`refined` if it has a syllabus, else `none`) | 401, 404 |
 | GET | `/v1/tracks/{track_id}/coverage` | token | — | `{track_id, total_concepts, studied_concepts, decaying_concepts, coverage_ratio, by_syllabus: [{syllabus_ref, total_concepts, studied_concepts, coverage_ratio}], uncovered_syllabus: [str]}` | 401, 404 |
 | GET | `/v1/progress` | token | query `weeks?=26` (1–104) | `Progress` (below) | 401, 422 |
-| GET | `/v1/progress/concepts/{concept_id}` | token | — | `{concept_id, stability, difficulty, retrievability, due_at, reps, lapses, timeline: [{reviewed_at, grade, is_correct, review_id, question_id, question_version, grading, feedback}]}` | 401, 404 `no state for this concept` |
+| GET | `/v1/progress/concepts/{concept_id}` | token | — | `{concept_id, stability, difficulty, retrievability, due_at, reps, lapses, timeline: [{reviewed_at, grade, is_correct, review_id, question_id, question_version, grading, feedback}]}`. `retrievability` = predicted recall now (the forgetting curve of `GET /v1/progress`): about 1 right after an answer, falling with time. | 401, 404 `no state for this concept` |
 
 `Progress = {weeks, retention, retention_weekly: [{week_start, retention}],
 reviews_total, reviews_this_week, answers_in_own_words, streak_days,

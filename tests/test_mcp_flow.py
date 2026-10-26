@@ -185,6 +185,8 @@ async def test_nightly_loop_across_mcp_and_rest(api, runtime):
 
     detail = (await api.get(f"/v1/progress/concepts/{concept_id}")).json()
     assert detail["reps"] == 1 and len(detail["timeline"]) == 1
+    # Predicted recall is computed (A52): about 1 right after the answer.
+    assert 0.99 < detail["retrievability"] <= 1.0 and detail["stability"] > 0
 
     # Agent: grade the written answer; re-submitting is a no-op.
     pending = await call("jolt_get_pending_gradings")

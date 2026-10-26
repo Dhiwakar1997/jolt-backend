@@ -288,7 +288,7 @@ App → POST /v1/reviews/{q}/stage1  { free_text }
       ← { options, ... }   (stage-2 payload released only now)
 App → POST /v1/reviews/{q}/stage2  { selected_index }
         is_correct = (selected == correct_index)
-        provisional_fsrs_grade = synthesise(is_correct, stage1_len, latency)
+        provisional_fsrs_grade = synthesise(is_correct, trimmed stage1_len)  # A52: Again / Hard (blank) / Good
         apply provisional grade to concept_state, set due_at
       ← { correct, expected_answer }
 ```

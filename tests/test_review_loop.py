@@ -25,7 +25,6 @@ LONG = (
     "Consistent hashing puts keys and nodes on one ring; each key belongs to the next "
     "node clockwise, so adding a node only moves the keys between it and its predecessor."
 )
-assert len(LONG) >= 120  # a thorough recall: Good (or Easy) when correct
 
 
 async def call(name: str, **kwargs) -> dict:
@@ -143,8 +142,13 @@ async def test_full_session_start_answer_end_with_what_moved(api, runtime, mcp_u
         s1, s2 = await answer(api, item, correct=n != 1, session=session["id"])
         assert len(s1["options"]) == 4 and s1["locked_at"]
         assert s2["grading"] == "provisional" and s2["feedback"] is None
-        assert s2["provisional_grade"] == (2 if n != 1 else 1)  # short recall: Hard / Again
+        assert s2["provisional_grade"] == (3 if n != 1 else 1)  # own words: Good / Again
         assert s2["interval_days"] >= 1 and s2["due_at"] and s2["retired"] is False
+        # No learning steps (A52): due in whole days, matching interval_days.
+        days = (datetime.fromisoformat(s2["due_at"]) - datetime.now(timezone.utc)) / timedelta(
+            days=1
+        )
+        assert abs(days - s2["interval_days"]) < 0.01
         assert s2["match"] is None and s2["question_title"] is None
         results.append(s2)
 
@@ -519,3 +523,22 @@ async def test_rewrites_are_recorded_on_the_sync_run(api, runtime, mcp_user):
     assert [(c["concept_id"], c["concept_title"], c["track_id"]) for c in rewrites] == [
         (concept, "Hashing", t)
     ]
+
+
+async def test_blank_own_words_grade_hard_and_progress_recall_decays(api, runtime, mcp_user):
+    """A52: a correct answer after "I don't know yet" (blank own words) is Hard;
+    the concept's predicted recall is ~1 after the answer and falls with time."""
+    t = await new_track(api, "T")
+    concept, _ = await new_concept(t, "Blank")
+    session = await ok(await api.post("/v1/review-sessions", json={"concept_id": concept}))
+    _, s2 = await answer(api, session["items"][0], text="   ")
+    assert s2["provisional_grade"] == 2 and s2["interval_days"] >= 1
+    detail = await ok(await api.get(f"/v1/progress/concepts/{concept}"))
+    assert 0.99 < detail["retrievability"] <= 1.0
+
+    # Ten days later (move the last review back), recall has dropped.
+    state = await runtime.repos.concept_states.for_concept(mcp_user.user_id, concept)
+    state.last_review_at = datetime.now(timezone.utc) - timedelta(days=10)
+    assert await runtime.repos.concept_states.replace(state, etag=state.etag) is not None
+    detail = await ok(await api.get(f"/v1/progress/concepts/{concept}"))
+    assert 0.0 < detail["retrievability"] < 0.9

@@ -41,11 +41,22 @@ def _load_fsrs(desired_retention: float | None = None):
     import fsrs as _f
 
     retention = desired_retention or get_settings().fsrs_desired_retention
-    if hasattr(_f, "Scheduler"):  # py-fsrs >= 5
-        try:
-            scheduler = _f.Scheduler(desired_retention=retention)
-        except TypeError:
-            scheduler = _f.Scheduler()
+    if hasattr(_f, "Scheduler"):  # py-fsrs >= 4.1
+        # No learning or relearning steps (decision A52): the library defaults
+        # (1 and 10 minutes) would make a first correct answer due again in
+        # minutes. Jolt reviews daily and the nightly grading replaces the
+        # provisional grade, so every answer schedules in whole days, at least
+        # one, and `interval_days` always agrees with `due_at`. A card persisted
+        # in Learning or Relearning by an older build goes straight to Review
+        # on its next fold. No fuzzing either: the full-history fold reruns on
+        # every grade, and a random fuzz would move the due date each time even
+        # when the grade did not change.
+        scheduler = _f.Scheduler(
+            desired_retention=retention,
+            learning_steps=(),
+            relearning_steps=(),
+            enable_fuzzing=False,
+        )
         return scheduler, _f.Card, _f.Rating
     # py-fsrs 4.x
     scheduler = _f.FSRS()
@@ -185,32 +196,25 @@ def stability_snapshots(reviews: Iterable[Review]) -> list[tuple[datetime, float
 # Grade synthesis (LLD §7.3)
 # --------------------------------------------------------------------------- #
 # Provisional grade at stage-2 submit, before the semantic grade arrives via sync.
-_THOROUGH_CHARS = 120  # a substantive free-text recall
-_FAST_MS = 8_000
-_SLOW_MS = 30_000
-
-
 def synthesise_provisional_grade(
     is_correct: bool,
     stage1_len: int,
-    latency_ms: int | None,
+    latency_ms: int | None = None,
 ) -> FSRSGrade:
-    """Map (correctness, recall effort, speed) to a provisional FSRS rating.
+    """Map (correctness, own words) to a provisional FSRS rating (decision A52).
 
-    Deliberately conservative: an incorrect MCQ is always AGAIN; a correct one is
-    GOOD by default, nudged to EASY when the free-text recall was thorough and
-    fast, or to HARD when it was thin or slow. The semantic final grade from sync
-    (7.2) supersedes this in the FSRS fold.
+    * incorrect choice → AGAIN;
+    * correct choice with no own words (`stage1_len` 0: blank after trimming,
+      e.g. "I don't know yet") → HARD — recognised, not recalled;
+    * any other correct choice → GOOD.
+
+    `stage1_len` is the length of the stage-1 text after trimming whitespace.
+    Length and speed beyond that say little about recall, so `latency_ms` is
+    accepted but not used; the semantic final grade from the nightly sync (7.2)
+    supersedes this one in the FSRS fold.
     """
     if not is_correct:
         return FSRSGrade.AGAIN
-
-    thorough = stage1_len >= _THOROUGH_CHARS
-    fast = latency_ms is not None and latency_ms <= _FAST_MS
-    slow = latency_ms is not None and latency_ms >= _SLOW_MS
-
-    if thorough and fast:
-        return FSRSGrade.EASY
-    if (not thorough) or slow:
+    if stage1_len <= 0:
         return FSRSGrade.HARD
     return FSRSGrade.GOOD

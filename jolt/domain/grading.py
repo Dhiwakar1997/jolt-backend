@@ -1,7 +1,7 @@
 """Grading domain rules (LLD §4 grading, §7.2, §7.3).
 
 Two grade sources meet here:
-  * provisional — synthesised at stage-2 submit from correctness + effort (§7.3).
+  * provisional — synthesised at stage-2 submit from correctness + own words (§7.3).
   * final/semantic — supplied by an agent via `submit_gradings` during sync (§7.2),
     graded against the expected answer and the versioned rubric.
 
@@ -47,7 +47,7 @@ def score_stage_two(
     from jolt.domain.scheduling import synthesise_provisional_grade
 
     is_correct = selected_index == question.correct_index
-    stage1_len = len(review.free_text or "")
+    stage1_len = len((review.free_text or "").strip())  # blank own words → 0
     provisional = synthesise_provisional_grade(is_correct, stage1_len, latency_ms)
 
     review.selected_index = selected_index

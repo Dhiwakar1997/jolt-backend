@@ -45,3 +45,36 @@ def test_coverage_flags_decaying_by_due_date():
     ]
     report = compute_coverage(track, concepts, states, now=now)
     assert report.decaying_concepts == 1
+
+
+def test_coverage_decay_uses_predicted_recall_not_the_stored_field():
+    now = datetime(2026, 3, 1, tzinfo=timezone.utc)
+    track = Track(id="t1", name="Bio", agenda=_agenda("cells"))
+    concepts = [
+        Concept(id="fresh", track_id="t1", text="a", syllabus_ref="cells"),
+        Concept(id="overdue", track_id="t1", text="b", syllabus_ref="cells"),
+        Concept(id="faded", track_id="t1", text="c", syllabus_ref="cells"),
+    ]
+    states = [
+        # Just reviewed: recall ~1, not decaying (the stored field says 0).
+        ConceptState(user_id="u1", concept_id="fresh", stability=3.0, last_review_at=now),
+        # A day past due but recall still ~0.87 (>= 0.7): not decaying.
+        ConceptState(
+            user_id="u1",
+            concept_id="overdue",
+            stability=3.0,
+            last_review_at=now - timedelta(days=4),
+            due_at=now - timedelta(days=1),
+        ),
+        # Ten days on a one-day stability: recall ~0.55, decaying.
+        ConceptState(
+            user_id="u1",
+            concept_id="faded",
+            stability=1.0,
+            last_review_at=now - timedelta(days=10),
+            due_at=now - timedelta(days=9),
+        ),
+    ]
+    report = compute_coverage(track, concepts, states, now=now)
+    assert report.studied_concepts == 3
+    assert report.decaying_concepts == 1

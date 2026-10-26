@@ -387,6 +387,8 @@ class ConceptState(DocBase):
     # FSRS card state.
     stability: float = 0.0
     difficulty: float = 0.0
+    # Not maintained: predicted recall changes by the minute, so readers compute
+    # it from stability + last_review_at (`jolt.domain.progress.retrievability`).
     retrievability: float = 0.0
     due_at: Optional[datetime] = None
     last_review_at: Optional[datetime] = None

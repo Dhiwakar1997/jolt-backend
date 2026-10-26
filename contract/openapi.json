@@ -3527,7 +3527,8 @@
           },
           "retrievability": {
             "type": "number",
-            "title": "Retrievability"
+            "title": "Retrievability",
+            "description": "Predicted recall now (0-1) from stability and the time since the last review; about 1 right after a review, 0 before the first"
           },
           "due_at": {
             "anyOf": [

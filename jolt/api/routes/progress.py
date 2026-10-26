@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query
@@ -10,10 +10,15 @@ from pydantic import BaseModel, Field
 
 from jolt.api.deps import RuntimeDep, UserDep
 from jolt.api.errors import NOT_FOUND, UNAUTHORIZED
+from jolt.domain.progress import retrievability
 from jolt.services.progress import ProgressService
 from jolt.services.reviews import grading_of
 
 router = APIRouter(prefix="/v1/progress", tags=["progress"], responses=UNAUTHORIZED)
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 class ConceptStatePoint(BaseModel):
@@ -32,7 +37,10 @@ class ConceptDetailResponse(BaseModel):
     concept_id: str
     stability: float
     difficulty: float
-    retrievability: float
+    retrievability: float = Field(
+        description="Predicted recall now (0-1) from stability and the time since the last "
+        "review; about 1 right after a review, 0 before the first"
+    )
     due_at: datetime | None
     reps: int
     lapses: int
@@ -62,7 +70,7 @@ async def concept_detail(concept_id: str, user: UserDep, rt: RuntimeDep) -> Conc
         concept_id=concept_id,
         stability=state.stability,
         difficulty=state.difficulty,
-        retrievability=state.retrievability,
+        retrievability=retrievability(state.stability, state.last_review_at, _now()),
         due_at=state.due_at,
         reps=state.reps,
         lapses=state.lapses,

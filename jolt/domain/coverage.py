@@ -5,8 +5,9 @@ user's concept_states, and joins them in memory — no cross-partition query. Th
 module is that in-memory join, kept pure so it needs neither Cosmos nor a track
 loaded from the network to test.
 
-"Decay" is the share of a track's concepts whose retrievability has fallen below a
-threshold — a cheap health signal for the app's progress view.
+"Decay" is the share of a track's concepts whose retrievability (predicted recall
+now, `jolt.domain.progress.retrievability`) has fallen below a threshold — a
+cheap health signal for the app's progress view.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from jolt.domain.models import Concept, ConceptState, Track
+from jolt.domain.progress import retrievability
 
 _DECAY_RETRIEVABILITY = 0.7  # below this a concept is "decaying"
 
@@ -98,7 +100,8 @@ def compute_coverage(
 
 
 def _is_decaying(state: ConceptState, now: datetime) -> bool:
-    if state.retrievability and state.retrievability < _DECAY_RETRIEVABILITY:
-        return True
-    # A state past its due date with no fresh retrievability estimate is decaying.
+    """Predicted recall now (the progress forgetting curve) below the threshold."""
+    if state.last_review_at is not None and state.stability > 0:
+        return retrievability(state.stability, state.last_review_at, now) < _DECAY_RETRIEVABILITY
+    # No FSRS estimate (never folded): fall back to "past its due date".
     return state.due_at is not None and state.due_at < now

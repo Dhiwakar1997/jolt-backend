@@ -195,22 +195,22 @@ async def test_api_key_list_has_added_at_and_me_has_api_key(api, monkeypatch):
 # Settings take effect on the next review session
 # --------------------------------------------------------------------------- #
 async def test_desired_retention_shapes_the_next_answers_interval(api):
-    """An Easy first answer puts the card in review with S = 15.69 days; the
-    interval is S / (19/81) * (r ** -2 - 1): about 4 days at 0.97, 16 at 0.90 and
-    38 at 0.80, give or take FSRS's interval fuzz."""
+    """A Good first answer puts the card in review with S = 3.173 days; the
+    interval is round(S / (19/81) * (r ** -2 - 1)), at least 1 day and without
+    fuzz (A52): 1 day at 0.97, 3 at 0.90 and 8 at 0.80."""
     first, second = await new_concepts(api, 2)
 
     await ok(await api.patch("/v1/settings", json={"desired_retention": 0.97}))
     session = await ok(await api.post("/v1/review-sessions", json={"concept_id": first}))
     strict = await answer(api, session["items"][0], text=LONG, latency=3_000)
-    assert strict["provisional_grade"] == 4
-    assert 2 <= strict["interval_days"] <= 7
+    assert strict["provisional_grade"] == 3
+    assert strict["interval_days"] == 1
 
     await ok(await api.patch("/v1/settings", json={"desired_retention": 0.80}))
     session = await ok(await api.post("/v1/review-sessions", json={"concept_id": second}))
     relaxed = await answer(api, session["items"][0], text=LONG, latency=3_000)
-    assert relaxed["provisional_grade"] == 4
-    assert 30 <= relaxed["interval_days"] <= 46
+    assert relaxed["provisional_grade"] == 3
+    assert relaxed["interval_days"] == 8
 
 
 async def test_daily_cap_bounds_the_next_session(api):
