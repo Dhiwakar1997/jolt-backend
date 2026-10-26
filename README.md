@@ -64,8 +64,9 @@ cp .env.example .env
 
 With `AUTH_MODE=managed_identity`, leave the `*_KEY` / `*_CONNECTION_STRING` blank —
 the app authenticates via `DefaultAzureCredential` (a Managed Identity in Container
-Apps, or `az login` locally). Databases, containers, and the blob container are
-created on first startup if missing.
+Apps, or `az login` locally). In Azure the database, containers and blob container
+are created by `infra/` (data-plane RBAC cannot create them); with `AUTH_MODE=key`
+(emulator) they are created on first startup if missing.
 
 ## Run locally
 
@@ -79,11 +80,13 @@ uvicorn jolt.main:app --reload  # needs a reachable Cosmos/Blob/Key Vault (or em
 Startup fails fast with a clear message if a required endpoint is unset — that is
 expected until the resources exist and `.env` is filled in.
 
-To run with **no Azure at all**, use the in-memory fakes (state is lost on restart;
-blob URLs are opaque `memory://` strings that nothing serves):
+To run with **no Azure at all**, use the in-memory fakes (state is lost on restart).
+With `PUBLIC_BASE_URL` set, upload/read URLs are served by the app itself at
+`/_dev/blob/...`, so the browser upload flow works too:
 
 ```bash
-STORAGE_MODE=memory uvicorn jolt.main:app --reload
+STORAGE_MODE=memory PUBLIC_BASE_URL=http://localhost:8000 uvicorn jolt.main:app --port 8000
+python scripts/smoke.py --base-url http://localhost:8000   # full round trip
 ```
 
 ### Bootstrapping a user
@@ -108,6 +111,10 @@ python scripts/export_contract.py --check   # contract/ is up to date
 ```
 
 CI (`.github/workflows/ci.yml`) runs exactly these on every push and pull request.
+The suite includes `tests/test_smoke_local.py`, which runs `scripts/smoke.py`
+against a real local Uvicorn server in memory mode, and `tests/test_infra.py`,
+which keeps `infra/` in step with the code (Cosmos containers and indexes, env
+vars, `.env.example`).
 
 The scope-enforcement test (`tests/test_partition_discipline.py`) asserts that a
 repository refuses to query without a partition value — the LLD §5 guarantee.
@@ -130,10 +137,18 @@ endpoint yet: [`docs/GAPS.md`](./docs/GAPS.md).
 Single image, single entrypoint:
 
 ```bash
-docker build -t jolt-api .
+docker build --build-arg APP_VERSION=$(git rev-parse HEAD) -t jolt-api .
 ```
 
-Deploy as one Container App with Managed Identity granted data-plane roles on Cosmos,
-Blob, and Key Vault; inject secrets as Key Vault env references. There is no second
-job resource in this MVP.
+The `dev` environment on Azure is infrastructure as code in `infra/` (Bicep:
+Container Apps, Cosmos serverless, Storage, Key Vault, Log Analytics, ACR, Managed
+Identity and its role assignments) and is created or updated with one command:
+
+```bash
+scripts/deploy-infra.sh            # see docs/DEPLOY.md
+```
+
+Pushes to `main` then deploy automatically (`.github/workflows/deploy-dev.yml`:
+checks → build → push to ACR → roll out → `scripts/smoke.py`). Every manual step,
+setting, secret and the rollback procedure: [`docs/DEPLOY.md`](./docs/DEPLOY.md).
 ```
