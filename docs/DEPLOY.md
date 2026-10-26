@@ -33,7 +33,7 @@ globally unique and the same on every run.
 | Log Analytics workspace | `log-jolt-dev` | Container Apps logs; 30-day retention, 1 GB/day cap. |
 | Container Registry (Basic) | `crjoltdev<sfx>` | Images `jolt-api:<git-sha>`. |
 | Cosmos DB for NoSQL, **serverless** | `cosmos-jolt-dev-<sfx>` | Database `jolt`; the 14 containers (`tokens` added by BE-03, `sync_runs` by BE-04, `review_sessions` by BE-06), partition keys and composite indexes of LLD §6 (from `infra/cosmos-containers.json`, kept equal to `jolt/data/cosmos.py` by `tests/test_infra.py`). Account keys disabled. Periodic backup every 24 h, kept 48 h. |
-| Storage account (StorageV2, LRS, Hot) | `stjoltdev<sfx>` | Private container `sources`; Blob CORS for the app origins; blob and container soft delete 7 days; shared keys disabled (uploads use user-delegation SAS). |
+| Storage account (StorageV2, LRS, Hot) | `stjoltdev<sfx>` | Private container `sources`; Blob CORS for the app origins; blob and container soft delete 7 days; a lifecycle rule deletes data exports (`sources/exports/`, BE-08) a day after they are written; shared keys disabled (uploads use user-delegation SAS). |
 | Key Vault (RBAC) | `kv-jolt-dev-<sfx8>` | Secrets `token-hash-pepper` and `dev-auth-secret` (dev sign-in, BE-03); per-user provider keys `apikey-*` written by the app. Soft delete 7 days, no purge protection (dev). |
 | Container Apps environment | `cae-jolt-dev` | Consumption plan. |
 | Container App | `jolt-api` | External HTTPS ingress → port 8000, `/health` startup/readiness/liveness probes, scale 0..1, 0.5 vCPU / 1 GiB. |
@@ -282,6 +282,7 @@ container by Bicep (`infra/modules/containerapp.bicep`):
 | `COSMOS_KEY`, `BLOB_*_KEY`, `BLOB_CONNECTION_STRING` | unset | — | — (keys are disabled) |
 | `BLOB_SAS_TTL_SECONDS`, `LEASE_TTL_SECONDS`, `FSRS_DESIRED_RETENTION`, `APP_TOKEN_PREFIX`, `MCP_TOKEN_PREFIX`, `*_API_BASE` | defaults | code | — |
 | `SYNC_RUN_IDLE_SECONDS` (1800), `SYNC_LATE_AFTER_HOURS` (30), `SYNC_SCHEDULE_TIME` (`00:15`), `MCP_QUERY_TOKEN_ENABLED` (`true`) | defaults | code (BE-04) | — |
+| `EXPORT_URL_TTL_SECONDS` (3600) | default | code (BE-08) | — |
 
 To change a value without a code change, edit the Bicep parameter and run
 `scripts/deploy-infra.sh --skip-build`. To rotate the pepper (logs every user

@@ -11,12 +11,15 @@ Regenerate both with `python scripts/export_contract.py` after changing a route,
 tool, a tool description or `jolt/mcp/schemas.py`. This file is written by hand:
 update it in the same change.
 
-State: API version 0.6.0: the MVP, the track agenda model (PR #3), accounts,
+State: API version 0.7.0: the MVP, the track agenda model (PR #3), accounts,
 Google sign-in and MCP token management (BE-03), the nightly sync: the
 `jolt_sync` plan, sync runs, sync status and the scheduled-task prompt (BE-04),
 sources and uploads: multi-page uploads, source list and detail with past
 reads, read again and storage (BE-05), and the review loop: review sessions,
-idempotent stages, question versions and retiring mastered concepts (BE-06).
+idempotent stages, question versions and retiring mastered concepts (BE-06),
+and progress and settings: the Progress screen, the whole Settings body with
+model status, per-user FSRS desired retention, a daily review cap and a time
+zone, data export and account delete (BE-08).
 Screens that have no endpoint yet are listed in [`GAPS.md`](./GAPS.md).
 
 ## Conventions
@@ -50,10 +53,37 @@ picture or `null`.
 | POST | `/v1/mcp-tokens` | token | `{label}` (1–60 characters after trimming, e.g. `"Claude Desktop"`) | **201** `{id, label, last4, created_at, last_used_at: null, token}`. The plaintext `token` appears only in this response. | 401, 422 |
 | GET | `/v1/mcp-tokens` | token | — | `[{id, label, last4, created_at, last_used_at}]`, newest first; never the token. `last_used_at` is updated at most once a minute. | 401 |
 | DELETE | `/v1/mcp-tokens/{token_id}` | token | — | 204; the next MCP call with that token fails | 401, 404 `token not found` (unknown, another user's, or an app token's id) |
+| POST | `/v1/export` | token | — | `{download_url, expires_at, bytes}`: a signed GET URL (valid `EXPORT_URL_TTL_SECONDS`, 1 h) of one JSON file, served as an attachment `jolt-export-<date>.json`. A new export replaces the previous file. Contents below. | 401 |
+| DELETE | `/v1/me` | token | `{confirm: "DELETE"}` (exactly that string) | 204. Deletes the account and everything under it, irreversibly (order below). Every device is signed out and every connected client cut off. Signing in again later starts a new, empty account. | 401; 422 missing or wrong `confirm` |
 
 Only hashes are stored: each token document holds an Argon2 hash of the peppered
 token and an indexed lookup key (truncated HMAC-SHA256 keyed by the pepper), so
 resolving a token is one indexed query plus one Argon2 verify.
+
+**Export bundle** (BE-08): `{format: "jolt-export", format_version: 1,
+exported_at, user (profile and settings), tracks, concepts, questions (every
+version), concept_states (FSRS cards), reviews (with the learner's words),
+answer_feedback, review_sessions, sessions (study sessions per upload date),
+sources (metadata and pages, no storage paths), extractions (every read, with
+markdown), sync_runs, mcp_tokens [{id, kind, label, last4, created_at,
+last_used_at}], api_keys [{provider, last4, added_at, last_validated_at}]}`.
+Never in it: tokens, token hashes, API keys, Key Vault references, blob paths,
+etags. The uploaded files themselves are not copied in (the Reader serves them
+while the account exists). The file lives under `exports/<user_id>/` in the blob
+container; the next export, account delete and a 1-day Blob lifecycle rule
+remove it.
+
+**Account delete** (BE-08), in this order: (1) Key Vault: every provider key
+(deleted and purged); (2) Blob: every file under `<user_id>/` (uploads, also
+unconfirmed ones) and the exports; (3) documents reached through the user's
+own: extractions (by source), answer feedback (by review), questions (by
+concept) and concepts (by track) of the user's tracks; (4) every document in the
+user's partition of `sources`, `sessions`, `concept_states`, `reviews`,
+`review_sessions`, `api_keys`, `sync_runs`, `tracks`, then `tokens`; (5) the user.
+Tokens and the user go last, so a delete that fails half way can be retried with
+the same token. Curated (shared) tracks and their concepts are not the user's
+and stay. Blob soft delete (7 days) still holds deleted files until it expires;
+Cosmos periodic backups (48 h) age out on their own.
 
 ---
 
@@ -90,7 +120,8 @@ and two clients syncing at once get one run each. `users.first_sync_at` is set
 when the first run closes `finished`, or `incomplete` after doing some work.
 
 **Sessions (decision D6).** `jolt_log_session` writes one session per upload date
-(UTC date of each concept's source's `uploaded_at`, the confirm time): a concept goes to its `source_id`'s date, a
+(the date, in the user's `time_zone` setting, UTC by default, of each concept's
+source's `uploaded_at`, the confirm time): a concept goes to its `source_id`'s date, a
 concept without a known source to the date of the first known source in
 `source_ids`. Inside a sync run, a later call for a date already logged in that
 run extends that date's session.
@@ -116,7 +147,7 @@ run extends that date's session.
 | `claimed_sources` | `[{source_id, filename, track_id, uploaded_at, lease_expires_at}]`: sources this run claimed and has not stored yet (they keep the run open). |
 | `in_flight_elsewhere` | Sources another client holds under a live lease (they do not keep this run open). |
 | `unassigned_sources` | Waiting sources with no track (uploaded without `track_id`, e.g. by an agent); every own track is then listed in `tracks` to choose from. |
-| `upload_dates` | Sorted `YYYY-MM-DD` (UTC) upload days of the waiting sources. |
+| `upload_dates` | Sorted `YYYY-MM-DD` upload days of the waiting sources, in the user's `time_zone` (UTC by default). |
 | `tracks` | `[{track_id, name, agenda_status, unprocessed_sources, pending_gradings, rereads, guidance}]` for every track involved; `guidance` says what to do with the agenda for that status. |
 | `reread_sources` | `[{source_id, title, filename, track_id, preferred_model, requested_at}]`: the read-again requests (`POST /v1/sources/{id}/reread`) among the claimable sources and the ones this run holds. They are counted in `unprocessed_sources` / `claimed_sources` too; the claim hands each out with `supersede: true`. `preferred_model` (`claude`, `codex`, or `null`) is a hint, not a lock. When there are any, the plan adds a `jolt_diff_extractions` step before `jolt_store_extraction`. |
 | `steps` | Ordered `[{step, tool, purpose, limit, repeat}]`: `limit` is the most items per call (null: one item per call), `repeat` how often (`per batch`, `per claimed source`, `per source or upload date`, `per concept`, `per reread source`, `once, after the steps above`). Empty when done. |
@@ -134,7 +165,7 @@ run extends that date's session.
 
 | Method | Path | Auth | Request | Response | Errors |
 |---|---|---|---|---|---|
-| GET | `/v1/sync/status` | token | query `tz?` (IANA, e.g. `Europe/London`; default UTC) | `{last_run: SyncRun\|null, next_expected_at, health: ok\|late\|never}`. `next_expected_at`: the next `SYNC_SCHEDULE_TIME` (00:15) in `tz`, in UTC. `health`: `never` without any run, `late` when the last run started more than `SYNC_LATE_AFTER_HOURS` (30) ago, else `ok`. | 401; 422 `unknown time zone: …` |
+| GET | `/v1/sync/status` | token | query `tz?` (IANA, e.g. `Europe/London`; default: the user's `time_zone` setting) | `{last_run: SyncRun\|null, next_expected_at, health: ok\|late\|never}`. `next_expected_at`: the next `SYNC_SCHEDULE_TIME` (00:15) in `tz`, in UTC. `health`: `never` without any run, `late` when the last run started more than `SYNC_LATE_AFTER_HOURS` (30) ago, else `ok`. | 401; 422 `unknown time zone: …` |
 | GET | `/v1/sync/runs` | token | query `limit?=10` (1–100) | `[SyncRun]`, newest first | 401, 422 |
 | GET | `/v1/sync/prompt` | token | — | `{prompt, schedule_time: "00:15", version}`: the scheduled-task prompt (markdown) from `docs/NIGHTLY_SYNC_PROMPT.md` | 401 |
 
@@ -239,6 +270,12 @@ when reading, so switching the setting off brings mastered concepts back at once
 `unretire` puts a retired concept back, due now; a later answer that is still
 mastered retires it again.
 
+**Settings in sessions (BE-08).** Settings are read when a session starts and
+when an answer is folded, so a change takes effect on the next session: the
+user's `desired_retention` is the FSRS target of every fold of their cards (the
+interval of each next answer; due dates already set are not moved), and
+`daily_review_cap` bounds the next queue.
+
 **Question versions (decision D8).** A rewrite from `jolt_submit_gradings` is a
 new question: `version` n+1, `previous_version_id` = version n, `rewrite_reason`.
 Version n is kept, marked inactive, and leaves the queue; the next session
@@ -255,12 +292,13 @@ graded, retired: [{concept_id, title}], moved: [{concept_id, title, old_due_at,
 new_due_at}], upcoming: [{date, questions}]}`. `moved` lists each concept the
 session answered whose next review changed: `old_due_at` from before its first
 answer in the session, `new_due_at` now (`null` when retired). `upcoming` counts
-questions due on each of the next 7 days (UTC dates, one per concept).
+questions due on each of the next 7 days (dates in the user's `time_zone`, one
+per concept).
 `reviewed` counts answers with stage 2 done.
 
 | Method | Path | Auth | Request | Response | Errors |
 |---|---|---|---|---|---|
-| POST | `/v1/review-sessions` | token | `{track_id?, limit?=100 (1–500), concept_id?, kind?: notes\|dsa_patterns, time_budget_minutes?}`. `concept_id` = practise that concept now (its next question, due or not, retired or not). `kind: dsa_patterns` is empty until BE-09; `time_budget_minutes` is accepted and ignored until BE-09. | `{id, started_at, track_id, items: [QueueItem], done_today}`. `done_today` = answers since midnight UTC. | 401; 404 `track not found` / `concept not found`; 422 |
+| POST | `/v1/review-sessions` | token | `{track_id?, limit?=100 (1–500), concept_id?, kind?: notes\|dsa_patterns, time_budget_minutes?}`. `concept_id` = practise that concept now (its next question, due or not, retired or not). `kind: dsa_patterns` is empty until BE-09; `time_budget_minutes` is accepted and ignored until BE-09. | `{id, started_at, track_id, items: [QueueItem], done_today, daily_review_cap, capped}`. `done_today` = answers since midnight in the user's `time_zone`. With a `daily_review_cap` (BE-08) the queue holds at most `cap - done_today` questions (a `concept_id` session is not capped); `capped: true` when the cap left due questions out. | 401; 404 `track not found` / `concept not found`; 422 |
 | POST | `/v1/review-sessions/{session_id}/end` | token | — | `Summary`. Ending again returns the same summary (recomputed, so later gradings show as `graded`). | 401, 404 `session not found` |
 | GET | `/v1/reviews/due` | token | query `limit?=100` (cards) | `{count, items: [{concept_id, question_id, stem}]}`: every active question of each due card, most overdue card first, retired concepts left out. Kept for compatibility; the app uses sessions. | 401, 422 |
 | POST | `/v1/reviews/{question_id}/stage1` | token | `{concept_id, free_text, client_request_id?, session_id?}` | `{review_id, options: [str], locked_at}` | 401; 404 `question not found` (also when the concept is not the caller's: they hold no card for it) / `session not found`; 409 key reused for another question; 422 |
@@ -280,7 +318,30 @@ questions due on each of the next 7 days (UTC dates, one per concept).
 | POST | `/v1/tracks/{track_id}/agenda/lock` | token | — | `Agenda` (status `locked`) | 401, 404 (not found, or not the caller's track) |
 | POST | `/v1/tracks/{track_id}/agenda/unlock` | token | — | `Agenda` (`refined` if it has a syllabus, else `none`) | 401, 404 |
 | GET | `/v1/tracks/{track_id}/coverage` | token | — | `{track_id, total_concepts, studied_concepts, decaying_concepts, coverage_ratio, by_syllabus: [{syllabus_ref, total_concepts, studied_concepts, coverage_ratio}], uncovered_syllabus: [str]}` | 401, 404 |
+| GET | `/v1/progress` | token | query `weeks?=26` (1–104) | `Progress` (below) | 401, 422 |
 | GET | `/v1/progress/concepts/{concept_id}` | token | — | `{concept_id, stability, difficulty, retrievability, due_at, reps, lapses, timeline: [{reviewed_at, grade, is_correct, review_id, question_id, question_version, grading, feedback}]}` | 401, 404 `no state for this concept` |
+
+`Progress = {weeks, retention, retention_weekly: [{week_start, retention}],
+reviews_total, reviews_this_week, answers_in_own_words, streak_days,
+concepts_learning, concepts_mastered, sources_read, daily: [{date, reviews}],
+tracks: [{track_id, name, kind, retention, due, mastered, learning}]}`. Days and
+weeks (Monday start) are in the user's `time_zone`; the window is `weeks × 7`
+days up to today. Definitions:
+
+| | |
+|---|---|
+| studied / mastered / retired | studied: at least one graded answer (FSRS `reps > 0`); mastered: the BE-06 rule (`mastered_at` set); retired: mastered and out of the queue under `retire_mastered` |
+| `retention` | Mean predicted recall now of the **active** concepts (studied and not retired): `R = (1 + 19/81 · t / S) ** -0.5`, the FSRS forgetting curve, `t` days since the last answer, `S` stability. 0 with none. |
+| `retention_weekly` | The same mean at the end of each week of the window (now for the current week), from each card's stability after each of its answers; a concept counts from its first answer, not once retired. Weeks with no active concept are left out, so the list can be shorter than `weeks`. |
+| `reviews_total`, `daily`, `reviews_this_week` | Answers (stage 2 done) per day of the window, their sum, and the sum since Monday. |
+| `answers_in_own_words` | Stage 1 answers with any text in the window, answered or not. |
+| `streak_days` | Consecutive days with an answer up to today, or up to yesterday while nothing is answered yet today. Not limited to the window. |
+| `concepts_learning`, `concepts_mastered` | Studied and not mastered; mastered. Disjoint. |
+| `sources_read` | Confirmed uploads with an active read. |
+| `tracks` | The user's tracks (newest first), then curated tracks they study. `due`: not retired and due now (new concepts included); `retention` as above over the track. `kind` is `notes` until BE-09. |
+
+Only concepts still active in their track count (a superseded concept's card
+does not); every answer counts in the day counts.
 
 | Tool | Arguments | Returns | Notes / errors |
 |---|---|---|---|
@@ -295,14 +356,35 @@ questions due on each of the next 7 days (UTC dates, one per concept).
 
 ## 6. Settings
 
+`Settings = {theme: light|dark|system, desired_retention, retire_mastered,
+allow_question_rewrite, daily_review_cap, data_retention_days, time_zone}`:
+
+| Field | Default | |
+|---|---|---|
+| `theme` | `system` | Stored for the app; the server does nothing with it. |
+| `desired_retention` | `FSRS_DESIRED_RETENTION` (0.9) | FSRS target, 0.80–0.97: the chance of still remembering a concept when it comes due. Higher → shorter intervals, more reviews. Shapes every next answer's interval (section 4). `null` in a PATCH resets it to the server default. |
+| `retire_mastered` | `true` | Section 4, mastery and retirement. |
+| `allow_question_rewrite` | `false` | Decision D8: opt-in. |
+| `daily_review_cap` | `null` (no cap) | 1–500 answers a day; sessions are cut to what is left (section 4). |
+| `data_retention_days` | `null` (keep) | 1–3650. How long to keep uploads: a stored preference, **not enforced yet**. *Data* retention, not FSRS retention (was `PUT /v1/settings/retention`'s `retention_days`). |
+| `time_zone` | `UTC` | IANA name. The learner's day: "today" and the daily cap, the session summary's next days, progress days, streak and weeks, D6 upload dates, and the default zone of `GET /v1/sync/status`. The app should send the device's zone (e.g. `Intl.DateTimeFormat().resolvedOptions().timeZone`) once after sign-in. |
+
+`ModelStatus = {mcp_server_url, tokens: [{id, label, last4, created_at,
+last_used_at}], last_sync: SyncRun|null, health: ok|late|never,
+next_expected_at}`: the same data as `GET /v1/mcp-tokens` and `GET
+/v1/sync/status` (in the user's `time_zone`), for Settings · Model in one call.
+
 | Method | Path | Auth | Request | Response | Errors |
 |---|---|---|---|---|---|
-| GET | `/v1/settings` | token | — | `{retire_mastered, allow_question_rewrite}` (defaults `true`, `false`: rewriting is opt-in, decision D8). BE-08 adds the rest of the Settings screen to this body. | 401 |
-| PATCH | `/v1/settings` | token | `{retire_mastered?: bool, allow_question_rewrite?: bool}` | Same as `GET` | 401, 409 concurrent change, 422 |
-| POST | `/v1/settings/api-key` | token | `{provider: anthropic\|openai, key}` | `{provider, last4, status: "validated"}`. The key is checked with the provider, stored in Key Vault, and only a reference is kept in Cosmos. | 400 unsupported provider; 401; 422 provider rejected the key (string `detail`) or invalid body |
-| GET | `/v1/settings/api-key` | token | — | `[{provider, last4, status: "stored"}]` | 401 |
+| GET | `/v1/settings` | token | — | `Settings` + `{model_status: ModelStatus}` | 401 |
+| PATCH | `/v1/settings` | token | Any subset of `Settings`. Only the fields sent change. `null` is allowed for `desired_retention` (reset), `daily_review_cap` and `data_retention_days` (clear), and refused for the others. | Same as `GET` | 401, 409 concurrent change, 422 (out of range, unknown theme or time zone, `null` where not allowed) |
+| POST | `/v1/settings/api-key` | token | `{provider: anthropic\|openai, key}` | `{provider, last4, status: "validated", added_at}`. The key is checked with the provider, stored in Key Vault, and only a reference is kept in Cosmos. Replacing a provider's key resets `added_at`. | 400 unsupported provider; 401; 422 provider rejected the key (string `detail`) or invalid body |
+| GET | `/v1/settings/api-key` | token | — | `[{provider, last4, status: "stored", added_at}]`, newest first. `has_api_key` on `GET /v1/me` says whether there is any. | 401 |
 | DELETE | `/v1/settings/api-key/{provider}` | token | — | 204 (Key Vault secret first, then the reference) | 400 unsupported provider; 401 |
-| PUT | `/v1/settings/retention` | token | `{retention_days?: int\|null}` | `{retention_days}` | 401, 422 |
+| PUT | `/v1/settings/retention` | token | `{retention_days?: int\|null}` (1–3650) | `{retention_days}`. **Deprecated**: the same value as `data_retention_days` in `PATCH /v1/settings`. | 401, 422 |
+
+Storage used (Settings · Data) is `GET /v1/storage` (section 3); export and
+delete are `POST /v1/export` and `DELETE /v1/me` (section 1).
 
 ---
 

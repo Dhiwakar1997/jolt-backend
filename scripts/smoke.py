@@ -1,4 +1,4 @@
-"""End-to-end smoke test against a running Jolt backend (BE-02 to BE-06).
+"""End-to-end smoke test against a running Jolt backend (BE-02 to BE-08).
 
     python scripts/smoke.py --base-url https://<dev-host>
     python scripts/smoke.py --base-url http://localhost:8000      # local, see below
@@ -33,11 +33,17 @@ share it, with a fresh test user:
     /v1/sync/runs show it (client label, counts, the question_rewritten change),
     GET /v1/sync/prompt
 11. MCP with the token in the URL (?token=, how a URL-only connector connects)
-12. GET /v1/me shows the onboarding progress (incl. first_sync_at); revoke the
-    MCP token (/mcp then refuses it); sign out (/v1 then refuses the app token)
+12. GET /v1/me shows the onboarding progress (incl. first_sync_at)
+13. Progress and settings (BE-08): GET /v1/progress counts the answer; PATCH
+    /v1/settings round trip (theme, desired retention, daily cap, data
+    retention, time zone) and the model status block; POST /v1/export and
+    download the bundle from its signed URL
+14. Revoke the MCP token (/mcp then refuses it); sign in a second device and
+    sign the first out (/v1 then refuses its token); DELETE /v1/me deletes the
+    throwaway user (its last token then gets 401)
 
-Exit code 0 when every step passes, 1 otherwise. It leaves the test user and its
-data behind (there is no account delete yet); each run uses a new user.
+Exit code 0 when every step passes, 1 otherwise. Each run uses a new user and
+deletes it at the end; a run that fails half way leaves its user behind.
 
 The server must have DEV_AUTH_ENABLED=true. A server with real storage also has a
 DEV_AUTH_SECRET: pass it with --dev-auth-secret or the JOLT_DEV_AUTH_SECRET
@@ -597,17 +603,79 @@ async def run(
             check([t["id"] for t in listed] == [mcp_token_id], f"mcp tokens: {listed}")
             check(listed[0]["last_used_at"], "MCP token has no last_used_at after use")
 
+        with rep.step("GET /v1/progress"):
+            progress = _json(await http.get("/v1/progress", params={"weeks": 4}))
+            check(len(progress["daily"]) == 28, f"daily: {len(progress['daily'])} days")
+            check(progress["reviews_total"] >= 1, f"reviews_total: {progress['reviews_total']}")
+            check(progress["streak_days"] >= 1, f"streak_days: {progress['streak_days']}")
+            check(
+                any(t["track_id"] == track_id for t in progress["tracks"]),
+                f"track {track_id} missing from progress: {progress['tracks']}",
+            )
+
+        with rep.step("PATCH /v1/settings round trip + model status"):
+            wanted = {
+                "theme": "dark",
+                "desired_retention": 0.85,
+                "daily_review_cap": 50,
+                "data_retention_days": 365,
+                "time_zone": "Europe/London",
+            }
+            patched = _json(await http.patch("/v1/settings", json=wanted))
+            got = _json(await http.get("/v1/settings"))
+            for key, value in wanted.items():
+                check(patched[key] == value and got[key] == value, f"{key}: {got.get(key)}")
+            check(got["allow_question_rewrite"] is True, "allow_question_rewrite was lost")
+            status = got["model_status"]
+            check(
+                [t["id"] for t in status["tokens"]] == [mcp_token_id], f"tokens: {status['tokens']}"
+            )
+            check(status["last_sync"]["id"] == run_id, f"last_sync: {status['last_sync']}")
+            check(status["health"] == "ok", f"health: {status['health']}")
+            bad = await http.patch("/v1/settings", json={"desired_retention": 0.5})
+            check(bad.status_code == 422, f"desired_retention 0.5 -> {bad.status_code}")
+
+        with rep.step("POST /v1/export + download the bundle"):
+            export = _json(await http.post("/v1/export"))
+            # The signed URL carries its own authorisation: no bearer header.
+            async with httpx.AsyncClient(timeout=timeout) as plain:
+                download = await plain.get(export["download_url"])
+            check(download.status_code == 200, f"download -> {download.status_code}")
+            bundle = download.json()
+            check(bundle["format"] == "jolt-export", f"format: {bundle.get('format')}")
+            check(bundle["user"]["id"] == out["user_id"], "the export is someone else's")
+            check(any(t["id"] == track_id for t in bundle["tracks"]), "track missing")
+            check(any(c["id"] == concept_id for c in bundle["concepts"]), "concept missing")
+            check(len(bundle["reviews"]) >= 1 and len(bundle["extractions"]) == 2, "reads")
+            check(len(download.content) == export["bytes"], "size does not match `bytes`")
+            check(mcp_token not in download.text and app_token not in download.text, "tokens")
+            out["export_bytes"] = export["bytes"]
+
         with rep.step("DELETE /v1/mcp-tokens/{id} (revoked at once)"):
             resp = await http.delete(f"/v1/mcp-tokens/{mcp_token_id}")
             check(resp.status_code == 204, f"revoke -> {resp.status_code}: {resp.text[:200]}")
             status = await _sse_status(base_url, mcp_token, timeout)
             check(status == 401, f"GET /mcp/sse with the revoked token -> {status}")
 
-        with rep.step("POST /v1/auth/sign-out"):
+        with rep.step("POST /v1/auth/sign-out (one device)"):
+            headers = {"X-Jolt-Dev-Auth-Secret": dev_auth_secret} if dev_auth_secret else {}
+            second = _json(await http.post("/v1/auth/dev", json={"email": email}, headers=headers))
+            check(second["user"]["id"] == out["user_id"], "second sign-in is another user")
             resp = await http.post("/v1/auth/sign-out")
             check(resp.status_code == 204, f"sign-out -> {resp.status_code}: {resp.text[:200]}")
             after = await http.get("/v1/me")
             check(after.status_code == 401, f"GET /v1/me after sign-out -> {after.status_code}")
+            http.headers["Authorization"] = f"Bearer {second['app_token']}"
+            check((await http.get("/v1/me")).status_code == 200, "the other device was signed out")
+
+        with rep.step("DELETE /v1/me (delete the throwaway user)"):
+            unconfirmed = await http.request("DELETE", "/v1/me", json={"confirm": "yes"})
+            check(unconfirmed.status_code == 422, f"unconfirmed -> {unconfirmed.status_code}")
+            resp = await http.request("DELETE", "/v1/me", json={"confirm": "DELETE"})
+            check(resp.status_code == 204, f"delete -> {resp.status_code}: {resp.text[:200]}")
+            after = await http.get("/v1/me")
+            check(after.status_code == 401, f"GET /v1/me after delete -> {after.status_code}")
+            out["user_deleted"] = True
 
     out["steps_passed"] = rep.passed
     return out

@@ -116,6 +116,15 @@ prompt in [`docs/NIGHTLY_SYNC_PROMPT.md`](./docs/NIGHTLY_SYNC_PROMPT.md) (served
 `jolt_sync` again until it says done. Each run is recorded; the app reads
 `GET /v1/sync/status` and `GET /v1/sync/runs`. See `docs/API.md` §2.
 
+### Progress, settings and data rights
+
+`GET /v1/progress` serves the Progress screen; `GET` / `PATCH /v1/settings` the
+whole Settings screen (per-user FSRS desired retention, daily review cap, time
+zone, theme, …) with a model status block. `POST /v1/export` returns a signed
+download URL of everything Jolt keeps for the user; `DELETE /v1/me
+{"confirm": "DELETE"}` deletes the account: Key Vault secrets, blobs, every
+document, then the user. See `docs/API.md` §1, §5 and §6.
+
 ## Tests and checks
 
 No Azure is needed. Domain tests are pure; API-level tests run the real FastAPI
