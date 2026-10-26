@@ -67,15 +67,14 @@ async def create_questions(concept_id: str, questions: list[dict]) -> dict:
         )
         for q in questions
     ]
-    created = await SyncService(get_runtime()).create_questions(
-        user.user_id, concept_id, inputs
-    )
+    created = await SyncService(get_runtime()).create_questions(user.user_id, concept_id, inputs)
     return {"question_ids": [q.id for q in created]}
 
 
 async def correct_concept(track_id: str, concept_id: str, text: str) -> dict:
     """Apply an agent-supplied correction to a concept's text in place."""
-    user = await require_user()
+    # Auth gate only: concepts are track-partitioned, not user-scoped (see docs/GAPS.md).
+    await require_user()
     rt = get_runtime()
     concept = await rt.repos.concepts.get_concept(concept_id, track_id)
     if concept is None:
@@ -134,8 +133,6 @@ def _agenda_dict(agenda) -> dict:
             {"concept_key": i.concept_key, "label": i.label, "parent": i.parent}
             for i in agenda.syllabus
         ],
-        "last_refined_at": (
-            agenda.last_refined_at.isoformat() if agenda.last_refined_at else None
-        ),
+        "last_refined_at": (agenda.last_refined_at.isoformat() if agenda.last_refined_at else None),
         "refined_from_source_id": agenda.refined_from_source_id,
     }

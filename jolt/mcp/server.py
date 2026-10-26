@@ -70,9 +70,9 @@ def build_mcp_app():
     mirroring FastMCP.run_sse_async: a `/sse` event stream plus a `/messages/`
     post endpoint. Mounted at /mcp, the client connects to /mcp/sse.
     """
+    from mcp.server.sse import SseServerTransport
     from starlette.applications import Starlette
     from starlette.routing import Mount, Route
-    from mcp.server.sse import SseServerTransport
 
     mcp = build_mcp()
     server = mcp._mcp_server  # low-level Server the transport drives

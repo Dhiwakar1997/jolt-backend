@@ -88,9 +88,7 @@ async def list_tracks(user: UserDep, rt: RuntimeDep) -> list[TrackResponse]:
 
 
 @router.post("", response_model=TrackResponse)
-async def create_track(
-    body: CreateTrackRequest, user: UserDep, rt: RuntimeDep
-) -> TrackResponse:
+async def create_track(body: CreateTrackRequest, user: UserDep, rt: RuntimeDep) -> TrackResponse:
     t = await TrackService(rt).create_track(user.user_id, body.name, body.syllabus)
     return _track_response(t)
 

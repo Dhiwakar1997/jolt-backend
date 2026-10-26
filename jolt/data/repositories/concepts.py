@@ -58,8 +58,7 @@ class ConceptStatesRepository(Repository[ConceptState]):
         Backed by the composite index on (user_id, due_at).
         """
         return await self._query(
-            "SELECT * FROM c WHERE c.due_at <= @now ORDER BY c.due_at ASC "
-            "OFFSET 0 LIMIT @limit",
+            "SELECT * FROM c WHERE c.due_at <= @now ORDER BY c.due_at ASC OFFSET 0 LIMIT @limit",
             [
                 {"name": "@now", "value": now.isoformat()},
                 {"name": "@limit", "value": limit},
@@ -78,7 +77,9 @@ class QuestionsRepository(Repository[Question]):
     async def get_question(self, question_id: str, concept_id: str) -> Optional[Question]:
         return await self.get(question_id, partition_value=concept_id)
 
-    async def list_for_concept(self, concept_id: str, *, active_only: bool = True) -> list[Question]:
+    async def list_for_concept(
+        self, concept_id: str, *, active_only: bool = True
+    ) -> list[Question]:
         if active_only:
             return await self._query(
                 "SELECT * FROM c WHERE c.status = @active",

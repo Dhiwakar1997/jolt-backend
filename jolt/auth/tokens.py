@@ -10,7 +10,7 @@ from __future__ import annotations
 import secrets
 
 from argon2 import PasswordHasher
-from argon2.exceptions import VerifyMismatchError, VerificationError
+from argon2.exceptions import VerificationError, VerifyMismatchError
 
 from jolt.config import get_settings
 

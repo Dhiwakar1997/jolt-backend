@@ -30,9 +30,7 @@ async def get_unprocessed_sources(limit: int = 10) -> dict:
                 "source_id": s.id,
                 "filename": s.filename,
                 "content_type": s.content_type,
-                "lease_expires_at": s.lease_expires_at.isoformat()
-                if s.lease_expires_at
-                else None,
+                "lease_expires_at": s.lease_expires_at.isoformat() if s.lease_expires_at else None,
             }
             for s in sources
         ]

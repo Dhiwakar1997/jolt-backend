@@ -48,9 +48,7 @@ def test_migrate_is_noop_when_agenda_present():
 
 def test_from_doc_migrates_and_preserves_join_key():
     repo = TracksRepository(SimpleNamespace())  # gateway unused by _from_doc
-    track = repo._from_doc(
-        {"id": "t1", "name": "Bio", "origin": "user", "syllabus": ["cells"]}
-    )
+    track = repo._from_doc({"id": "t1", "name": "Bio", "origin": "user", "syllabus": ["cells"]})
     assert track.agenda.status == AgendaStatus.REFINED
     # concept_key == label so existing concepts (syllabus_ref='cells') still join.
     assert track.agenda.syllabus[0].concept_key == "cells"
@@ -185,9 +183,7 @@ async def test_auto_add_nests_under_resolvable_parent_only():
 @pytest.mark.asyncio
 async def test_auto_add_skipped_when_locked():
     svc, _ = _service(_new_track(status=AgendaStatus.LOCKED))
-    agenda = await svc.auto_add_concepts(
-        "u1", "t1", [SyllabusItem(concept_key="k1", label="One")]
-    )
+    agenda = await svc.auto_add_concepts("u1", "t1", [SyllabusItem(concept_key="k1", label="One")])
     assert agenda.syllabus == []  # locked: auto-add skipped, no error
 
 

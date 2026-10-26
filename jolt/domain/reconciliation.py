@@ -98,9 +98,7 @@ def reconcile(
                 ConceptDelta(change=change, existing=best, proposed=prop, similarity=best_sim)
             )
         else:
-            deltas.append(
-                ConceptDelta(change=ChangeClass.NEW, proposed=prop, similarity=best_sim)
-            )
+            deltas.append(ConceptDelta(change=ChangeClass.NEW, proposed=prop, similarity=best_sim))
 
     # Anything left unmatched in the active extraction was removed.
     for leftover in remaining_existing:

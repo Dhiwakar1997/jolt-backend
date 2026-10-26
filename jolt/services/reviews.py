@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from jolt.domain.grading import score_stage_two
-from jolt.domain.models import ConceptState, Question, Review, ReviewStatus
+from jolt.domain.models import ConceptState, Review, ReviewStatus
 from jolt.domain.scheduling import fold_history
 from jolt.runtime import Runtime
 

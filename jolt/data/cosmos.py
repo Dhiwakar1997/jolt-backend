@@ -11,8 +11,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from azure.cosmos.aio import CosmosClient, ContainerProxy, DatabaseProxy
 from azure.cosmos import PartitionKey
+from azure.cosmos.aio import ContainerProxy, CosmosClient, DatabaseProxy
 
 from jolt.config import Settings, get_settings
 
@@ -39,7 +39,10 @@ COMPOSITE_INDEXES: dict[str, list[list[dict]]] = {
         [{"path": "/user_id", "order": "ascending"}, {"path": "/due_at", "order": "ascending"}],
     ],
     "sources": [
-        [{"path": "/processing_status", "order": "ascending"}, {"path": "/created_at", "order": "ascending"}],
+        [
+            {"path": "/processing_status", "order": "ascending"},
+            {"path": "/created_at", "order": "ascending"},
+        ],
     ],
     "reviews": [
         [{"path": "/status", "order": "ascending"}, {"path": "/created_at", "order": "ascending"}],
@@ -65,18 +68,14 @@ class CosmosGateway:
 
 def _build_client(settings: Settings) -> CosmosClient:
     if not settings.cosmos_endpoint:
-        raise RuntimeError(
-            "COSMOS_ENDPOINT is not set. Fill it in .env after deploying Cosmos."
-        )
+        raise RuntimeError("COSMOS_ENDPOINT is not set. Fill it in .env after deploying Cosmos.")
     if settings.use_managed_identity:
         # Imported lazily so `key` mode has no Azure Identity dependency at import.
         from azure.identity.aio import DefaultAzureCredential
 
         return CosmosClient(settings.cosmos_endpoint, credential=DefaultAzureCredential())
     if not settings.cosmos_key:
-        raise RuntimeError(
-            "AUTH_MODE=key but COSMOS_KEY is empty. Set COSMOS_KEY in .env."
-        )
+        raise RuntimeError("AUTH_MODE=key but COSMOS_KEY is empty. Set COSMOS_KEY in .env.")
     return CosmosClient(settings.cosmos_endpoint, credential=settings.cosmos_key)
 
 

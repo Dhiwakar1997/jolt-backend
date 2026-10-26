@@ -30,9 +30,7 @@ class ConceptDetailResponse(BaseModel):
 
 
 @router.get("/concepts/{concept_id}", response_model=ConceptDetailResponse)
-async def concept_detail(
-    concept_id: str, user: UserDep, rt: RuntimeDep
-) -> ConceptDetailResponse:
+async def concept_detail(concept_id: str, user: UserDep, rt: RuntimeDep) -> ConceptDetailResponse:
     state = await rt.repos.concept_states.for_concept(user.user_id, concept_id)
     if state is None:
         raise HTTPException(status_code=404, detail="no state for this concept")

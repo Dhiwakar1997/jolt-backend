@@ -42,13 +42,12 @@ async def get_source_content(source_id: str) -> dict:
 
 async def diff_extractions(track_id: str, proposed_concepts: list[dict]) -> dict:
     """Preview the per-concept classification a supersede would produce."""
-    user = await require_user()
+    # Auth gate only: concepts are track-partitioned, not user-scoped (see docs/GAPS.md).
+    await require_user()
     rt = get_runtime()
     existing = await rt.repos.concepts.list_for_track(track_id)
     proposed = [
-        ProposedConcept(
-            text=p["text"], title=p.get("title"), syllabus_ref=p.get("syllabus_ref")
-        )
+        ProposedConcept(text=p["text"], title=p.get("title"), syllabus_ref=p.get("syllabus_ref"))
         for p in proposed_concepts
     ]
     result = reconcile(existing, proposed)

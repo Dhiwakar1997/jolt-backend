@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
-from jolt.domain.models import ConceptState, FSRSGrade, Review, ReviewStatus
 from jolt.domain import scheduling
+from jolt.domain.models import ConceptState, FSRSGrade, Review, ReviewStatus
 
 
 def test_synthesise_provisional_grade_incorrect_is_again():

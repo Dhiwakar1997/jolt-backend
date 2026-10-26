@@ -11,3 +11,15 @@ testpaths = ["tests"]
 
 [tool.setuptools.packages.find]
 include = ["jolt*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = [".venv"]
+
+[tool.ruff.lint]
+# pycodestyle errors/warnings, pyflakes, import order.
+select = ["E", "W", "F", "I"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["jolt"]

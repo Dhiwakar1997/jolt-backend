@@ -18,9 +18,7 @@ def _agenda_dict(agenda) -> dict:
             {"concept_key": i.concept_key, "label": i.label, "parent": i.parent}
             for i in agenda.syllabus
         ],
-        "last_refined_at": (
-            agenda.last_refined_at.isoformat() if agenda.last_refined_at else None
-        ),
+        "last_refined_at": (agenda.last_refined_at.isoformat() if agenda.last_refined_at else None),
         "refined_from_source_id": agenda.refined_from_source_id,
     }
 
@@ -53,15 +51,13 @@ async def get_agenda(track_id: str) -> dict:
 
 
 async def get_recent_concepts(track_id: str, limit: int = 20) -> dict:
-    user = await require_user()
+    # Auth gate only: concepts are track-partitioned, not user-scoped (see docs/GAPS.md).
+    await require_user()
     rt = get_runtime()
     concepts = await rt.repos.concepts.list_for_track(track_id)
     concepts = sorted(concepts, key=lambda c: c.created_at, reverse=True)[:limit]
     return {
-        "concepts": [
-            {"id": c.id, "text": c.text, "syllabus_ref": c.syllabus_ref}
-            for c in concepts
-        ]
+        "concepts": [{"id": c.id, "text": c.text, "syllabus_ref": c.syllabus_ref} for c in concepts]
     }
 
 

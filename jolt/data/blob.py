@@ -34,9 +34,7 @@ class BlobGateway:
         return f"{user_id}/{source_id}/{filename}"
 
     async def _sas(self, blob_path: str, permission: BlobSasPermissions) -> str:
-        expiry = datetime.now(timezone.utc) + timedelta(
-            seconds=self.settings.blob_sas_ttl_seconds
-        )
+        expiry = datetime.now(timezone.utc) + timedelta(seconds=self.settings.blob_sas_ttl_seconds)
         account_name = self.service.account_name
         if self.account_key:
             token = generate_blob_sas(
@@ -90,7 +88,7 @@ async def init_blob(settings: Settings | None = None) -> BlobGateway:
         # Extract the key from the connection string so SAS signing works locally.
         for part in settings.blob_connection_string.split(";"):
             if part.startswith("AccountKey="):
-                account_key = part[len("AccountKey="):]
+                account_key = part[len("AccountKey=") :]
     else:
         if not settings.blob_account_url:
             raise RuntimeError(

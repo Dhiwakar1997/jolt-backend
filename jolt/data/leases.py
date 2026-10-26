@@ -68,12 +68,8 @@ class ReviewLeases:
         self._repo = repo
 
     async def claim(self, review: Review) -> Review | None:
-        claimable = _lease_available(
-            review.status == ReviewStatus.PENDING_GRADING,
-            review.free_text_locked_at and _lease_expiry(),
-        )
-        # Pending gradings use free_text_locked_at as their claim marker; a simple
-        # status check suffices for MVP (no long-held grading lease field yet).
+        # Pending gradings have no lease field yet; a plain status check suffices
+        # for the MVP (gradings are applied idempotently, so a double claim is safe).
         if review.status != ReviewStatus.PENDING_GRADING:
             return None
         return review
