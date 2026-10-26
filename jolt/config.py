@@ -90,6 +90,12 @@ class Settings(BaseSettings):
     # marked `failed` instead of being claimed again. Read again resets it.
     source_max_attempts: int = Field(default=3, ge=1)
 
+    # ---- Data export (BE-08) ----
+    # Lifetime (seconds) of the signed download URL POST /v1/export returns.
+    # The export file itself is removed by the next export, by account delete,
+    # and by the Blob lifecycle rule on `exports/` (infra/modules/storage.bicep).
+    export_url_ttl_seconds: int = Field(default=3600, ge=60, le=7 * 24 * 3600)
+
     # ---- Key Vault ----
     keyvault_url: str = ""
 

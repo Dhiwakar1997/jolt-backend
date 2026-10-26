@@ -158,7 +158,7 @@ class SyncOut(_Out):
     claimed_sources: list[PlanClaimedSourceOut]
     in_flight_elsewhere: int
     unassigned_sources: int
-    upload_dates: list[str]  # YYYY-MM-DD (UTC)
+    upload_dates: list[str]  # YYYY-MM-DD in the user's time_zone (UTC by default)
     tracks: list[PlanTrackOut]
     reread_sources: list[PlanRereadOut]
     steps: list[PlanStepOut]

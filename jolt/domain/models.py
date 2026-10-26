@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 SCHEMA_VERSION = 1
 
@@ -115,11 +115,23 @@ class FSRSGrade(int, Enum):
 # --------------------------------------------------------------------------- #
 # Aggregates
 # --------------------------------------------------------------------------- #
+class Theme(str, Enum):
+    LIGHT = "light"
+    DARK = "dark"
+    SYSTEM = "system"
+
+
+# FSRS desired retention a learner may pick on Settings · Reviews (BE-08).
+DESIRED_RETENTION_MIN = 0.80
+DESIRED_RETENTION_MAX = 0.97
+
+
 class UserSettings(BaseModel):
     """Per-user preferences stored on the user document.
 
-    BE-06 adds the two review behaviours; BE-08 adds the rest of the Settings
-    screen (theme, desired retention, daily cap, data retention) here.
+    BE-06 added the two review behaviours; BE-08 the rest of the Settings
+    screen. Every field has a default, so documents written before a field
+    existed read as "the default".
     """
 
     # Retire a concept from the review queue once it is mastered (FSRS stability
@@ -128,6 +140,21 @@ class UserSettings(BaseModel):
     # Decision D8: question rewriting after grading is opt-in per user. When on,
     # a grading's `rewritten_question` becomes a new question version.
     allow_question_rewrite: bool = False
+    # Appearance (BE-08). The app applies it; the server only stores it.
+    theme: Theme = Theme.SYSTEM
+    # FSRS desired retention (0.80-0.97). None: the server default
+    # (FSRS_DESIRED_RETENTION). Used by every FSRS fold of this user's cards, so
+    # a change shapes the intervals of the next answers (BE-08).
+    desired_retention: Optional[float] = None
+    # Most answers a day; review sessions are cut to what is left of it.
+    # None: no cap.
+    daily_review_cap: Optional[int] = None
+    # How long to keep uploads, in days (a stored preference; nothing deletes
+    # by it yet). Was `User.retention_days` / PUT /v1/settings/retention.
+    data_retention_days: Optional[int] = None
+    # IANA zone of the learner's day: "today", streaks, the heatmap, the upload
+    # date of a session (decision D6) and the sync schedule (GAPS #8).
+    time_zone: str = "UTC"
 
 
 class User(DocBase):
@@ -146,8 +173,18 @@ class User(DocBase):
     last_sign_in_at: Optional[datetime] = None
     # Set by the first successful nightly sync (BE-04); drives onboarding.
     first_sync_at: Optional[datetime] = None
-    retention_days: Optional[int] = None  # data-retention preference
+    # Legacy home of the data-retention preference (before BE-08); read-time
+    # migrated into `settings.data_retention_days`, written back as None.
+    retention_days: Optional[int] = None
     settings: UserSettings = Field(default_factory=UserSettings)
+
+    @model_validator(mode="after")
+    def _migrate_retention_days(self) -> "User":
+        if self.retention_days is not None:
+            if self.settings.data_retention_days is None:
+                self.settings.data_retention_days = self.retention_days
+            self.retention_days = None
+        return self
 
 
 def user_id_for(provider: str, subject: str) -> str:

@@ -313,8 +313,30 @@ class InMemoryBlobGateway:
     async def upload_url(self, blob_path: str) -> str:
         return self._url(blob_path, "cw")
 
-    async def read_url(self, blob_path: str) -> str:
-        return self._url(blob_path, "r")
+    async def read_url(self, blob_path: str, ttl_seconds: Optional[int] = None) -> str:
+        return self._url(blob_path, "r")  # memory URLs do not expire
+
+    async def upload_bytes(
+        self,
+        blob_path: str,
+        data: bytes,
+        content_type: str,
+        content_disposition: Optional[str] = None,
+    ) -> None:
+        self.put(blob_path, data, content_type)
+
+    async def list_paths(self, prefix: str) -> list[str]:
+        return sorted(p for p in self._blobs if p.startswith(prefix))
+
+    async def delete_prefix(self, prefix: str) -> int:
+        names = await self.list_paths(prefix)
+        for name in names:
+            self._blobs.pop(name, None)
+        return len(names)
+
+    def paths(self) -> list[str]:
+        """Every stored blob path (test helper)."""
+        return sorted(self._blobs)
 
     async def stat(self, blob_path: str) -> Optional[dict]:
         blob = self._blobs.get(blob_path)

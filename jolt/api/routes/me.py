@@ -1,20 +1,24 @@
-"""`GET /v1/me` — the signed-in user and where they are in onboarding (BE-03).
+"""`/v1/me` — the signed-in user, onboarding (BE-03) and data rights (BE-08).
 
-The app calls it on launch to decide where a returning user resumes, and to show
-the MCP server address on "Connect your model".
+`GET /v1/me`: the app calls it on launch to decide where a returning user
+resumes, and to show the MCP server address on "Connect your model".
+`POST /v1/export` and `DELETE /v1/me`: Settings · Data (export everything,
+delete the account).
 """
 
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, Response
 from pydantic import BaseModel, Field
 
 from jolt.api.deps import RuntimeDep, UserDep
 from jolt.api.errors import UNAUTHORIZED
 from jolt.api.routes.auth import UserResponse, user_response
 from jolt.config import Settings
+from jolt.services.account_data import AccountDataService
 from jolt.services.accounts import AccountService
 
 router = APIRouter(prefix="/v1", tags=["me"], responses=UNAUTHORIZED)
@@ -56,3 +60,37 @@ async def get_me(user: UserDep, rt: RuntimeDep, request: Request) -> MeResponse:
         mcp_server_url=mcp_server_url(rt.settings, request),
         has_api_key=me.has_api_key,
     )
+
+
+class ExportResponse(BaseModel):
+    download_url: str = Field(
+        description="Signed GET URL of the JSON bundle (served as an attachment)"
+    )
+    expires_at: datetime = Field(description="When the URL stops working")
+    bytes: int = Field(description="Size of the bundle")
+
+
+@router.post("/export", response_model=ExportResponse)
+async def export_data(user: UserDep, rt: RuntimeDep) -> ExportResponse:
+    """Everything Jolt keeps for the user as one JSON file: profile, settings,
+    tracks, concepts, questions (every version), FSRS states, reviews, gradings,
+    review and study sessions, sources metadata with every read (markdown
+    included), sync runs, MCP tokens and API keys (metadata only, never secrets).
+    A new export replaces the previous file."""
+    result = await AccountDataService(rt).export(user.user_id)
+    return ExportResponse(
+        download_url=result.download_url, expires_at=result.expires_at, bytes=result.bytes
+    )
+
+
+class DeleteAccountRequest(BaseModel):
+    confirm: Literal["DELETE"] = Field(description='Must be the literal string "DELETE"')
+
+
+@router.delete("/me", status_code=204)
+async def delete_account(body: DeleteAccountRequest, user: UserDep, rt: RuntimeDep) -> Response:
+    """Delete the account and everything under it, irreversibly: Key Vault
+    secrets, uploaded files and exports, every document, the tokens (every
+    device is signed out, every connected client cut off), then the user."""
+    await AccountDataService(rt).delete_account(user.user_id)
+    return Response(status_code=204)

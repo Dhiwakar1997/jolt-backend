@@ -31,11 +31,16 @@ def _now() -> datetime:
 # --------------------------------------------------------------------------- #
 # Library adapter
 # --------------------------------------------------------------------------- #
-def _load_fsrs():
-    """Return (scheduler, Card, Rating) normalised across fsrs versions."""
+def _load_fsrs(desired_retention: float | None = None):
+    """Return (scheduler, Card, Rating) normalised across fsrs versions.
+
+    `desired_retention` is the user's setting (BE-08); None means the server
+    default, FSRS_DESIRED_RETENTION. It only changes the intervals (due dates),
+    never stability or difficulty.
+    """
     import fsrs as _f
 
-    retention = get_settings().fsrs_desired_retention
+    retention = desired_retention or get_settings().fsrs_desired_retention
     if hasattr(_f, "Scheduler"):  # py-fsrs >= 5
         try:
             scheduler = _f.Scheduler(desired_retention=retention)
@@ -84,11 +89,15 @@ def _apply_card_to_state(state: ConceptState, card, reviewed_at: datetime) -> Co
 
 
 def apply_grade(
-    state: ConceptState, grade: FSRSGrade, *, reviewed_at: datetime | None = None
+    state: ConceptState,
+    grade: FSRSGrade,
+    *,
+    reviewed_at: datetime | None = None,
+    desired_retention: float | None = None,
 ) -> ConceptState:
     """Advance one FSRS step and write the new card fields onto `state`."""
     reviewed_at = reviewed_at or _now()
-    scheduler, Card, Rating = _load_fsrs()
+    scheduler, Card, Rating = _load_fsrs(desired_retention)
     card = _card_from_state(state, Card)
     rating = Rating(grade.value)
 
@@ -110,7 +119,12 @@ def apply_grade(
     return state
 
 
-def fold_history(state: ConceptState, reviews: Iterable[Review]) -> ConceptState:
+def fold_history(
+    state: ConceptState,
+    reviews: Iterable[Review],
+    *,
+    desired_retention: float | None = None,
+) -> ConceptState:
     """Full-history FSRS fold (LLD §7.4).
 
     Rebuilds the card from scratch over the ordered review history, preferring a
@@ -131,9 +145,33 @@ def fold_history(state: ConceptState, reviews: Iterable[Review]) -> ConceptState
         if grade_value is None:
             continue
         reviewed_at = review.free_text_locked_at or review.created_at
-        fresh = apply_grade(fresh, FSRSGrade(grade_value), reviewed_at=reviewed_at)
+        fresh = apply_grade(
+            fresh,
+            FSRSGrade(grade_value),
+            reviewed_at=reviewed_at,
+            desired_retention=desired_retention,
+        )
     fresh.dirty = False
     return fresh
+
+
+def stability_snapshots(reviews: Iterable[Review]) -> list[tuple[datetime, float]]:
+    """(reviewed_at, stability) after each graded review, oldest first (BE-08).
+
+    The same fold as `fold_history`, kept step by step, so progress can ask
+    "what was this card's predicted recall on date X" without refolding per
+    date. Stability does not depend on desired retention, so none is passed.
+    """
+    state = ConceptState(user_id="", concept_id="")
+    out: list[tuple[datetime, float]] = []
+    for review in reviews:
+        grade_value = review.final_fsrs_grade or review.provisional_fsrs_grade
+        if grade_value is None:
+            continue
+        reviewed_at = review.free_text_locked_at or review.created_at
+        state = apply_grade(state, FSRSGrade(grade_value), reviewed_at=reviewed_at)
+        out.append((reviewed_at, state.stability))
+    return out
 
 
 # TODO(global-reparameterization): if the FSRS default parameters change in a

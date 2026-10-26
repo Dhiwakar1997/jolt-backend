@@ -276,16 +276,19 @@ async def test_both_stages_are_idempotent_on_client_request_id(api, runtime, mcp
 
 
 async def test_settings_defaults_and_patch(api):
-    assert await ok(await api.get("/v1/settings")) == {
+    def review_flags(body: dict) -> dict:
+        return {k: body[k] for k in ("retire_mastered", "allow_question_rewrite")}
+
+    assert review_flags(await ok(await api.get("/v1/settings"))) == {
         "retire_mastered": True,
         "allow_question_rewrite": False,  # decision D8: opt-in
     }
     patched = await ok(await api.patch("/v1/settings", json={"allow_question_rewrite": True}))
-    assert patched == {"retire_mastered": True, "allow_question_rewrite": True}
+    assert review_flags(patched) == {"retire_mastered": True, "allow_question_rewrite": True}
     patched = await ok(await api.patch("/v1/settings", json={"retire_mastered": False}))
-    assert patched == {"retire_mastered": False, "allow_question_rewrite": True}
-    assert await ok(await api.get("/v1/settings")) == patched
-    assert await ok(await api.patch("/v1/settings", json={})) == patched
+    assert review_flags(patched) == {"retire_mastered": False, "allow_question_rewrite": True}
+    assert review_flags(await ok(await api.get("/v1/settings"))) == review_flags(patched)
+    assert review_flags(await ok(await api.patch("/v1/settings", json={}))) == review_flags(patched)
 
 
 async def _practise(api, concept_id: str, **kw) -> tuple[dict, dict]:

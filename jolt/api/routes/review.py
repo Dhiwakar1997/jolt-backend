@@ -253,7 +253,17 @@ class ReviewSessionResponse(BaseModel):
     started_at: datetime
     track_id: Optional[str]
     items: list[QueueItemResponse]
-    done_today: int = Field(description="Answers given since midnight UTC")
+    done_today: int = Field(
+        description="Answers given since midnight in the user's time_zone (UTC by default)"
+    )
+    daily_review_cap: Optional[int] = Field(
+        default=None, description="The user's daily cap (BE-08); null: no cap"
+    )
+    capped: bool = Field(
+        default=False,
+        description="The daily cap cut this queue short: more questions are due than "
+        "what is left of today's cap",
+    )
 
 
 class ConceptRefResponse(BaseModel):
@@ -306,6 +316,8 @@ async def start_review_session(
         track_id=view.track_id,
         items=[QueueItemResponse(**item.__dict__) for item in view.items],
         done_today=view.done_today,
+        daily_review_cap=view.daily_review_cap,
+        capped=view.capped,
     )
 
 

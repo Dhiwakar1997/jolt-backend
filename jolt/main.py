@@ -61,7 +61,7 @@ def create_app(settings: Settings | None = None, runtime: Runtime | None = None)
     cfg = settings or get_settings()
     app = FastAPI(
         title="Jolt API",
-        version="0.6.0",
+        version="0.7.0",
         lifespan=lifespan,
         # Stable, readable operationIds (the handler name) for generated clients.
         generate_unique_id_function=lambda route: route.name,

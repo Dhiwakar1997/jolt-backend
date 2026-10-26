@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Jolt API",
-    "version": "0.6.0"
+    "version": "0.7.0"
   },
   "paths": {
     "/v1/auth/google": {
@@ -179,6 +179,91 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/MeResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Delete Account",
+        "description": "Delete the account and everything under it, irreversibly: Key Vault\nsecrets, uploaded files and exports, every document, the tokens (every\ndevice is signed out, every connected client cut off), then the user.",
+        "operationId": "delete_account",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteAccountRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/v1/export": {
+      "post": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Export Data",
+        "description": "Everything Jolt keeps for the user as one JSON file: profile, settings,\ntracks, concepts, questions (every version), FSRS states, reviews, gradings,\nreview and study sessions, sources metadata with every read (markdown\nincluded), sync runs, MCP tokens and API keys (metadata only, never secrets).\nA new export replaces the previous file.",
+        "operationId": "export_data",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExportResponse"
                 }
               }
             }
@@ -1777,6 +1862,68 @@
         }
       }
     },
+    "/v1/progress": {
+      "get": {
+        "tags": [
+          "progress"
+        ],
+        "summary": "Get Progress",
+        "operationId": "get_progress",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "weeks",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 104,
+              "minimum": 1,
+              "description": "Window length in weeks",
+              "default": 26,
+              "title": "Weeks"
+            },
+            "description": "Window length in weeks"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProgressResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/settings": {
       "get": {
         "tags": [
@@ -1849,6 +1996,9 @@
               }
             }
           },
+          "409": {
+            "description": "Conflict"
+          },
           "422": {
             "description": "Validation Error",
             "content": {
@@ -1873,6 +2023,7 @@
           "settings"
         ],
         "summary": "List Api Keys",
+        "description": "Stored provider keys, newest first: provider, last four characters, when added.",
         "operationId": "list_api_keys",
         "responses": {
           "200": {
@@ -2030,6 +2181,7 @@
           "settings"
         ],
         "summary": "Set Retention",
+        "description": "Deprecated: `PATCH /v1/settings {data_retention_days}` (the same value).\n\nData retention in days, not FSRS desired retention.",
         "operationId": "set_retention",
         "requestBody": {
           "content": {
@@ -2073,6 +2225,7 @@
             }
           }
         },
+        "deprecated": true,
         "security": [
           {
             "HTTPBearer": []
@@ -2106,10 +2259,10 @@
                   "type": "null"
                 }
               ],
-              "description": "The user's IANA time zone (e.g. Europe/London) for next_expected_at; default UTC",
+              "description": "An IANA time zone (e.g. Europe/London) for next_expected_at; default: the user's time_zone setting (BE-08)",
               "title": "Tz"
             },
-            "description": "The user's IANA time zone (e.g. Europe/London) for next_expected_at; default UTC"
+            "description": "An IANA time zone (e.g. Europe/London) for next_expected_at; default: the user's time_zone setting (BE-08)"
           }
         ],
         "responses": {
@@ -2425,6 +2578,19 @@
           "status": {
             "type": "string",
             "title": "Status"
+          },
+          "added_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Added At",
+            "description": "When this key was stored (replacing a key resets it)"
           }
         },
         "type": "object",
@@ -2811,6 +2977,41 @@
         ],
         "title": "CreatedMcpTokenResponse"
       },
+      "DailyReviews": {
+        "properties": {
+          "date": {
+            "type": "string",
+            "format": "date",
+            "title": "Date"
+          },
+          "reviews": {
+            "type": "integer",
+            "title": "Reviews",
+            "description": "Answers (stage 2) given that day"
+          }
+        },
+        "type": "object",
+        "required": [
+          "date",
+          "reviews"
+        ],
+        "title": "DailyReviews"
+      },
+      "DeleteAccountRequest": {
+        "properties": {
+          "confirm": {
+            "type": "string",
+            "const": "DELETE",
+            "title": "Confirm",
+            "description": "Must be the literal string \"DELETE\""
+          }
+        },
+        "type": "object",
+        "required": [
+          "confirm"
+        ],
+        "title": "DeleteAccountRequest"
+      },
       "DevSignInRequest": {
         "properties": {
           "email": {
@@ -2894,6 +3095,33 @@
           "detail"
         ],
         "title": "ErrorResponse"
+      },
+      "ExportResponse": {
+        "properties": {
+          "download_url": {
+            "type": "string",
+            "title": "Download Url",
+            "description": "Signed GET URL of the JSON bundle (served as an attachment)"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Expires At",
+            "description": "When the URL stops working"
+          },
+          "bytes": {
+            "type": "integer",
+            "title": "Bytes",
+            "description": "Size of the bundle"
+          }
+        },
+        "type": "object",
+        "required": [
+          "download_url",
+          "expires_at",
+          "bytes"
+        ],
+        "title": "ExportResponse"
       },
       "ExtractionResponse": {
         "properties": {
@@ -3038,6 +3266,66 @@
           "has_api_key"
         ],
         "title": "MeResponse"
+      },
+      "ModelStatusResponse": {
+        "properties": {
+          "mcp_server_url": {
+            "type": "string",
+            "title": "Mcp Server Url",
+            "description": "The address to paste into Claude / Codex"
+          },
+          "tokens": {
+            "items": {
+              "$ref": "#/components/schemas/McpTokenResponse"
+            },
+            "type": "array",
+            "title": "Tokens",
+            "description": "Connected clients (MCP tokens), newest first, with last use"
+          },
+          "last_sync": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SyncRunResponse"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The latest sync run, if any"
+          },
+          "health": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "late",
+              "never"
+            ],
+            "title": "Health",
+            "description": "As on GET /v1/sync/status"
+          },
+          "next_expected_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Expected At",
+            "description": "The next scheduled sync (SYNC_SCHEDULE_TIME in the user's time_zone), UTC"
+          }
+        },
+        "type": "object",
+        "required": [
+          "mcp_server_url",
+          "tokens",
+          "last_sync",
+          "health",
+          "next_expected_at"
+        ],
+        "title": "ModelStatusResponse"
       },
       "MovedResponse": {
         "properties": {
@@ -3186,6 +3474,93 @@
           "output"
         ],
         "title": "PatternMatchExample"
+      },
+      "ProgressResponse": {
+        "properties": {
+          "weeks": {
+            "type": "integer",
+            "title": "Weeks"
+          },
+          "retention": {
+            "type": "number",
+            "title": "Retention",
+            "description": "Mean predicted recall (0-1) now of active concepts: studied at least once and not retired. 0 when there are none"
+          },
+          "retention_weekly": {
+            "items": {
+              "$ref": "#/components/schemas/WeeklyRetention"
+            },
+            "type": "array",
+            "title": "Retention Weekly",
+            "description": "Oldest first, one point per week of the window that had active concepts; the current week's point is now"
+          },
+          "reviews_total": {
+            "type": "integer",
+            "title": "Reviews Total",
+            "description": "Answers in the window (sum of `daily`)"
+          },
+          "reviews_this_week": {
+            "type": "integer",
+            "title": "Reviews This Week",
+            "description": "Answers since Monday (user's time_zone)"
+          },
+          "answers_in_own_words": {
+            "type": "integer",
+            "title": "Answers In Own Words",
+            "description": "Stage 1 answers with any text in the window (answered or not)"
+          },
+          "streak_days": {
+            "type": "integer",
+            "title": "Streak Days",
+            "description": "Consecutive days with an answer, up to today (or yesterday while nothing is answered yet today); not limited to the window"
+          },
+          "concepts_learning": {
+            "type": "integer",
+            "title": "Concepts Learning",
+            "description": "Studied and not mastered"
+          },
+          "concepts_mastered": {
+            "type": "integer",
+            "title": "Concepts Mastered"
+          },
+          "sources_read": {
+            "type": "integer",
+            "title": "Sources Read",
+            "description": "Confirmed uploads with an active read"
+          },
+          "daily": {
+            "items": {
+              "$ref": "#/components/schemas/DailyReviews"
+            },
+            "type": "array",
+            "title": "Daily",
+            "description": "One entry per day of the window (weeks x 7 days up to today), oldest first"
+          },
+          "tracks": {
+            "items": {
+              "$ref": "#/components/schemas/TrackProgress"
+            },
+            "type": "array",
+            "title": "Tracks",
+            "description": "The user's tracks (newest first), then curated tracks they study"
+          }
+        },
+        "type": "object",
+        "required": [
+          "weeks",
+          "retention",
+          "retention_weekly",
+          "reviews_total",
+          "reviews_this_week",
+          "answers_in_own_words",
+          "streak_days",
+          "concepts_learning",
+          "concepts_mastered",
+          "sources_read",
+          "daily",
+          "tracks"
+        ],
+        "title": "ProgressResponse"
       },
       "QuestionVersionResponse": {
         "properties": {
@@ -3538,7 +3913,9 @@
           "retention_days": {
             "anyOf": [
               {
-                "type": "integer"
+                "type": "integer",
+                "maximum": 3650.0,
+                "minimum": 1.0
               },
               {
                 "type": "null"
@@ -3763,7 +4140,25 @@
           "done_today": {
             "type": "integer",
             "title": "Done Today",
-            "description": "Answers given since midnight UTC"
+            "description": "Answers given since midnight in the user's time_zone (UTC by default)"
+          },
+          "daily_review_cap": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Daily Review Cap",
+            "description": "The user's daily cap (BE-08); null: no cap"
+          },
+          "capped": {
+            "type": "boolean",
+            "title": "Capped",
+            "description": "The daily cap cut this queue short: more questions are due than what is left of today's cap",
+            "default": false
           }
         },
         "type": "object",
@@ -3847,6 +4242,29 @@
       },
       "SettingsPatch": {
         "properties": {
+          "theme": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Theme"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "desired_retention": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 0.97,
+                "minimum": 0.8
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Desired Retention"
+          },
           "retire_mastered": {
             "anyOf": [
               {
@@ -3868,13 +4286,62 @@
               }
             ],
             "title": "Allow Question Rewrite"
+          },
+          "daily_review_cap": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 500.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Daily Review Cap"
+          },
+          "data_retention_days": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 3650.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Retention Days"
+          },
+          "time_zone": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Time Zone"
           }
         },
         "type": "object",
-        "title": "SettingsPatch"
+        "title": "SettingsPatch",
+        "description": "Only the fields sent change. `null` resets `desired_retention` to the server\ndefault and clears `daily_review_cap` / `data_retention_days`."
       },
       "SettingsResponse": {
         "properties": {
+          "theme": {
+            "$ref": "#/components/schemas/Theme",
+            "description": "light | dark | system"
+          },
+          "desired_retention": {
+            "type": "number",
+            "title": "Desired Retention",
+            "description": "FSRS desired retention, 0.80-0.97: the chance of still remembering a concept when it comes due. Higher means shorter intervals and more reviews"
+          },
           "retire_mastered": {
             "type": "boolean",
             "title": "Retire Mastered",
@@ -3884,12 +4351,50 @@
             "type": "boolean",
             "title": "Allow Question Rewrite",
             "description": "Let the model rewrite a question after grading (decision D8, opt-in)"
+          },
+          "daily_review_cap": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Daily Review Cap",
+            "description": "Most answers a day; review sessions are cut to what is left. null: no cap"
+          },
+          "data_retention_days": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Retention Days",
+            "description": "How long to keep uploads, in days (stored preference; not enforced yet). null: keep everything. Not FSRS retention: see desired_retention"
+          },
+          "time_zone": {
+            "type": "string",
+            "title": "Time Zone",
+            "description": "IANA zone of the learner's day (today, streak, heatmap, upload dates)"
+          },
+          "model_status": {
+            "$ref": "#/components/schemas/ModelStatusResponse"
           }
         },
         "type": "object",
         "required": [
+          "theme",
+          "desired_retention",
           "retire_mastered",
-          "allow_question_rewrite"
+          "allow_question_rewrite",
+          "daily_review_cap",
+          "data_retention_days",
+          "time_zone",
+          "model_status"
         ],
         "title": "SettingsResponse"
       },
@@ -4809,7 +5314,7 @@
               }
             ],
             "title": "Next Expected At",
-            "description": "The next scheduled time (SYNC_SCHEDULE_TIME in `tz`), in UTC"
+            "description": "The next scheduled time (SYNC_SCHEDULE_TIME in `tz`, else in the user's time_zone), in UTC"
           },
           "health": {
             "type": "string",
@@ -4828,6 +5333,15 @@
           "health"
         ],
         "title": "SyncStatusResponse"
+      },
+      "Theme": {
+        "type": "string",
+        "enum": [
+          "light",
+          "dark",
+          "system"
+        ],
+        "title": "Theme"
       },
       "TouchedConcept": {
         "properties": {
@@ -4851,6 +5365,56 @@
           "is_new"
         ],
         "title": "TouchedConcept"
+      },
+      "TrackProgress": {
+        "properties": {
+          "track_id": {
+            "type": "string",
+            "title": "Track Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "notes",
+              "dsa_patterns"
+            ],
+            "title": "Kind"
+          },
+          "retention": {
+            "type": "number",
+            "title": "Retention",
+            "description": "Mean predicted recall of the track's active concepts"
+          },
+          "due": {
+            "type": "integer",
+            "title": "Due",
+            "description": "Concepts due now (retired ones left out)"
+          },
+          "mastered": {
+            "type": "integer",
+            "title": "Mastered"
+          },
+          "learning": {
+            "type": "integer",
+            "title": "Learning",
+            "description": "Studied and not mastered"
+          }
+        },
+        "type": "object",
+        "required": [
+          "track_id",
+          "name",
+          "kind",
+          "retention",
+          "due",
+          "mastered",
+          "learning"
+        ],
+        "title": "TrackProgress"
       },
       "TrackResponse": {
         "properties": {
@@ -5215,6 +5779,27 @@
           "type"
         ],
         "title": "ValidationError"
+      },
+      "WeeklyRetention": {
+        "properties": {
+          "week_start": {
+            "type": "string",
+            "format": "date",
+            "title": "Week Start",
+            "description": "Monday of the week, in the user's time_zone"
+          },
+          "retention": {
+            "type": "number",
+            "title": "Retention",
+            "description": "Mean predicted recall of active concepts at week end"
+          }
+        },
+        "type": "object",
+        "required": [
+          "week_start",
+          "retention"
+        ],
+        "title": "WeeklyRetention"
       }
     },
     "securitySchemes": {

@@ -35,6 +35,7 @@ from jolt.domain.models import (
     UserSettings,
 )
 from jolt.domain.scheduling import fold_history
+from jolt.domain.zones import user_zone
 from jolt.runtime import Runtime
 
 DAY = timedelta(days=1)
@@ -131,6 +132,9 @@ class SessionView:
     track_id: Optional[str]
     items: list[QueueItem]
     done_today: int
+    # BE-08: the user's daily cap and whether it cut this queue short.
+    daily_review_cap: Optional[int] = None
+    capped: bool = False
 
 
 @dataclass
@@ -198,6 +202,14 @@ class ReviewService:
     async def user_settings(self, user_id: str) -> UserSettings:
         user = await self._rt.repos.users.get_user(user_id)
         return user.settings if user is not None else UserSettings()
+
+    @staticmethod
+    def today_start(settings: UserSettings, now: Optional[datetime] = None) -> datetime:
+        """Midnight of the learner's today (their `time_zone`, BE-08), in UTC."""
+        zone = user_zone(settings)
+        local = (now or _now()).astimezone(zone)
+        midnight = datetime.combine(local.date(), datetime.min.time(), tzinfo=zone)
+        return midnight.astimezone(timezone.utc)
 
     async def _concept(self, state: ConceptState) -> Optional[Concept]:
         if state.concept_id not in self._concepts:
@@ -290,6 +302,15 @@ class ReviewService:
         if track_id is not None and await self._track(user_id, track_id) is None:
             raise ReviewNotFound("track not found")
 
+        done_today = await self.done_today(user_id, settings)
+        cap = settings.daily_review_cap
+        # BE-08: the daily cap bounds the queue by what is left of today.
+        # "Practise this concept" is an explicit ask and is not capped.
+        capped_limit = limit
+        if cap is not None and concept_id is None:
+            capped_limit = min(limit, max(0, cap - done_today))
+        capped = False
+
         picked: list[tuple[ConceptState, Question]] = []
         if concept_id is not None:
             # "Practise this concept": its next question, due or not, retired or not.
@@ -300,8 +321,15 @@ class ReviewService:
         elif kind != "dsa_patterns":  # no DSA tracks before BE-09
             due = await self.due_states(user_id, track_id=track_id, settings=settings)
             for state in interleave(due):
-                if len(picked) >= limit:
-                    break
+                if len(picked) >= capped_limit:
+                    if capped_limit == limit:
+                        break
+                    # A reviewable question beyond what the cap allows: the cap
+                    # (not the request's own limit) cut the queue short.
+                    if await self._active_questions(state.concept_id):
+                        capped = True
+                        break
+                    continue
                 question = self.pick_question(await self._active_questions(state.concept_id), state)
                 if question is not None:  # a concept with no question cannot be reviewed
                     picked.append((state, question))
@@ -324,7 +352,9 @@ class ReviewService:
             started_at=session.created_at,
             track_id=track_id,
             items=items,
-            done_today=await self.done_today(user_id),
+            done_today=done_today,
+            daily_review_cap=cap,
+            capped=capped,
         )
 
     async def _queue_item(
@@ -346,11 +376,19 @@ class ReviewService:
             rewritten=question.version > 1 and last is not None and question.created_at > last,
         )
 
-    async def done_today(self, user_id: str) -> int:
-        """Answers (stage 2) given since midnight UTC."""
-        midnight = _now().replace(hour=0, minute=0, second=0, microsecond=0)
-        reviews = await self._rt.repos.reviews.created_since(user_id, midnight)
-        return sum(1 for r in reviews if r.selected_index is not None)
+    async def done_today(self, user_id: str, settings: Optional[UserSettings] = None) -> int:
+        """Answers (stage 2) given since the learner's midnight (`time_zone`)."""
+        settings = settings or await self.user_settings(user_id)
+        midnight = self.today_start(settings)
+        # A review is created at stage 1; one started just before midnight and
+        # answered after it counts for the day it was answered.
+        since = midnight - DAY
+        reviews = await self._rt.repos.reviews.created_since(user_id, since)
+        return sum(
+            1
+            for r in reviews
+            if r.selected_index is not None and (r.stage2_at or r.created_at) >= midnight
+        )
 
     async def end_session(self, user_id: str, session_id: str) -> SessionSummary:
         session = await self._rt.repos.review_sessions.get_session(session_id, user_id)
@@ -408,14 +446,15 @@ class ReviewService:
     async def _upcoming(
         self, states: list[ConceptState], settings: UserSettings
     ) -> list[UpcomingDay]:
-        """Questions due on each of the next days (UTC dates), one per concept."""
-        today = _now().date()
+        """Questions due on each of the next days (the learner's dates), one per concept."""
+        zone = user_zone(settings)
+        today = _now().astimezone(zone).date()
         days = [today + timedelta(days=i) for i in range(1, UPCOMING_DAYS + 1)]
         counts = {d: 0 for d in days}
         for state in states:
             if state.due_at is None or is_retired(state, settings.retire_mastered):
                 continue
-            day = state.due_at.astimezone(timezone.utc).date()
+            day = state.due_at.astimezone(zone).date()
             if day in counts and await self._active_questions(state.concept_id):
                 counts[day] += 1
         return [UpcomingDay(date=d, questions=counts[d]) for d in days]
@@ -566,6 +605,8 @@ class ReviewService:
         re-reads and re-folds.
         """
         threshold = self._rt.settings.mastery_stability_days
+        # BE-08: the user's desired retention shapes the new intervals.
+        desired_retention = (await self.user_settings(user_id)).desired_retention
         folded: Optional[ConceptState] = None
         for _ in range(3):
             history = await self._rt.repos.reviews.history_for_concept(user_id, concept_id)
@@ -574,7 +615,7 @@ class ReviewService:
                 state = await self._rt.repos.concept_states.create(
                     ConceptState(user_id=user_id, concept_id=concept_id)
                 )
-            folded = fold_history(state, history)
+            folded = fold_history(state, history, desired_retention=desired_retention)
             folded.id = state.id
             folded.etag = state.etag
             folded.track_id = state.track_id

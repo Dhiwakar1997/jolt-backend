@@ -123,3 +123,23 @@ class Repository(Generic[T]):
             await self._c.delete_item(item=item_id, partition_key=partition_value)
         except cosmos_exc.CosmosResourceNotFoundError:
             pass
+
+    async def delete_partition(self, partition_value: str) -> int:
+        """Delete every document in one partition; returns how many (account
+        delete, BE-08). Raw ids, so a document that no longer validates against
+        the model is deleted too."""
+        if partition_value is None:
+            raise PartitionKeyRequired(
+                f"{self.container_name}.delete_partition needs a partition value"
+            )
+        iterator = self._c.query_items(
+            query="SELECT * FROM c", parameters=[], partition_key=partition_value
+        )
+        ids = [doc["id"] async for doc in iterator]
+        for item_id in ids:
+            await self.delete(item_id, partition_value)
+        return len(ids)
+
+    async def list_partition(self, partition_value: str) -> list[T]:
+        """Every document in one partition (data export, BE-08)."""
+        return await self._query("SELECT * FROM c", [], partition_value=partition_value)

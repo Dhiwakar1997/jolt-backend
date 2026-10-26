@@ -117,7 +117,10 @@ def test_retention_round_trips(client, auth, runtime, account):
     resp = client.put("/v1/settings/retention", json={"retention_days": 30}, headers=auth)
     assert resp.json() == {"retention_days": 30}
     stored = runtime.cosmos.container("users").all_items()
-    assert [u["retention_days"] for u in stored if u["id"] == account["user_id"]] == [30]
+    # BE-08: stored as settings.data_retention_days (the same value as PATCH).
+    mine = [u for u in stored if u["id"] == account["user_id"]]
+    assert [u["settings"]["data_retention_days"] for u in mine] == [30]
+    assert client.get("/v1/settings", headers=auth).json()["data_retention_days"] == 30
 
 
 def test_api_key_capture_list_delete(client, auth, runtime, monkeypatch):
@@ -140,14 +143,19 @@ def test_api_key_capture_list_delete(client, auth, runtime, monkeypatch):
         json={"provider": "anthropic", "key": "sk-test-1234"},
         headers=auth,
     )
-    assert ok.json() == {"provider": "anthropic", "last4": "1234", "status": "validated"}
+    added = ok.json()
+    added_at = added.pop("added_at")  # BE-08
+    assert added_at
+    assert added == {"provider": "anthropic", "last4": "1234", "status": "validated"}
     assert len(runtime.vault.names()) == 1
     # Only a reference reaches Cosmos, never the key itself.
     refs = runtime.cosmos.container("api_keys").all_items()
     assert "sk-test-1234" not in str(refs)
 
     listed = client.get("/v1/settings/api-key", headers=auth).json()
-    assert listed == [{"provider": "anthropic", "last4": "1234", "status": "stored"}]
+    assert listed == [
+        {"provider": "anthropic", "last4": "1234", "status": "stored", "added_at": added_at}
+    ]
 
     assert client.delete("/v1/settings/api-key/anthropic", headers=auth).status_code == 204
     assert runtime.vault.names() == []

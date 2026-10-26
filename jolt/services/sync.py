@@ -11,7 +11,7 @@ which is what lets a retroactive semantic grade correct an earlier provisional o
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timezone, tzinfo
 from typing import Optional
 
 from jolt.data.leases import SourceLeases
@@ -40,6 +40,7 @@ from jolt.domain.sync import (
     build_plan,
     upload_day,
 )
+from jolt.domain.zones import user_zone
 from jolt.runtime import Runtime
 from jolt.services.gradings import GradingService
 from jolt.services.reviews import ReviewService
@@ -191,6 +192,7 @@ class SyncService:
             gradings.append(PlanGrading(review.id, state.track_id if state else None))
 
         tracks = await TrackService(self._rt).list_tracks(user_id)
+        zone = await self._user_zone(user_id)
         return build_plan(
             claimable=claimable,
             claimed_by_run=mine,
@@ -200,7 +202,13 @@ class SyncService:
             tracks={t.id: PlanTrackInfo(t.id, t.name, t.agenda.status.value) for t in tracks},
             user_track_ids=[t.id for t in tracks if t.origin == TrackOrigin.USER],
             lease_seconds=self._rt.settings.lease_ttl_seconds,
+            zone=zone,
         )
+
+    async def _user_zone(self, user_id: str) -> tzinfo:
+        """The learner's time zone (BE-08): their D6 upload dates are local days."""
+        user = await self._rt.repos.users.get_user(user_id)
+        return user_zone(user.settings if user is not None else None)
 
     @staticmethod
     def _is_claimable(source: Source) -> bool:
@@ -349,9 +357,11 @@ class SyncService:
             if source is not None:
                 sources[sid] = source
 
+        zone = await self._user_zone(user_id)
+
         def day_of(sid: Optional[str]) -> Optional[str]:
             source = sources.get(sid) if sid else None
-            return upload_day(source.uploaded_at) if source else None
+            return upload_day(source.uploaded_at, zone) if source else None
 
         fallback = next((d for d in map(day_of, source_ids) if d), None)
         groups: dict[Optional[str], dict[str, list[str]]] = {}

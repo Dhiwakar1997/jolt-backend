@@ -14,7 +14,7 @@ re-read is ordinary source work that the claim step hands out with
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, time, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone, tzinfo
 from typing import Optional
 from zoneinfo import ZoneInfo
 
@@ -51,11 +51,12 @@ AGENDA_GUIDANCE = {
 }
 
 
-def upload_day(moment: datetime) -> str:
-    """The upload date (YYYY-MM-DD, UTC) a source belongs to, for decision D6."""
+def upload_day(moment: datetime, zone: tzinfo | None = None) -> str:
+    """The upload date (YYYY-MM-DD) a source belongs to, for decision D6: the
+    day in the learner's time zone (BE-08), UTC when none is given."""
     if moment.tzinfo is None:
         moment = moment.replace(tzinfo=timezone.utc)
-    return moment.astimezone(timezone.utc).date().isoformat()
+    return moment.astimezone(zone or timezone.utc).date().isoformat()
 
 
 # --------------------------------------------------------------------------- #
@@ -167,6 +168,7 @@ def build_plan(
     tracks: dict[str, PlanTrackInfo],
     user_track_ids: list[str],
     lease_seconds: int,
+    zone: tzinfo | None = None,
 ) -> SyncPlan:
     """The ordered work list for one `jolt_sync` call.
 
@@ -286,7 +288,7 @@ def build_plan(
             repeat="once, after the steps above",
         )
 
-    upload_dates = sorted({upload_day(s.uploaded_at) for s in source_work})
+    upload_dates = sorted({upload_day(s.uploaded_at, zone) for s in source_work})
     if done:
         next_hint = "Nothing left. The sync run is closed; stop here."
     else:

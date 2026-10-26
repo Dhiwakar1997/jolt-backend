@@ -18,6 +18,7 @@ from jolt.api.deps import RuntimeDep, UserDep
 from jolt.api.errors import UNAUTHORIZED
 from jolt.domain.models import SyncRun
 from jolt.domain.sync import next_expected, parse_schedule_time, sync_health
+from jolt.domain.zones import user_zone
 from jolt.services.sync_prompt import load_prompt
 from jolt.services.sync_runs import SyncRunService
 
@@ -57,7 +58,8 @@ class SyncRunResponse(BaseModel):
 class SyncStatusResponse(BaseModel):
     last_run: Optional[SyncRunResponse]
     next_expected_at: Optional[datetime] = Field(
-        description="The next scheduled time (SYNC_SCHEDULE_TIME in `tz`), in UTC"
+        description="The next scheduled time (SYNC_SCHEDULE_TIME in `tz`, else in the user's "
+        "time_zone), in UTC"
     )
     health: Literal["ok", "late", "never"]
 
@@ -107,11 +109,11 @@ async def get_sync_status(
     rt: RuntimeDep,
     tz: Optional[str] = Query(
         default=None,
-        description="The user's IANA time zone (e.g. Europe/London) for next_expected_at; "
-        "default UTC",
+        description="An IANA time zone (e.g. Europe/London) for next_expected_at; "
+        "default: the user's time_zone setting (BE-08)",
     ),
 ) -> SyncStatusResponse:
-    zone = _zone(tz)
+    zone = _zone(tz) if tz else user_zone(user.user.settings)
     runs = await SyncRunService(rt).recent(user.user_id, 1)
     last = runs[0] if runs else None
     now = datetime.now(timezone.utc)

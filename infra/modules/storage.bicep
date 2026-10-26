@@ -88,6 +88,42 @@ resource sources 'Microsoft.Storage/storageAccounts/blobServices/containers@2023
   }
 }
 
+// Data exports (POST /v1/export, BE-08) are written under `exports/` in the
+// container and handed out as a short-lived signed URL. The next export and
+// account delete remove them; this rule removes any left after a day.
+resource lifecycle 'Microsoft.Storage/storageAccounts/managementPolicies@2023-05-01' = {
+  parent: account
+  name: 'default'
+  properties: {
+    policy: {
+      rules: [
+        {
+          name: 'expire-exports'
+          enabled: true
+          type: 'Lifecycle'
+          definition: {
+            filters: {
+              blobTypes: [
+                'blockBlob'
+              ]
+              prefixMatch: [
+                '${containerName}/exports/'
+              ]
+            }
+            actions: {
+              baseBlob: {
+                delete: {
+                  daysAfterModificationGreaterThan: 1
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}
+
 resource appBlobData 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(account.id, appPrincipalId, blobDataContributorRoleId)
   scope: account

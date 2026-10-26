@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 from urllib.parse import quote
 
-from azure.storage.blob import BlobSasPermissions, generate_blob_sas
+from azure.storage.blob import BlobSasPermissions, ContentSettings, generate_blob_sas
 from azure.storage.blob.aio import BlobServiceClient
 
 from jolt.config import Settings, get_settings
@@ -36,8 +36,11 @@ class BlobGateway:
         """Namespace every blob under the owning user to keep the store legible."""
         return page_blob_path(user_id, source_id, filename, page)
 
-    async def _sas(self, blob_path: str, permission: BlobSasPermissions) -> str:
-        expiry = datetime.now(timezone.utc) + timedelta(seconds=self.settings.blob_sas_ttl_seconds)
+    async def _sas(
+        self, blob_path: str, permission: BlobSasPermissions, ttl_seconds: Optional[int] = None
+    ) -> str:
+        ttl = ttl_seconds or self.settings.blob_sas_ttl_seconds
+        expiry = datetime.now(timezone.utc) + timedelta(seconds=ttl)
         account_name = self.service.account_name
         if self.account_key:
             token = generate_blob_sas(
@@ -68,9 +71,39 @@ class BlobGateway:
         """Short-TTL PUT url scoped to exactly one blob path (LLD §7.1)."""
         return await self._sas(blob_path, BlobSasPermissions(create=True, write=True))
 
-    async def read_url(self, blob_path: str) -> str:
-        """Short-TTL GET url for an agent to read the original source (LLD §7.2)."""
-        return await self._sas(blob_path, BlobSasPermissions(read=True))
+    async def read_url(self, blob_path: str, ttl_seconds: Optional[int] = None) -> str:
+        """Short-TTL GET url for an agent to read the original source (LLD §7.2).
+        `ttl_seconds` overrides BLOB_SAS_TTL_SECONDS (export downloads, BE-08)."""
+        return await self._sas(blob_path, BlobSasPermissions(read=True), ttl_seconds)
+
+    async def upload_bytes(
+        self,
+        blob_path: str,
+        data: bytes,
+        content_type: str,
+        content_disposition: Optional[str] = None,
+    ) -> None:
+        """Write a blob from the server (the data export, BE-08). Overwrites."""
+        blob = self.service.get_blob_client(self.container, blob_path)
+        await blob.upload_blob(
+            data,
+            overwrite=True,
+            content_settings=ContentSettings(
+                content_type=content_type, content_disposition=content_disposition
+            ),
+        )
+
+    async def list_paths(self, prefix: str) -> list[str]:
+        """Blob names under `prefix` (e.g. `<user_id>/`)."""
+        container = self.service.get_container_client(self.container)
+        return [b.name async for b in container.list_blobs(name_starts_with=prefix)]
+
+    async def delete_prefix(self, prefix: str) -> int:
+        """Delete every blob under `prefix`; returns how many (account delete, BE-08)."""
+        names = await self.list_paths(prefix)
+        for name in names:
+            await self.delete(name)
+        return len(names)
 
     async def stat(self, blob_path: str) -> Optional[dict]:
         """Return {size} if the blob exists, else None (upload confirm check)."""
