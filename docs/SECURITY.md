@@ -1,7 +1,10 @@
 # Security review (BE-10)
 
 Review of the Jolt backend as of API 1.0.0 (BE-01 to BE-10 merged): code,
-infrastructure (`infra/`), container image and dependencies. Each finding has a
+infrastructure (`infra/`), container image and dependencies. **BE-11 (API
+1.1.0)** added the first outbound model calls, on users' own keys; they are
+reviewed in [Outbound model calls (BE-11)](#outbound-model-calls-be-11),
+findings S-41 to S-48. Each finding has a
 severity, a status and the files involved. Every fix has a test; most are in
 `tests/test_security.py`, the rest are named in the finding.
 
@@ -20,9 +23,9 @@ severity, a status and the files involved. Every fix has a test; most are in
 |---|---|---|---|---|
 | High | 2 | 0 | 0 | 2 |
 | Medium | 8 | 0 | 0 | 8 |
-| Low | 9 | 7 | 2 | 18 |
-| Info | 0 | 12 | 0 | 12 |
-| **Total** | **19** | **19** | **2** | **40** |
+| Low | 12 | 8 | 2 | 22 |
+| Info | 0 | 16 | 0 | 16 |
+| **Total** | **22** | **24** | **2** | **48** |
 
 | ID | Finding | Severity | Status |
 |---|---|---|---|
@@ -66,6 +69,14 @@ severity, a status and the files involved. Every fix has a test; most are in
 | S-38 | Container image | info | accepted |
 | S-39 | Stored content shown back to users; prompt injection | info | accepted |
 | S-40 | Backups keep deleted data for a while | info | accepted |
+| S-41 | Key custody on the model-call path | info | accepted |
+| S-42 | The free path makes no outbound call | info | accepted |
+| S-43 | A stolen app token could spend a user's provider credit | low | fixed |
+| S-44 | Notes and answers are sent to a third-party provider | low | accepted |
+| S-45 | Outbound targets are fixed by the server (no SSRF) | info | accepted |
+| S-46 | Prompt injection through notes and answers | info | accepted |
+| S-47 | Unbounded model inputs and outputs | low | fixed |
+| S-48 | Provider error bodies can echo the key | low | fixed |
 
 ---
 
@@ -524,6 +535,115 @@ backups keep documents 48 h (dev, periodic) / 30 days (prod, continuous), Key
 Vault soft delete keeps a deleted pepper 90 days in prod (API keys are purged
 at once, S-04). Accepted: these are the restore windows (`DEPLOY.md`, "Backups
 and restore"); the privacy policy should state them.
+
+---
+
+## Outbound model calls (BE-11)
+
+BE-11 adds the only calls Jolt makes to a model: `POST
+/v1/concepts/{id}/feedback` and `POST /v1/sources/{id}/read-now`, billed to the
+user's own Anthropic or OpenAI key (`jolt/credentials/inference.py`,
+`providers.py`, `jolt/services/feedback.py`, `read_now.py`, `spend.py`). Every
+protection above stays as it was: keys only in Key Vault (S-03, S-04), never
+in a response or a `422` (S-09), size limits (S-07, S-16), ownership on every
+route (S-32), redacted telemetry (S-01).
+
+**Egress is unchanged.** Container Apps already allows outbound HTTPS (key
+validation at capture has called the providers since BE-03); no firewall,
+NAT or private endpoint was added or needed. The calls go to
+`ANTHROPIC_API_BASE` / `OPENAI_API_BASE` (defaults `https://api.anthropic.com`,
+`https://api.openai.com`) over TLS with certificate verification (httpx
+defaults), with a per-call timeout (45 s feedback, 150 s read now).
+
+### S-41 Key custody on the model-call path — accepted (info)
+
+`call_model` reads the plaintext from Key Vault (Managed Identity) at the
+moment of the call, holds it in a local variable, puts it only in the
+provider's auth header (`x-api-key` / `Authorization: Bearer`) and deletes the
+reference when the call ends. It is never cached (the feedback cache holds the
+model's answer, not the key), never in Cosmos, never in a log line (the
+`model call` line carries provider, kind and outcome; httpx's own INFO line
+carries the URL only), never in a metric attribute (`jolt.model.calls`,
+`jolt.model.tokens`: provider, kind, outcome, direction), never in a span
+(the outbound client is not instrumented and headers are never recorded),
+never in an error (S-48). Test:
+`tests/test_key_backed.py::test_the_key_never_appears_in_logs_errors_telemetry_or_documents`
+(logs at DEBUG, every response body, every Cosmos document and blob including
+the export, every metric attribute; only the vault fake holds the key).
+
+### S-42 The free path makes no outbound call — accepted (info)
+
+Without a stored key (or without one for the provider named), both routes
+answer `403 key_required` right after the ownership check: `resolve_provider`
+reads only the Cosmos key references, before Key Vault, the blob or any
+provider. The source is not claimed either. Test:
+`test_without_a_key_no_route_attempts_an_outbound_call` (the real network
+transport is replaced by one that records and fails; it sees zero requests),
+`test_a_key_for_the_other_provider_is_not_used`.
+
+### S-43 A stolen app token could spend a user's provider credit — fixed (low)
+
+An app token now unlocks paid calls on the user's key. Fix: a per-user daily
+spend guard (`jolt/services/spend.py`): `MODEL_DAILY_REQUEST_CAP` (50) requests
+and `MODEL_DAILY_TOKEN_CAP` (2,000,000) tokens per UTC day, counted on the user
+document, a request reserved (etag-guarded) before it is sent so concurrent
+calls cannot pass the cap; over it `429 spend_limit` until midnight UTC. The
+per-token REST rate limit (S-06) and app token expiry (S-05) still apply, and
+the feedback cache makes repeated asks free. A cap of 0 turns the features off
+for everyone. Tests: `test_spend_guard_caps_requests_per_day`,
+`test_spend_guard_caps_tokens_and_zero_turns_it_off`.
+
+### S-44 Notes and answers are sent to a third-party provider — accepted (low)
+
+Read now sends the note's original pages, feedback the concept text and the
+learner's answers, to the provider whose key the user stored. Accepted: the
+user opts in twice (adding a key, pressing the button), the data goes to their
+own account with that provider under its terms, and only the one note or
+concept is sent. OpenAI calls set `store: false`. The privacy policy and the
+FE-12 copy should say that these features send the note to the user's model
+provider.
+
+### S-45 Outbound targets are fixed by the server (no SSRF) — accepted (info)
+
+No request takes a URL: the provider base URLs are server settings, the files
+are read from Blob by server-built paths of the caller's own source
+(`<user>/<source>/<page>-<name>`, S-14), and the request body names only a
+provider from a fixed list. A page's real type is checked from its first bytes
+(`sniff`) before it is sent, so a file uploaded as `image/jpeg` that is not an
+image is refused (`415`), not forwarded.
+
+### S-46 Prompt injection through notes and answers — accepted (info)
+
+A crafted note or answer can steer only that user's own read or feedback: the
+model has no tools, both prompts state the learner's material is data, and the
+result is validated and stored like an agent's (S-39: never rendered by the
+API). Read now writes only to the caller's own track, through the same
+ownership-checked services as `jolt_store_extraction`.
+
+### S-47 Unbounded model inputs and outputs — fixed (low)
+
+Inputs: images up to `READ_NOW_MAX_IMAGE_BYTES` (3.75 MB) each, a note up to
+`READ_NOW_MAX_TOTAL_BYTES` (20 MiB), checked on the stored sizes before the
+download and again on the bytes (`413 source_too_large`); feedback sends at
+most 20 answers, each cut at 1,500 characters. Outputs: `max_tokens` per call
+(`MODEL_*_MAX_TOKENS`), and the stored answer is bounded like an MCP call
+(S-07): markdown 500,000 characters, 200 concepts, 3 questions of exactly 4
+options each, texts 20,000 characters, feedback 2,000. Tests:
+`test_read_now_size_and_type_limits`, `test_request_validation_of_the_key_backed_bodies`.
+
+### S-48 Provider error bodies can echo the key — fixed (low)
+
+OpenAI's `401` message repeats part of the key ("Incorrect API key provided:
+sk-…"). Provider bodies are read only to classify the error (out of credit or
+rate limit) and never repeated: every error is one of Jolt's own sentences with
+a `code` (`ModelCallError`), and as a second guard a detail containing the key
+is masked. Tests: `test_an_invalid_key_is_key_invalid_and_never_echoed`,
+`test_adapters_map_statuses_without_repeating_the_body`.
+
+**Deploy pending:** with real keys after the dev deploy, confirm that
+`jolt.model.*` metrics and `model call` traces reach Application Insights
+without key material, and that Key Vault audit logs (S-03) show one secret get
+per model call.
 
 ---
 

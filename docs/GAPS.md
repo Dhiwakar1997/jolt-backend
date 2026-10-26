@@ -2,7 +2,7 @@
 
 Each screen in the Jolt 2.0 design (Figma prototype, frames listed in
 `Jolt/design/frames/index.json`; screens per pass in `Jolt/docs/v2/PLAN.md` §5 and
-the FE pass briefs) compared with the API as of BE-10 (BE-07 to BE-10 merged, security review done, API 1.0.0) ([`API.md`](./API.md)). For
+the FE pass briefs) compared with the API as of BE-11 (MVP merged, security review done, key-backed feedback and read now, API 1.1.0) ([`API.md`](./API.md)). For
 each gap, the backend pass whose brief covers it.
 
 Status: **ready** (today's endpoints are enough) · **partial** (some data
@@ -54,7 +54,8 @@ Frame numbers are phone / web / tablet.
 | Lock toggle | 11 / 28 / 42 | Lock / unlock | `POST /v1/tracks/{id}/agenda/lock` and `/unlock` | ready | — |
 | "Added to the syllabus from your notes" | 11 / 28 / 42 | Per-item provenance (auto-added vs authored) | Per-item `source` on every agenda item and Track detail row (BE-07) | ready | — |
 | Concept | 12 / 29 / 43 | Summary, source and page, answer timeline (date, your words, correct, grade, feedback, question version), adaptive question note, FSRS state | `GET /v1/concepts/{id}` (BE-07); `POST /v1/concepts/{id}/unretire` (BE-06) | ready | `page` is set only when the agent passes it (`jolt_log_session` / reconciliation `page`) |
-| Feedback panel gate | 12 / 29 / 43 | `has_api_key` | `has_api_key` on `GET /v1/me` (added in BE-03 for BE-08) | ready | panel content BE-11 |
+| Feedback panel gate | 12 / 29 / 43 | `has_api_key` | `has_api_key` on `GET /v1/me` (added in BE-03 for BE-08); a `403 key_required` from the routes also means "open the key sheet" | ready | — |
+| Feedback panel | 12 / 29 / 43 | Feedback on the learner's understanding from their timeline, with a next step | `POST /v1/concepts/{id}/feedback` → `{feedback, next_step, cached, usage}` (BE-11) | ready | — |
 | "Something's wrong with this concept" | 12 / 29 / 43 | Store a correction note for the next sync | `POST /v1/concepts/{id}/correction` → `jolt_sync.pending_corrections` (the plan is not `done` while notes wait, and lists `jolt_get_pending_corrections` → `jolt_correct_concept`), the changed text is a `concept_updated` change on the run (BE-07) | ready | — |
 | DSA track | 13 / 30 / 44 | Curated track, enrol, patterns as syllabus, `pattern_match` questions, decision tree, library | `GET /v1/tracks/catalog`, `POST`/`DELETE /v1/tracks/{id}/enrol`; Track detail lists the 24 patterns (`new` until first answered); `GET /v1/tracks/{id}/library` (when to reach, tells, pseudocode, walkthrough, `animation_id`) and `/decision-tree`; `POST /v1/review-sessions {kind: dsa_patterns, time_budget_minutes, difficulty_mix}` → `pattern_match` items; stage 2 `match` / `question_title` / `leetcode_url` (BE-09) | ready | Animations stay in the front end (`animation_id` keys v1's reels) |
 
@@ -275,8 +276,60 @@ Frame numbers are phone / web / tablet.
 
 | Feature | Needs | Status | Covered by |
 |---|---|---|---|
-| Concept feedback, result "Explain" | `POST /v1/concepts/{id}/feedback` on the user's key | missing | BE-11 |
-| Read now with my key | `POST /v1/sources/{id}/read-now` | missing | BE-11 |
+| Concept feedback, result "Explain" | `POST /v1/concepts/{id}/feedback` on the user's key (`review_id` for "Explain") | ready | BE-11 |
+| Read now with my key | `POST /v1/sources/{id}/read-now` | ready | BE-11 |
+
+**BE-11 decisions and follow-ups for the key-backed features**
+
+- **No streaming.** Both routes are one synchronous JSON request (timeouts 45 s
+  feedback, 150 s read now, under the 240 s ingress limit). Feedback is short
+  and cached, a read is stored as a whole (it cannot be shown half done), and
+  typed errors need the status before the body. FE-12's panel shows a loading
+  state, not a stream. Streaming feedback can be added later as a separate
+  `text/event-stream` route without changing this one.
+- **Typed errors** `{detail, code}` (`KeyBackedErrorResponse`): `key_required`
+  403 (never 401, which the app treats as signed out), `key_invalid` 422 (as
+  `POST /v1/settings/api-key` answers a rejected key), `out_of_credit` 402,
+  `rate_limited` / `spend_limit` 429 with `Retry-After`, `provider_error` 502 /
+  504, plus `no_answers`, `source_busy`, `track_required`, `source_unreadable`
+  409, `source_too_large` 413, `unsupported_page_type` 415 (API.md section 8).
+- **Which key**: `provider` in the body, else the most recently added key.
+- **Feedback cache on the card** (`feedback`, `explanation`), keyed by a
+  fingerprint of the timeline (answers, grades, grader feedback), the concept
+  text and the prompt version: "until the next review", and also until a grade
+  lands, since the nightly grading changes what the feedback should say.
+- **Read now is recorded on the read** (`Extraction.via = read_now`,
+  `provider`, `client_label = "Read now"`, `model_id` = the model that
+  answered) and in the daily usage, **not on a sync run**: a sync run drives
+  sync health, `first_sync_at` and "New since last sync", which belong to the
+  nightly client. Concepts a read now adds do not appear in "New since last
+  sync"; the response lists them.
+- **Read now uses the reconciliation path for a first read too** (all `new`),
+  so it needs no `jolt_log_session`; it therefore writes no D6 study session
+  (`sessions`, used only by the export).
+- **One active read** is kept by `store_extraction`; a source a sync holds
+  under a live lease answers `source_busy`, and read now holds its own lease so
+  a sync cannot claim the source meanwhile. A failure before the read is stored
+  puts the source back as it was (the nightly sync reads it).
+- **Originals only, no conversion.** Pages go to the provider as uploaded:
+  JPEG / PNG / WebP up to 3.75 MB each (providers cap an image near 5 MB in
+  base64) and PDFs, up to 20 MiB per note. HEIC and larger photos answer 415 /
+  413 and wait for the sync (the agent fetches them itself). The app should
+  keep converting HEIC to JPEG before upload (BE-05 note), which also makes
+  them readable now. → a later pass could downscale photos server-side.
+- **Spend guard per UTC day** on the user document (requests and tokens),
+  defaults 50 requests / 2M tokens. Not in the user's time zone: a cap is a
+  safety net, not a product number. Not shown in Settings yet (the responses
+  carry `usage`). → FE-12 may show "N of 50 today".
+- **Model choice is a setting per provider** (`ANTHROPIC_MODEL`,
+  `OPENAI_MODEL`, Bicep `anthropicModel` / `openaiModel`). **Deploy pending:**
+  confirm both defaults answer with real keys after the dev deploy, and that
+  OpenAI's PDF input (`input_file`) and Anthropic's refusal fallback are
+  accepted for the configured models (each can be switched off:
+  `ANTHROPIC_REFUSAL_FALLBACK`, `*_SEND_EFFORT` / `*_SEND_REASONING`).
+- **Prompt injection** stays inside the user's own account: a note or an
+  answer that tries to steer the model can only change that user's own read or
+  feedback (both prompts say the material is data), and the model has no tools.
 
 ---
 

@@ -11,9 +11,15 @@ Regenerate both with `python scripts/export_contract.py` after changing a route,
 tool, a tool description or `jolt/mcp/schemas.py`. This file is written by hand:
 update it in the same change.
 
-State: API version **1.0.0** (BE-10 security review): the API is complete for
-the MVP. Every screen of the Jolt 2.0 MVP has its endpoints ([`GAPS.md`](./GAPS.md);
-what is left is post-MVP, BE-11). 1.0.0 adds no route; it changes, on top of
+State: API version **1.1.0** (BE-11): two routes that run on the **user's own
+API key** (Anthropic or OpenAI, stored with `POST /v1/settings/api-key`):
+understanding feedback (`POST /v1/concepts/{id}/feedback`) and read now
+(`POST /v1/sources/{id}/read-now`), with typed errors (`{detail, code}`), a
+per-user daily spend guard and `via` on reads (section 8). Without a stored key
+both answer `403 key_required` and make no outbound call. Nothing else changed.
+
+1.0.0 (BE-10 security review) completed the API for the MVP: every screen of
+the Jolt 2.0 MVP has its endpoints ([`GAPS.md`](./GAPS.md)). 1.0.0 adds no route; it changes, on top of
 0.9.0: app tokens expire after `APP_TOKEN_IDLE_DAYS` (30) days without use
 (`401 "token expired; sign in again"`), Google sign-in refuses an unverified
 e-mail, `422` bodies no longer echo the rejected `input`, MCP tool inputs have
@@ -49,7 +55,7 @@ Screens that have no endpoint yet are listed in [`GAPS.md`](./GAPS.md).
 | **Auth** | `Authorization: Bearer <token>`. Two opaque token kinds: an **app token** (`jolt_app_…`, one per signed-in device, from sign-in) on every `/v1` route except the sign-in routes, and an **MCP token** (`jolt_live_…`, one per connected client, from `POST /v1/mcp-tokens`) on the MCP connection. Each surface refuses the other kind with `401` (`detail: "wrong token kind: …"`); opening `/mcp/sse` with a missing, revoked or wrong-kind token is a `401` before the stream starts. On `/mcp/sse` only, the MCP token may instead ride the URL as `?token=` (for connectors that take only a URL; `MCP_QUERY_TOKEN_ENABLED`, redacted from access logs); client setup in [`CONNECT.md`](./CONNECT.md). **Expiry** (BE-10): an app token unused for `APP_TOKEN_IDLE_DAYS` (30) days is deleted and refused with `401` `{"detail": "token expired; sign in again"}`; every request renews it, so an app in use never sees it. MCP tokens do not expire. Revoking (sign-out, `DELETE /v1/mcp-tokens/{id}`) takes effect on the next request. A bare token without `Bearer` is also accepted. **MCP sessions**: a session opened with an `Authorization` header accepts `POST /mcp/messages/` only with the same token (anything else: `404`, like an unknown session); a session opened with `?token=` is reached by its secret `session_id` alone. |
 | **Scope** | Identity comes only from the token. No route or tool takes a `user_id`. |
 | **Ownership** (BE-07, A16, BE-09) | A **track** is *visible* when it is the caller's or curated, *owned* only when it is the caller's: reads take a visible track, writes (agenda, rename, archive, logging concepts) an owned one, so curated tracks are read-only. A **concept** is the caller's when they hold its card (FSRS state). On a curated track the concepts are Jolt's (`curated`), readable by everyone and written by no client: no questions, text changes or correction notes, even once the learner holds a card for one. A **question** is the caller's when its concept is; a curated `pattern_match` question is answerable by learners enrolled in its track (their card is created by the first answer). Anything else answers exactly like an unknown id (404 / the tool's not-found). |
-| **Errors (REST)** | Non-2xx bodies are `{"detail": "<message>"}` (`ErrorResponse`). Request-validation failures are `422` with `{"detail": [ {loc, msg, type, ctx?} ]}` (`HTTPValidationError`); the rejected value (`input`) is never echoed, since it can be a key or a token (BE-10). Unexpected errors are a bare `500` (no trace). Responses carry `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, a `default-src 'none'` CSP, `Cache-Control: no-store` on `/v1` and `/mcp`, and HSTS in prod. `/docs`, `/redoc` and the live `/openapi.json` exist outside prod only (`API_DOCS_ENABLED`); the contract is `contract/openapi.json`. `401` always carries `WWW-Authenticate: Bearer`. Every route can also answer `429` and every route with a body `413` (next row); the per-route tables below do not repeat them. |
+| **Errors (REST)** | Non-2xx bodies are `{"detail": "<message>"}` (`ErrorResponse`). Request-validation failures are `422` with `{"detail": [ {loc, msg, type, ctx?} ]}` (`HTTPValidationError`); the rejected value (`input`) is never echoed, since it can be a key or a token (BE-10). Unexpected errors are a bare `500` (no trace). Responses carry `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, a `default-src 'none'` CSP, `Cache-Control: no-store` on `/v1` and `/mcp`, and HSTS in prod. `/docs`, `/redoc` and the live `/openapi.json` exist outside prod only (`API_DOCS_ENABLED`); the contract is `contract/openapi.json`. `401` always carries `WWW-Authenticate: Bearer`. Every route can also answer `429` and every route with a body `413` (next row); the per-route tables below do not repeat them. The two key-backed routes (section 8) answer their own failures as `{"detail": "<message>", "code": "<code>"}` (`KeyBackedErrorResponse`), so the app can branch on `code`. |
 | **Limits** (BE-10) | **Rate**: per token, `RATE_LIMIT_REST_PER_MINUTE` (120) requests a minute on `/v1` (bursts up to that many, refilling continuously); requests without a token (sign-in) count per client IP; and a coarse `RATE_LIMIT_IP_PER_MINUTE` (600) per IP over `/v1` and `/mcp`. Over a limit: **`429`** `{"detail": "rate limit exceeded; retry in N s"}` with **`Retry-After: N`** (seconds; exposed to browsers through CORS). The app should wait `Retry-After` and retry once; no route is rate-limited differently. Limits are in-process, **per replica** (prod runs one). **Size**: a body over `REQUEST_MAX_BYTES` (1 MiB; `MCP_REQUEST_MAX_BYTES`, 4 MiB, on `/mcp`) answers **`413`** `{"detail": "request body larger than N bytes"}` before the route runs. Files never go through the API (uploads PUT straight to Blob), so only a broken client meets it. `GET /health` and CORS preflights are never limited. |
 | **Errors (MCP)** | Tools marked *`{error}` on* return `{"error": "<message>"}` for the listed recoverable cases. Every other failure (missing/invalid token, unknown source, grade outside 1–4) is raised and arrives as an MCP tool error (`isError: true`). **Rate limit** (BE-10): `RATE_LIMIT_MCP_PER_MINUTE` (300) tool calls a minute per MCP token; an over-limit call is an MCP tool error `rate limit exceeded; retry in N s` (the call's HTTP POST was already accepted, so there is no HTTP 429 for it); opening `/mcp/sse` counts against the same budget and is refused with `429` + `Retry-After` when it is spent. A POST body over 4 MiB is a `413`. **Input sizes** (BE-10, `jolt/mcp/input_limits.py`): at most 200 concepts per `jolt_log_session` / `jolt_store_extraction` / `jolt_diff_extractions` call, 500 syllabus items, 20 questions, 10 options, 100 gradings, 50 source ids; `markdown` up to 500,000 characters, ids and keys up to 200, other text up to 20,000; `limit` 1–200. Over a limit the call fails before writing anything, as an MCP tool error `input too large: <field> has N items; at most M per call`. |
 | **Types** | IDs are opaque strings (32-hex today). Timestamps are ISO-8601 UTC. FSRS grades: 1 Again, 2 Hard, 3 Good, 4 Easy. |
@@ -267,7 +273,9 @@ fresh attempts).
 `Read = {id, source_id, number (1-based, oldest first), model_id, client_label
 (the MCP token's label), confidence, low_confidence, status: active|superseded,
 created_at, concepts_found, questions_written, concepts: [{concept_id, title,
-is_new}]}`. Concepts are credited to the source's active read when
+is_new}], via: sync|read_now}`. `via` (BE-11): `sync` for a read a nightly
+client stored over MCP, `read_now` for one made on the user's key (section 8;
+`client_label` is then `"Read now"` and `model_id` the model that answered). Concepts are credited to the source's active read when
 `jolt_log_session` names their `source_id`; `questions_written` counts questions
 `jolt_create_questions` wrote for those concepts. `is_new` is `true` for a concept
 first found by that read and `false` for one a reconciled re-read carried over
@@ -286,7 +294,8 @@ read_count (reads stored, for the "Reads" column)}`.
 | GET | `/v1/sources` | token | query `track_id?`, `status?` (`unprocessed\|in_flight\|processed\|failed`) | `[Source]`, newest first; confirmed uploads only | 401, 422 |
 | GET | `/v1/sources/{source_id}` | token | — | `Source` + `{pages: [{index, url, content_type, size}], active_read: Read + {markdown} \| null, reads: [Read]}`. `url` is a signed GET of the original file (`BLOB_SAS_TTL_SECONDS`); `reads` newest first | 401, 404 `source not found` |
 | POST | `/v1/sources/{source_id}/reread` | token | `{preferred_model?: string\|null}` (≤ 64 chars, e.g. `claude`, `codex`) | `{source_id, requested_at, preferred_model}`. The next `jolt_sync` lists it in `reread_sources`; a request made while a sync holds the source survives that sync | 401, 404 |
-| GET | `/v1/sources/{source_id}/extractions` | token | — | `[{id, source_id, confidence, model_id, status: active\|superseded, created_at}]`, newest first. No markdown (use the detail route). | 401, 404 `source not found` |
+| POST | `/v1/sources/{source_id}/read-now` | token | `{provider?: anthropic\|openai}` | Read the note now on the user's own key: section 8 | 401, 404, 403 `key_required`, and section 8's errors |
+| GET | `/v1/sources/{source_id}/extractions` | token | — | `[{id, source_id, confidence, model_id, status: active\|superseded, created_at, via}]`, newest first. No markdown (use the detail route). | 401, 404 `source not found` |
 | GET | `/v1/storage` | token | — | `{bytes_used, source_count, page_count}` over the caller's confirmed uploads | 401 |
 
 The Reader gets **originals only**: `pages[].url` points at the uploaded file
@@ -491,6 +500,7 @@ FSRS); a DSA pattern never lists its problems in `current_question` /
 | Method | Path | Auth | Request | Response | Errors |
 |---|---|---|---|---|---|
 | GET | `/v1/concepts/{concept_id}` | token | — | `ConceptDetail` | 401, 404 `concept not found` |
+| POST | `/v1/concepts/{concept_id}/feedback` | token | `{review_id?, provider?: anthropic\|openai}` | Feedback on the learner's understanding, on their own key: section 8 | 401, 404, 403 `key_required`, 409 `no_answers`, and section 8's errors |
 | POST | `/v1/concepts/{concept_id}/correction` | token | `{note: string (1–2000, not blank)}` | `{concept_id, note (trimmed), status: "queued", created_at}`. Stored on the caller's card (up to 20 notes); the next `jolt_sync` counts it in `pending_corrections`, `jolt_get_pending_corrections` lists it and `jolt_correct_concept` clears it. | 401, 404, 409 concurrent change, 422 |
 
 | Tool | Arguments | Returns | Notes / errors |
@@ -528,7 +538,7 @@ next_expected_at}`: the same data as `GET /v1/mcp-tokens` and `GET
 |---|---|---|---|---|---|
 | GET | `/v1/settings` | token | — | `Settings` + `{model_status: ModelStatus}` | 401 |
 | PATCH | `/v1/settings` | token | Any subset of `Settings`. Only the fields sent change. `null` is allowed for `desired_retention` (reset), `daily_review_cap` and `data_retention_days` (clear), and refused for the others. | Same as `GET` | 401, 409 concurrent change, 422 (out of range, unknown theme or time zone, `null` where not allowed) |
-| POST | `/v1/settings/api-key` | token | `{provider: anthropic\|openai, key}` (key 1–512 characters) | `{provider, last4, status: "validated", added_at}`. The key is checked with the provider, stored in Key Vault, and only a reference is kept in Cosmos. Replacing a provider's key resets `added_at`. | 400 unsupported provider; 401; 422 provider rejected the key (string `detail`) or invalid body |
+| POST | `/v1/settings/api-key` | token | `{provider: anthropic\|openai, key}` (key 1–512 characters) | `{provider, last4, status: "validated", added_at}`. The key is checked with the provider (an unbilled models-list call to `ANTHROPIC_API_BASE` / `OPENAI_API_BASE`), stored in Key Vault, and only a reference is kept in Cosmos. Replacing a provider's key resets `added_at`. The key pays for section 8's calls. | 400 unsupported provider; 401; 422 provider rejected the key (string `detail`) or invalid body |
 | GET | `/v1/settings/api-key` | token | — | `[{provider, last4, status: "stored", added_at}]`, newest first. `has_api_key` on `GET /v1/me` says whether there is any. | 401 |
 | DELETE | `/v1/settings/api-key/{provider}` | token | — | 204 (Key Vault secret deleted and purged first, then the reference; if Key Vault refuses the delete, the call fails and the reference stays, so it can be retried) | 400 unsupported provider; 401; 500 Key Vault refused |
 | PUT | `/v1/settings/retention` | token | `{retention_days?: int\|null}` (1–3650) | `{retention_days}`. **Deprecated**: the same value as `data_retention_days` in `PATCH /v1/settings`. | 401, 422 |
@@ -613,6 +623,122 @@ playable unless `--prune`. The TS sources are read directly (plain data
 literals); `--content` takes a JSON export instead
 (`scripts/export_dsa_from_jolt.mjs`, to become `npm run export:dsa` in Jolt).
 In memory mode, `DSA_SEED_FROM=<Jolt repo>` runs the same import at startup.
+
+---
+
+## 8. Key-backed feedback and read now (BE-11)
+
+The only model calls Jolt itself makes, both **billed to the user's own key**
+(added in Settings with `POST /v1/settings/api-key`; the plaintext is read from
+Key Vault for the call and dropped). Both are synchronous: the app waits for
+the answer (feedback runs only while the app is open), and neither streams.
+Providers: Anthropic (Messages API) and OpenAI (Responses API, `store: false`);
+the model is a server setting per provider (`ANTHROPIC_MODEL`, `OPENAI_MODEL`)
+and every answer reports the `model_id` that wrote it.
+
+**Which key.** `provider` in the body names one; without it the most recently
+added key pays. **Free path:** with no stored key (or none for the named
+provider) both routes answer `403 key_required` after the ownership check and
+before anything else; no request leaves the server.
+
+**Spend guard.** Per user and UTC day, at most `MODEL_DAILY_REQUEST_CAP` (50)
+model requests and `MODEL_DAILY_TOKEN_CAP` (2,000,000) input + output tokens.
+A request is counted when it is sent (a failed one too); tokens when the
+provider reports them; an answer served from the feedback cache costs nothing.
+Over either cap: `429 spend_limit` with `Retry-After` (seconds to midnight UTC).
+A cap of 0 turns both features off. Every success returns `usage`.
+
+`ModelUsage = {input_tokens, output_tokens (this call; 0 when cached),
+requests_today, daily_request_cap, tokens_today, daily_token_cap}`.
+
+**Errors** (`{detail, code}`; `detail` is Jolt's own sentence for the learner,
+never the provider's text and never the key):
+
+| Status | `code` | When | App |
+|---|---|---|---|
+| 403 | `key_required` | No stored key (for the named provider) | Open the API key sheet |
+| 422 | `key_invalid` | The provider refused the stored key (401 / 403) | Ask for a new key |
+| 402 | `out_of_credit` | The provider account has no credit (Anthropic 402 or "credit balance is too low", OpenAI `insufficient_quota`) | Say so; the user tops up with the provider |
+| 429 | `rate_limited` | The provider rate-limits the key; `Retry-After` from the provider (30 s when it gave none) | Wait and retry |
+| 429 | `spend_limit` | Jolt's daily cap is reached; `Retry-After` = midnight UTC | Say so |
+| 502 | `provider_error` | The provider failed (5xx, overloaded, refusal, unknown model) or its answer could not be used | Retry later |
+| 504 | `provider_error` | No answer within `MODEL_FEEDBACK_TIMEOUT_SECONDS` (45) / `MODEL_READ_TIMEOUT_SECONDS` (150) | Retry later |
+| 409 | `no_answers` | Feedback on a concept with no answer yet | Hide the panel until the first answer |
+| 409 | `source_busy` | Read now on a source a nightly sync (or another read now) holds under its lease | Retry shortly |
+| 409 | `track_required` | Read now on a source with no track while the user has no track | Create a track first |
+| 409 | `source_unreadable` | A page is missing from storage | — |
+| 413 | `source_too_large` | An image page over `READ_NOW_MAX_IMAGE_BYTES` (3.75 MB) or the note over `READ_NOW_MAX_TOTAL_BYTES` (20 MiB) | Offer "Read again tonight" |
+| 415 | `unsupported_page_type` | A page that is not JPEG, PNG, WebP or PDF (HEIC; checked on the declared type and on the file's first bytes) | Offer "Read again tonight" |
+
+Jolt's own rate limit (`429`, plain `ErrorResponse`) and `413` body cap still
+apply. Errors before the read is stored leave the source as it was, so the
+nightly sync still reads it.
+
+### Feedback — `POST /v1/concepts/{concept_id}/feedback`
+
+Body (optional): `{review_id?: string (≤ 64), provider?}`. Without `review_id`
+the model explains how the learner's understanding has **moved** across their
+answer timeline ("You've gone from 'it spreads load' to reasoning about which
+keys move...") and gives one concrete next step; with a `review_id` (one of the
+concept's answers, e.g. the one just given on the result screen, "Explain") it
+explains that answer against the expected answer. The prompt sends the concept
+text, then the most recent 20 answers (question, expected answer, the
+learner's words, the choice, the grade and the grader's feedback) and tells the
+model to use nothing else.
+
+Response: `{concept_id, review_id, feedback (2–4 sentences), next_step, provider,
+model_id, answers (answers it read), generated_at, cached, usage: ModelUsage}`.
+
+**Cache.** The answer is kept on the learner's card, one for the timeline and
+one for the latest explained answer, until the timeline changes: a new answer,
+a grade or grader feedback landing from the nightly sync, a corrected concept
+text (or a new prompt version). Until then the same request returns it with
+`cached: true` and no model call.
+
+Errors: 401; 404 `concept not found` (not the caller's) / `review not found`
+(`review_id` is not one of the concept's answers); `403 key_required`; `409
+no_answers`; the provider errors above; 422 body validation.
+
+### Read now — `POST /v1/sources/{source_id}/read-now`
+
+Body (optional): `{provider?}`. Reads the note immediately instead of at the
+night's sync: every page goes to the provider as it was uploaded (images as
+image inputs, PDFs as document inputs, in page order) with the reading,
+concept and question rules of the nightly prompt
+([`NIGHTLY_SYNC_PROMPT.md`](./NIGHTLY_SYNC_PROMPT.md)), the track's agenda keys
+and, on a first read, the track's existing concepts to skip. The model's answer
+is stored **exactly as the sync stores one**:
+
+1. `store_extraction`: the new read becomes the source's one active read (the
+   previous one `superseded`), `model_id` = the model that answered,
+   `client_label` = `"Read now"`, `via: read_now`; a read-again request made
+   before read now started is answered (cleared).
+2. Reconciliation with the read's concepts (section 2): all `new` on a first
+   read; `unchanged` / `refined` / `changed` / `removed` / `new` against the
+   previous read on a re-read, run to `complete` in the same request.
+3. Questions (exactly 4 options, 1–3 per concept) for each `new` or `changed`
+   concept, as `jolt_create_questions` writes them.
+
+While it runs, the source is held under a lease (`in_flight`), like a sync
+claim. It is recorded on the read (`via`, `provider`) and in the user's daily
+usage, **not** on a sync run (sync runs are a nightly client's record: health,
+first sync, "New since last sync"). A note with no track: concepts go to the
+track the model picks among the user's own (the only one when there is one).
+
+Response: `{source_id, extraction_id (the new active read), provider, model_id,
+confidence, low_confidence, reconciliation: complete|partial, concepts:
+[{concept_id, title, change: new|unchanged|refined|changed,
+questions_written}], removed_concept_ids, questions_written, usage:
+ModelUsage}`. `GET /v1/sources/{id}` then shows the read with its markdown.
+
+Errors: 401; 404 `source not found` (not the caller's, or not confirmed);
+`403 key_required`; `409 source_busy` / `track_required` / `source_unreadable`;
+`413 source_too_large`; `415 unsupported_page_type`; the provider errors above.
+
+**Local runs and tests** never reach a provider: `ANTHROPIC_API_BASE` /
+`OPENAI_API_BASE` point at `scripts/fake_provider.py` (canned answers, keys
+starting `sk-fake`), and the tests swap the HTTP transport for an
+`httpx.MockTransport`.
 
 ---
 

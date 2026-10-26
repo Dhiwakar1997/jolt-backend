@@ -149,7 +149,7 @@ jolt/
 
 The dependency rule: `api/` and `mcp/` depend on `domain/`, `domain/` depends on `data/`, nothing depends upward. `domain/` imports no FastAPI and no Azure SDK, so it is unit-testable without either. This is what makes the module boundary real rather than cosmetic.
 
-`credentials/` is built for MVP but only its capture and storage paths (`vault.py`, `providers.py` validation) have callers; `inference.py` exists as the seam for later features and ships dormant.
+`credentials/` was built for MVP with only its capture and storage paths (`vault.py`, `providers.py` validation) in use; BE-11 woke `inference.py` up: feedback and read now call the model on the user's own key (`docs/API.md` section 8).
 
 ---
 
@@ -188,7 +188,7 @@ Built for MVP as capture + secure storage; the features that consume the key com
 
 **Deletion.** `DELETE /v1/settings/api-key/{provider}` purges the Key Vault secret and the Cosmos reference in that order, so a crash leaves no dangling reference to a missing secret. This is a real delete, not a soft flag, because the spec's data-controller obligations extend to credentials.
 
-**Provider adapter.** `credentials/providers.py` normalises the differences between providers behind one interface — validate, and (later) call. Adding a provider is a new adapter, not a change to callers. MVP ships the adapter interface and validation for at least Anthropic and OpenAI; the call path is dormant.
+**Provider adapter.** `credentials/providers.py` normalises the differences between providers behind one interface — validate, and (later) call. Adding a provider is a new adapter, not a change to callers. MVP ships the adapter interface and validation for at least Anthropic and OpenAI; BE-11 adds the call path (Anthropic Messages API, OpenAI Responses API).
 
 **Custody note.** Holding user API keys makes Jolt responsible for financial credentials — a breach is a billing breach on the user's account. This is accepted deliberately for the future feature set, but it raises the security bar: Managed Identity everywhere, no key material in images or env, Key Vault access logged, and the validation-at-capture step so Jolt never stores a key it hasn't confirmed the user actually owns.
 
@@ -337,7 +337,7 @@ App → DELETE /v1/settings/api-key/{provider}
       ← 204
 ```
 
-Storage only for MVP — no feature reads the key yet. `credentials/inference.py` is the dormant seam for later.
+Storage only for MVP. Since BE-11 the key is read by `credentials/inference.py` at call time for feedback and read now, and dropped after the call (`docs/SECURITY.md` S-41).
 
 ### 7.7 Re-extraction with supersede (agent)
 

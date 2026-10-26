@@ -44,7 +44,7 @@ jolt/
 ├── data/              the only layer touching Azure (cosmos, blob, repositories, leases)
 ├── curated/           curated-track import (the DSA track read from a Jolt checkout, BE-09)
 ├── auth/              app + MCP tokens (issue / look up / verify), Google ID tokens, token → user
-└── credentials/       per-user provider keys (vault, providers, dormant inference seam)
+└── credentials/       per-user provider keys (vault, provider adapters, key-backed calls, prompts; BE-11)
 ```
 
 Dependency rule: `api/` + `mcp/` → `services/` → `domain/` → `data/`, nothing depends
