@@ -89,8 +89,17 @@ With `PUBLIC_BASE_URL` set, upload/read URLs are served by the app itself at
 
 ```bash
 STORAGE_MODE=memory DEV_AUTH_ENABLED=true PUBLIC_BASE_URL=http://localhost:8000 \
-    uvicorn jolt.main:app --port 8000
+    DSA_SEED_FROM=../Jolt uvicorn jolt.main:app --port 8000
 python scripts/smoke.py --base-url http://localhost:8000   # full round trip
+```
+
+`DSA_SEED_FROM` (optional) imports the curated DSA track from a Jolt checkout at
+startup. Against Cosmos, the same import is a script (BE-09; idempotent, validates
+like Jolt's `check-batch.mjs`; details in `docs/API.md` section 7):
+
+```bash
+python scripts/import_dsa.py --from ../Jolt --dry-run   # report only
+python scripts/import_dsa.py --from ../Jolt [--include-new]
 ```
 
 ### Signing in and connecting a model

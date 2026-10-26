@@ -210,7 +210,22 @@ extraction and questions, due reviews, stage 1 and stage 2, agent grading,
 coverage, a final `jolt_sync` that closes the sync run, `GET /v1/sync/status` /
 `/v1/sync/runs` / `/v1/sync/prompt`, an MCP connection with the token in the URL
 (`?token=`), then revokes the MCP token and signs out (both refused afterwards).
-Exit code 0 means pass. It needs the dev sign-in secret in `JOLT_DEV_AUTH_SECRET`
+When the curated DSA track is imported it also enrols, reads the library and
+decision tree and answers one `pattern_match` question (BE-09); without it those
+steps are skipped with a note (`--require-dsa` makes that a failure).
+Exit code 0 means pass.
+
+**Curated DSA track (BE-09, deploy pending).** Import it once per environment,
+and again whenever Jolt's `data/` or DSA content changes (a re-run with the same
+input writes nothing), from a machine with Cosmos data access (the same
+`COSMOS_ENDPOINT` / `AUTH_MODE` settings as the app; `AUTH_MODE=managed_identity`
+uses your `az login`):
+
+```bash
+python scripts/import_dsa.py --from ../Jolt --dry-run
+python scripts/import_dsa.py --from ../Jolt
+```
+ It needs the dev sign-in secret in `JOLT_DEV_AUTH_SECRET`
 (or `--dev-auth-secret`); `deploy-infra.sh --smoke` and the deploy workflow
 supply it. By hand, with Key Vault data access:
 `export JOLT_DEV_AUTH_SECRET=$(az keyvault secret show --vault-name <kv> -n dev-auth-secret --query value -o tsv)`.

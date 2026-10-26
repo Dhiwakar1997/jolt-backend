@@ -2,7 +2,7 @@
 
 Each screen in the Jolt 2.0 design (Figma prototype, frames listed in
 `Jolt/design/frames/index.json`; screens per pass in `Jolt/docs/v2/PLAN.md` §5 and
-the FE pass briefs) compared with the API as of BE-06 ([`API.md`](./API.md)). For
+the FE pass briefs) compared with the API as of BE-09 ([`API.md`](./API.md)). For
 each gap, the backend pass whose brief covers it.
 
 Status: **ready** (today's endpoints are enough) · **partial** (some data
@@ -18,7 +18,7 @@ Frame numbers are phone / web / tablet.
 | Splash, Welcome | 1, 2 / 21 | — | — | client | — |
 | Sign in (Google) | 2 / 21 | `POST /v1/auth/google` → app token + user | `POST /v1/auth/google` (BE-03); dev mode: `POST /v1/auth/dev` | ready | — |
 | Connect your model | 3 / 21 | Create an MCP token shown once, MCP server URL, per-client steps, nightly prompt | `POST /v1/mcp-tokens` (token shown once), `mcp_server_url` on `GET /v1/me` (BE-03); per-client steps in `docs/CONNECT.md` (static copy for the screen; Claude's connector URL is `mcp_server_url?token=<token>`), prompt from `GET /v1/sync/prompt` (BE-04) | ready | — (client setups **deploy pending**, see `CONNECT.md`) |
-| First track | 4 / 21 | Create a notes track with name and optional outline (→ `draft`); or enrol in curated DSA | `POST /v1/tracks {name, kind: notes, outline?}` → `draft` agenda with the outline (BE-07) | partial | Curated catalog and enrol: BE-09 |
+| First track | 4 / 21 | Create a notes track with name and optional outline (→ `draft`); or enrol in curated DSA | `POST /v1/tracks {name, kind: notes, outline?}` → `draft` agenda with the outline (BE-07); `GET /v1/tracks/catalog` + `POST /v1/tracks/{id}/enrol` (BE-09), which counts as `has_track` | ready | — |
 | Waiting for first sync | — / 21 | Poll sync status; resume point for a returning user | `GET /v1/sync/status` (`health: never` until the first run), `GET /v1/me` `onboarding.first_sync_at` (set when the first run closes) | ready | — |
 
 ## Today (FE-04)
@@ -47,7 +47,7 @@ Frame numbers are phone / web / tablet.
 
 | Screen | Frames | Needs | Today | Status | Covered by |
 |---|---|---|---|---|---|
-| Tracks | 10 / 27 / 41 | List with counts, `kind`, curated badge | `GET /v1/tracks`: counts, `kind`, `archived`, `retention`, `origin` (the curated badge); `PATCH` rename / archive (BE-07) | ready | Curated `description`, enrol: BE-09 |
+| Tracks | 10 / 27 / 41 | List with counts, `kind`, curated badge | `GET /v1/tracks`: counts, `kind`, `archived`, `retention`, `origin` (the curated badge); `PATCH` rename / archive (BE-07); curated `description` and real `enrolled` (BE-09) | ready | — |
 | New track sheet | 10 / 27 / 41 | Name and optional outline → `draft` agenda | `POST /v1/tracks {name, kind, outline}` (BE-07) | ready | — |
 | Track detail | 11 / 28 / 42 | One call: agenda items with state (new / learning / due / mastered / not covered), next review, question count; due today; recent sources | `GET /v1/tracks/{id}` (BE-07): 4 Cosmos reads, whatever the size | ready | — |
 | Syllabus mode pill and overlay | 11 / 28 / 42, 54 | `agenda.status` | In every `Track` | ready | — |
@@ -56,7 +56,7 @@ Frame numbers are phone / web / tablet.
 | Concept | 12 / 29 / 43 | Summary, source and page, answer timeline (date, your words, correct, grade, feedback, question version), adaptive question note, FSRS state | `GET /v1/concepts/{id}` (BE-07); `POST /v1/concepts/{id}/unretire` (BE-06) | ready | `page` is set only when the agent passes it (`jolt_log_session` / reconciliation `page`) |
 | Feedback panel gate | 12 / 29 / 43 | `has_api_key` | `has_api_key` on `GET /v1/me` (added in BE-03 for BE-08) | ready | panel content BE-11 |
 | "Something's wrong with this concept" | 12 / 29 / 43 | Store a correction note for the next sync | `POST /v1/concepts/{id}/correction` → `jolt_sync.pending_corrections` (the plan is not `done` while notes wait, and lists `jolt_get_pending_corrections` → `jolt_correct_concept`), the changed text is a `concept_updated` change on the run (BE-07) | ready | — |
-| DSA track (placeholder) | 13 / 30 / 44 | Curated track, enrol, patterns as syllabus, `pattern_match` questions, decision tree, library | — | missing | BE-09 |
+| DSA track | 13 / 30 / 44 | Curated track, enrol, patterns as syllabus, `pattern_match` questions, decision tree, library | `GET /v1/tracks/catalog`, `POST`/`DELETE /v1/tracks/{id}/enrol`; Track detail lists the 24 patterns (`new` until first answered); `GET /v1/tracks/{id}/library` (when to reach, tells, pseudocode, walkthrough, `animation_id`) and `/decision-tree`; `POST /v1/review-sessions {kind: dsa_patterns, time_budget_minutes, difficulty_mix}` → `pattern_match` items; stage 2 `match` / `question_title` / `leetcode_url` (BE-09) | ready | Animations stay in the front end (`animation_id` keys v1's reels) |
 
 ## Sources and reader (FE-05, FE-08)
 
@@ -106,9 +106,8 @@ Frame numbers are phone / web / tablet.
   question; the item shape is the same.
 - **"Today" is the UTC day** for `done_today` and `upcoming`: the server does
   not know the user's time zone yet. → BE-08 (a time zone setting) if it matters.
-- **`time_budget_minutes` and `kind: dsa_patterns`** are accepted; DSA sessions
-  are empty until BE-09 adds DSA tracks and `pattern_match` questions (`match`,
-  `question_title`, `pattern_match` are `null` until then).
+- ~~**`time_budget_minutes` and `kind: dsa_patterns`** are accepted and ignored.~~
+  BE-09: DSA sessions are drawn by the v1 rules (API.md section 7).
 - **Mastery threshold**: FSRS stability ≥ `MASTERY_STABILITY_DAYS` (21) after a
   Good or Easy answer, the same number as the FE mock. Retirement is evaluated
   when reading (setting on/off takes effect at once, no rewrite of cards).
@@ -148,8 +147,58 @@ Frame numbers are phone / web / tablet.
   the old wording); they are not stamped `invalidated_by_extraction_id` (LLD
   §7.7) because that would make a step's writes unbounded. A successor's mastery
   must be re-earned by its own answers.
-- **`enrolled`** is `true` on a curated track where the caller has concepts;
-  BE-09 replaces it with real enrolment.
+- ~~**`enrolled`** is `true` on a curated track where the caller has concepts.~~
+  BE-09: real enrolment (`POST`/`DELETE /v1/tracks/{id}/enrol`).
+
+**BE-09 decisions and follow-ups for the DSA track**
+
+- **The pattern is the answer, so it is masked before stage 2.** A
+  `pattern_match` queue item carries the **track id** as `concept_id` and
+  `"Pattern match"` as `concept_title` (stage 1 takes that id back and finds the
+  pattern); the title and the LeetCode link come with stage 2, which also names
+  the real `concept_id`. `GET /v1/reviews/{id}` and `/v1/reviews/due` mask the
+  same way; concept pages never list a pattern's problems. The FE-02 mock
+  serves the pattern's id and name on queue items: FE-10 keys items by
+  `question_id` and shows the pattern only from stage 2.
+- **Spaced repetition per pattern.** A review of a problem folds into the
+  learner's card for its pattern (correct Good, partial Hard, incorrect Again,
+  final at once; no semantic grading, never in `jolt_get_pending_gradings`).
+  Track detail and the queue therefore show patterns; Today's due count
+  includes due patterns (one problem each in the ordinary queue).
+- **Draw = v1 rules + priority.** One clock, difficulty mix, no near
+  duplicates, as in v1; within a difficulty, due patterns first, then new, then
+  learning, a repeat pattern and retired ones last, unseen problems before ones
+  answered in the last 14 days. The draw reads the track content's problem
+  index (one read) plus the learner's cards on the track and recent reviews.
+- **Enrolment lives on the user document** (`enrolments`), not a container:
+  `/v1/me`, Tracks and the queue read it with the user at no extra cost, and an
+  account delete removes it with the user. Leaving pauses the track (cards and
+  answers kept).
+- **Track-level content** (decision tree, pattern order, problem index) is one
+  document in the `tracks` container's curated bucket (`dsa.content`), without
+  `origin`, so the catalog query never returns it (D7: same containers).
+- **Library entries live on the pattern concepts**; `animation_id` is the
+  pattern's slug when v1 has a reel for it (all 24 do). The animations
+  themselves stay front-end data.
+- **Options order** is the library's order (the syllabus), the same for every
+  problem; v1's grid used the batch's alphabetical tag list (the grid has a
+  search, so order is cosmetic).
+- **Import reads the TS sources directly** (a strict reader of plain data
+  literals: `jolt/curated/ts_literal.py`), so `--from <Jolt repo>` needs no
+  Node. `scripts/export_dsa_from_jolt.mjs` (a JSON export with Jolt's esbuild,
+  verified to give identical data) is written for Jolt's `npm run export:dsa`;
+  `--content` takes its output. → the orchestrator ports it into Jolt.
+- **Cards denormalise a pattern's problems** (`active_question_ids`) when they
+  are created; a re-import that adds problems does not rewrite every learner's
+  card (that would be a cross-partition fan-out). Sessions read the live
+  problem index, and Track detail counts problems from it, so only the
+  generic queue's rotation for an existing card can lag until the card's next
+  refresh. Harmless; noted.
+- **Account delete** (BE-08, on the main line): its purge walks only the
+  user's own tracks (`list_for_user`), so curated tracks, concepts, questions
+  and the content document survive; this lane has no purge helper to test it
+  against. → add a test that `DELETE /v1/me` leaves `dsa`, its concepts,
+  questions and `dsa.content` in place when the lines merge.
 - **Corrections are sync work** (on BE-04's plan): `pending_corrections` (total
   and per track) counts the concepts `jolt_get_pending_corrections` returns; the
   plan is not `done` while any wait, so a nightly run answers them before it
@@ -194,7 +243,8 @@ To fix in the pass named, or sooner.
    and REST route goes through `jolt/services/ownership.py` (a concept is the
    caller's when they hold its card; writes need the caller's own track, so
    curated tracks are read-only; curated tracks show each learner only their own
-   concepts). `tests/test_ownership.py` covers every such tool and route. To be
+   concepts — BE-09: except Jolt's own `curated` concepts, readable by all and
+   writable by none). `tests/test_ownership.py` covers every such tool and route. To be
    confirmed in the BE-10 security review.
 2. ~~**Supersede does not reconcile concepts.**~~ **Fixed in BE-07**:
    `jolt_store_extraction(concepts=...)` reconciles (unchanged / refined /

@@ -11,7 +11,7 @@ Regenerate both with `python scripts/export_contract.py` after changing a route,
 tool, a tool description or `jolt/mcp/schemas.py`. This file is written by hand:
 update it in the same change.
 
-State: API version 0.7.0: the MVP, the track agenda model (PR #3), accounts,
+State: API version 0.8.0: the MVP, the track agenda model (PR #3), accounts,
 Google sign-in and MCP token management (BE-03), the nightly sync: the
 `jolt_sync` plan, sync runs, sync status and the scheduled-task prompt (BE-04),
 sources and uploads: multi-page uploads, source list and detail with past
@@ -19,7 +19,10 @@ reads, read again and storage (BE-05), the review loop: review sessions,
 idempotent stages, question versions and retiring mastered concepts (BE-06),
 and tracks and concepts: the Tracks, Track detail and Concept read models,
 corrections, off-plan concepts, ownership checks and supersede reconciliation
-(BE-07). Screens that have no endpoint yet are listed in [`GAPS.md`](./GAPS.md).
+(BE-07), and curated tracks: the catalog, enrolment, the DSA pattern trainer
+imported from v1 (pattern library, decision tree, `pattern_match` questions) and
+DSA sessions drawn by the v1 rules (BE-09, section 7). Screens that have no
+endpoint yet are listed in [`GAPS.md`](./GAPS.md).
 
 ## Conventions
 
@@ -28,7 +31,7 @@ corrections, off-plan concepts, ownership checks and supersede reconciliation
 | **Base paths** | REST under `/v1`. MCP over HTTP+SSE: connect to `/mcp/sse`, post to `/mcp/messages/`. `GET /health` → `{status: "ok", version}` (no auth). CORS: the origins in `CORS_ORIGINS` / `CORS_ORIGIN_REGEX`, no credentials (the token is a header). |
 | **Auth** | `Authorization: Bearer <token>`. Two opaque token kinds: an **app token** (`jolt_app_…`, one per signed-in device, from sign-in) on every `/v1` route except the sign-in routes, and an **MCP token** (`jolt_live_…`, one per connected client, from `POST /v1/mcp-tokens`) on the MCP connection. Each surface refuses the other kind with `401` (`detail: "wrong token kind: …"`); opening `/mcp/sse` with a missing, revoked or wrong-kind token is a `401` before the stream starts. On `/mcp/sse` only, the MCP token may instead ride the URL as `?token=` (for connectors that take only a URL; `MCP_QUERY_TOKEN_ENABLED`, redacted from access logs); client setup in [`CONNECT.md`](./CONNECT.md). Tokens do not expire; revoking (sign-out, `DELETE /v1/mcp-tokens/{id}`) takes effect on the next request. A bare token without `Bearer` is also accepted. |
 | **Scope** | Identity comes only from the token. No route or tool takes a `user_id`. |
-| **Ownership** (BE-07, A16) | A **track** is *visible* when it is the caller's or curated, *owned* only when it is the caller's: reads take a visible track, writes (agenda, rename, archive, logging concepts) an owned one, so curated tracks are read-only. A **concept** is the caller's when they hold its card (FSRS state); on a curated track each learner sees only their own concepts. A **question** is the caller's when its concept is. Anything else answers exactly like an unknown id (404 / the tool's not-found). |
+| **Ownership** (BE-07, A16, BE-09) | A **track** is *visible* when it is the caller's or curated, *owned* only when it is the caller's: reads take a visible track, writes (agenda, rename, archive, logging concepts) an owned one, so curated tracks are read-only. A **concept** is the caller's when they hold its card (FSRS state). On a curated track the concepts are Jolt's (`curated`), readable by everyone and written by no client: no questions, text changes or correction notes, even once the learner holds a card for one. A **question** is the caller's when its concept is; a curated `pattern_match` question is answerable by learners enrolled in its track (their card is created by the first answer). Anything else answers exactly like an unknown id (404 / the tool's not-found). |
 | **Errors (REST)** | Non-2xx bodies are `{"detail": "<message>"}` (`ErrorResponse`). Request-validation failures are `422` with `{"detail": [ {loc, msg, type} ]}` (`HTTPValidationError`). `401` always carries `WWW-Authenticate: Bearer`. |
 | **Errors (MCP)** | Tools marked *`{error}` on* return `{"error": "<message>"}` for the listed recoverable cases. Every other failure (missing/invalid token, unknown source, grade outside 1–4) is raised and arrives as an MCP tool error (`isError: true`). |
 | **Types** | IDs are opaque strings (32-hex today). Timestamps are ISO-8601 UTC. FSRS grades: 1 Again, 2 Hard, 3 Good, 4 Easy. |
@@ -49,7 +52,7 @@ picture or `null`.
 | POST | `/v1/auth/google` | — | `{id_token}`: the Google ID token (JWT) from Google sign-in | `{app_token, user: User}`. Verifies signature (Google's JWKS), issuer, audience (`GOOGLE_OAUTH_CLIENT_ID`) and expiry; creates the user on first sign-in (keyed by Google `sub`), refreshes e-mail, name and picture after. Each call issues a new app token (one per device). | 401 `invalid Google ID token: <reason>` (expired, issued for another client, bad signature, …); 422; 503 not configured / Google's keys unreachable |
 | POST | `/v1/auth/dev` | — | `{email, display_name?}`; header `X-Jolt-Dev-Auth-Secret` when the server has `DEV_AUTH_SECRET` | `{app_token, user: User}`. **Dev only**: mounted when `DEV_AUTH_ENABLED` is on, never in prod. The same e-mail is always the same user (a different user from a Google sign-in with that e-mail). For the front end's dev mode against a local memory-mode server and for `scripts/smoke.py`. | 403 wrong/missing secret; 404 when not enabled; 422 |
 | POST | `/v1/auth/sign-out` | token | — | 204; revokes the app token that made the request (other devices stay signed in) | 401 |
-| GET | `/v1/me` | token | — | `{user: User, onboarding: {has_track, has_mcp_token, first_sync_at}, mcp_server_url, has_api_key}`. `has_track`: the user owns a track (curated enrolment counts from BE-09). `first_sync_at`: `null` until the first sync run closes, either `finished` or after doing some work (section 2). `mcp_server_url`: the address to paste into Claude / Codex (`MCP_SERVER_URL`, e.g. `https://<host>/mcp/sse`). `has_api_key`: a provider key is stored. | 401 |
+| GET | `/v1/me` | token | — | `{user: User, onboarding: {has_track, has_mcp_token, first_sync_at}, mcp_server_url, has_api_key}`. `has_track`: the user owns a track or is enrolled in a curated one (BE-09). `first_sync_at`: `null` until the first sync run closes, either `finished` or after doing some work (section 2). `mcp_server_url`: the address to paste into Claude / Codex (`MCP_SERVER_URL`, e.g. `https://<host>/mcp/sse`). `has_api_key`: a provider key is stored. | 401 |
 | POST | `/v1/mcp-tokens` | token | `{label}` (1–60 characters after trimming, e.g. `"Claude Desktop"`) | **201** `{id, label, last4, created_at, last_used_at: null, token}`. The plaintext `token` appears only in this response. | 401, 422 |
 | GET | `/v1/mcp-tokens` | token | — | `[{id, label, last4, created_at, last_used_at}]`, newest first; never the token. `last_used_at` is updated at most once a minute. | 401 |
 | DELETE | `/v1/mcp-tokens/{token_id}` | token | — | 204; the next MCP call with that token fails | 401, 404 `token not found` (unknown, another user's, or an app token's id) |
@@ -112,10 +115,10 @@ run extends that date's session.
 | `jolt_store_extraction` | `source_id, markdown, confidence?=0, model_id?, supersede?=false, concepts?: [{text, track_id?, title?, concept_key?, syllabus_ref?, parent?, page?}]` | `{extraction_id, status: "active", reconciliation: Reconciliation \| null}` *`{error}` on* | Marks the source `processed` (or back to `unprocessed` if a read-again request arrived while the sync held it) and points it at the new extraction; a read-again request made before the claim is answered (cleared). The previous active extraction always becomes `superseded` (one active read per source). Records the MCP token's label as the read's `client_label` and the source on the run. With `concepts`, reconciles them against the replaced read's concepts (below); `track_id` defaults to the source's track. `{error}` (nothing stored) on: a concept with no text, or no `track_id` when the source has no track. Raises if the source, or a concept's track, is not the caller's. |
 | `jolt_continue_reconciliation` | `source_id` | `Reconciliation` *`{error}` on* | Resumes a `partial` reconciliation of the source's active read from its checkpoint (up to the ceiling again); the steps it applies are added to the run's changes. A `complete` one is returned unchanged. `{error}` when the active read has none (stored without `concepts`). Raises if the source is not the caller's. |
 | `jolt_log_session` | `source_ids: [str]`, `concepts: [{text, track_id, title?, concept_key?, syllabus_ref?, parent?, source_id?, page?}]` | `{session_id, session_ids, concept_ids}` | `session_ids`: one per upload date, oldest first (D6); `session_id` is the first. `concept_ids` in input order. Creates concepts (keeping `title`) plus an FSRS card due now, and auto-adds unknown `concept_key`s to each track's agenda (skipped on locked agendas). `page` is the 1-based source page (Concept → "where found"). A concept with a `source_id` is credited to that source's active read (`concepts_found` in past reads) and recorded as a `concept_added` change on the run. Raises, writing nothing, if a `track_id` is not one of the caller's own tracks (curated ones are refused) or a source id (in `source_ids` or a concept's `source_id`) is not theirs (BE-07). Not idempotent. |
-| `jolt_create_questions` | `concept_id`, `questions: [{stem, options: [str], correct_index, expected_answer}]` | `{question_ids}` (input order) | Raises if the concept is not the caller's (BE-07). Not idempotent. Adds to `questions_written` on the read the concept came from and on the run, and refreshes the card's active questions (Track detail's question count and version). The prompt and plan ask for exactly 4 options; the server accepts any number. |
+| `jolt_create_questions` | `concept_id`, `questions: [{stem, options: [str], correct_index, expected_answer}]` | `{question_ids}` (input order) | Raises if the concept is not the caller's (BE-07) or is on a curated track (read-only, BE-09). Not idempotent. Adds to `questions_written` on the read the concept came from and on the run, and refreshes the card's active questions (Track detail's question count and version). The prompt and plan ask for exactly 4 options; the server accepts any number. |
 | `jolt_get_pending_gradings` | `limit?=10` | `{gradings: [{review_id, concept_id, question_id, free_text, expected_answer, stem, options, correct_index, question_version, selected_index, is_correct}], allow_question_rewrite}` | Reviews with stage 1 submitted and no final grade. The question fields are the version the learner answered (BE-06), so the agent can rewrite it; `allow_question_rewrite` is the user's opt-in (decision D8). |
 | `jolt_get_pending_corrections` | — | `{corrections: [{concept_id, track_id, title, text, notes: [{note, created_at}]}]}` | The learner's notes from `POST /v1/concepts/{id}/correction`, oldest request first (BE-07). Answer each with `jolt_correct_concept`. Read-only. |
-| `jolt_correct_concept` | `track_id, concept_id, text` | `{concept_id, updated, corrections_cleared}` *`{error}` on* | Replaces the caller's concept text in place (questions, reviews and card kept) and clears its correction notes; sending the current text re-confirms it (notes cleared, no change recorded). A changed text is a `concept_updated` change on the run. `updated: false` when the write lost a race. `{error: "concept not found"}` when the concept is not the caller's or not on `track_id`. |
+| `jolt_correct_concept` | `track_id, concept_id, text` | `{concept_id, updated, corrections_cleared}` *`{error}` on* | Replaces the caller's concept text in place (questions, reviews and card kept) and clears its correction notes; sending the current text re-confirms it (notes cleared, no change recorded). A changed text is a `concept_updated` change on the run. `updated: false` when the write lost a race. `{error: "concept not found"}` when the concept is not the caller's, not on `track_id`, or curated (BE-09). |
 | `jolt_submit_gradings` | `gradings: [{review_id, suggested_fsrs_grade: 1–4, rationale?, rubric_version?, rewritten_question?: {stem, options, correct_index, expected_answer, rewrite_reason?}}]` | `{applied, submitted, rewritten: [{review_id, question_id, version, previous_version_id}], rewrites_skipped: [{review_id, reason}]}` | Idempotent per review. Re-folds each affected card inline (FSRS and mastery). `rationale` is the feedback the learner sees. A `rewritten_question` becomes version n+1 of the question only when the user's `allow_question_rewrite` is on (section 4, question versions); otherwise, or when invalid, it is listed in `rewrites_skipped` and the grade still lands. A retry lists the version it created again, never a second one. Each grade applied adds to `gradings_submitted` on the run, and each new version is a `question_rewritten` change on it and becomes the card's current question (`active_question_ids`, `question_version`; BE-07). Raises on a grade outside 1–4. |
 
 `SyncPlan`:
@@ -291,10 +294,17 @@ Version n is kept, marked inactive, and leaves the queue; the next session
 serves version n+1 with `rewritten: true`. A rewrite of an old version extends
 the chain from its newest version.
 
-`QueueItem = {concept_id, concept_title, question_id, question_type: "free_text"
-(BE-09 adds "pattern_match"), stem, track_id, track_name, version, interval_days
-(days since the last review, null on the first), review_number, rewritten,
-pattern_match: null (BE-09)}`
+`QueueItem = {concept_id, concept_title, question_id, question_type: free_text |
+pattern_match, stem, track_id, track_name, version, interval_days (days since
+the last review, null on the first), review_number, rewritten, pattern_match:
+PatternMatch | null}`. For a `pattern_match` question (a DSA problem, section 7)
+the pattern is the answer, so it is **withheld until stage 2**: `concept_id` is
+the **track id** (send it back as stage 1's `concept_id`; the server finds the
+problem's pattern), `concept_title` is `"Pattern match"`, `stem` is the problem
+description, and `PatternMatch = {description, io_contract ("Input: …\nOutput:
+…"), io_input, io_output, examples: [{input, output, note}], difficulty: Easy |
+Medium | Hard, time_weight (minutes: 2 / 4 / 7)}`. The problem's title and
+LeetCode link are never served before stage 2.
 
 `Summary = {session_id, started_at, ended_at, reviewed, correct, provisional,
 graded, retired: [{concept_id, title}], moved: [{concept_id, title, old_due_at,
@@ -306,14 +316,14 @@ questions due on each of the next 7 days (UTC dates, one per concept).
 
 | Method | Path | Auth | Request | Response | Errors |
 |---|---|---|---|---|---|
-| POST | `/v1/review-sessions` | token | `{track_id?, limit?=100 (1–500), concept_id?, kind?: notes\|dsa_patterns, time_budget_minutes?}`. `concept_id` = practise that concept now (its next question, due or not, retired or not). `kind: dsa_patterns` is empty until BE-09; `time_budget_minutes` is accepted and ignored until BE-09. | `{id, started_at, track_id, items: [QueueItem], done_today}`. `done_today` = answers since midnight UTC. | 401; 404 `track not found` / `concept not found`; 422 |
+| POST | `/v1/review-sessions` | token | `{track_id?, limit?=100 (1–500), concept_id?, kind?: notes\|dsa_patterns, time_budget_minutes? (1–240), difficulty_mix?: {easy, medium, hard}}`. `concept_id` = practise that concept now (its next question, due or not, retired or not). No `kind`: every due question (DSA patterns included); `notes`: without the DSA tracks; `dsa_patterns`: a DSA session (section 7) from the caller's enrolled DSA tracks (or `track_id`), with `time_budget_minutes` (default 30) and `difficulty_mix` (default 20 / 55 / 25). | `{id, started_at, track_id, items: [QueueItem], done_today, time_budget_minutes, time_weight_total}`. `done_today` = answers since midnight UTC. The last two are set on DSA sessions only: the clock, and the minutes the drawn problems weigh (≤ the clock). | 401; 404 `track not found` / `concept not found` / `not enrolled in this track` (DSA session for a track the caller is not enrolled in); 422 |
 | POST | `/v1/review-sessions/{session_id}/end` | token | — | `Summary`. Ending again returns the same summary (recomputed, so later gradings show as `graded`). | 401, 404 `session not found` |
-| GET | `/v1/reviews/due` | token | query `limit?=100` (cards) | `{count, items: [{concept_id, question_id, stem}]}`: every active question of each due card, most overdue card first, retired concepts left out. Kept for compatibility; the app uses sessions. | 401, 422 |
-| POST | `/v1/reviews/{question_id}/stage1` | token | `{concept_id, free_text, client_request_id?, session_id?}` | `{review_id, options: [str], locked_at}` | 401; 404 `question not found` (also when the concept is not the caller's: they hold no card for it) / `session not found`; 409 key reused for another question; 422 |
-| POST | `/v1/reviews/{review_id}/stage2` | token | `{selected_index, latency_ms?, client_request_id?}` | `{correct, expected_answer, correct_index, due_at, grading: provisional\|graded, provisional_grade: 1–4, interval_days (≥ 1), match: null, question_title: null, retired, feedback}`. `match` / `question_title` are for BE-09 `pattern_match` questions. | 400 `review not found` / `stage 1 not submitted…` / `stage 2 already submitted` / `selected_index is out of range` / `question not found`; 401; 422 |
-| GET | `/v1/reviews/{review_id}` | token | — | `{review_id, concept_id, question_id, question_version, session_id, free_text, locked_at, selected_index, correct, provisional_grade, final_grade, grading, feedback, due_after, rewritten_question_id}`; `feedback` once graded | 401, 404 `review not found` |
+| GET | `/v1/reviews/due` | token | query `limit?=100` (cards) | `{count, items: [{concept_id, question_id, stem}]}`: every active question of each due card, most overdue card first, retired concepts left out; a due DSA pattern lists only the problem a session would serve, with its `concept_id` masked (the track id). Kept for compatibility; the app uses sessions. | 401, 422 |
+| POST | `/v1/reviews/{question_id}/stage1` | token | `{concept_id, free_text, client_request_id?, session_id?}`. For a `pattern_match` item, `concept_id` is the queue item's (the track id); `free_text` may be empty. | `{review_id, options: [str], locked_at}`. `pattern_match`: `options` are all the track's patterns (the answer grid) and the learner's card for the pattern is created now if it is their first answer on it. | 401; 404 `question not found` (also when the concept is not the caller's: they hold no card for it; for `pattern_match`, when they are not enrolled in its track) / `session not found`; 409 key reused for another question; 422 |
+| POST | `/v1/reviews/{review_id}/stage2` | token | `{selected_index, latency_ms?, client_request_id?}` | `{correct, expected_answer, correct_index, due_at, grading: provisional\|graded, provisional_grade: 1–4, interval_days (≥ 1), match, question_title, retired, feedback, concept_id, leetcode_url}`. `concept_id`: the answered concept (for `pattern_match`, the pattern the queue withheld). `pattern_match` only (else `null`): `match` `correct` (the problem's pattern) / `partial` (one of its acceptable patterns) / `incorrect`, `question_title` (the problem's title, revealed now), `leetcode_url`; `expected_answer` is the pattern's name. A `pattern_match` grade is deterministic and final at once: `grading: graded`, grade Good / Hard / Again for correct / partial / incorrect, `correct` only for `correct`, `feedback` the coaching line ("Correct: …", "Defensible: …", "Not this time: …"); it never goes to the sync's grader. | 400 `review not found` / `stage 1 not submitted…` / `stage 2 already submitted` / `selected_index is out of range` / `question not found`; 401; 422 |
+| GET | `/v1/reviews/{review_id}` | token | — | `{review_id, concept_id, question_id, question_version, session_id, free_text, locked_at, selected_index, correct, provisional_grade, final_grade, grading, feedback, due_after, rewritten_question_id}`; `feedback` once graded. A `pattern_match` review shows the track id as `concept_id` until stage 2. | 401, 404 `review not found` |
 | POST | `/v1/concepts/{concept_id}/unretire` | token | — | `{concept_id, retired: false, due_at}`. A concept that is not retired is left as it is. | 401, 404 `concept not found`, 409 |
-| GET | `/v1/concepts/{concept_id}/questions` | token | — | `{concept_id, current_question: QuestionVersion \| null, question_versions: [QuestionVersion]}` oldest first; `QuestionVersion = {question_id, version, stem, previous_version_id, rewrite_reason, created_at, active}`. `current_question` is the one the next session serves. `GET /v1/concepts/{id}` carries the same data. | 401, 404 `concept not found` |
+| GET | `/v1/concepts/{concept_id}/questions` | token | — | `{concept_id, current_question: QuestionVersion \| null, question_versions: [QuestionVersion]}` oldest first; `QuestionVersion = {question_id, version, stem, previous_version_id, rewrite_reason, created_at, active}`. `current_question` is the one the next session serves. `GET /v1/concepts/{id}` carries the same data. A DSA pattern's problems (`pattern_match`) are its answers and are never listed (empty). | 401, 404 `concept not found` |
 
 ---
 
@@ -331,14 +341,17 @@ them (one query each, once).
 
 `Track = {id, name, origin: user|jolt, syllabus: [label], agenda: Agenda,
 user_id, kind: notes|dsa_patterns, archived, archived_at, concept_count,
-due_count, source_count, mastered_count, retention, description (null until
-BE-09), enrolled, created_at}`. `concept_count`: the caller's live concepts on
+due_count, source_count, mastered_count, retention, description, enrolled,
+created_at}`. `concept_count`: the caller's live concepts on
 the track (superseded ones left out). `due_count`: concepts in the review queue
 now: due, not retired, with a question, **0 when the track is archived**.
 `source_count`: confirmed uploads on the track. `mastered_count`: concepts at
 the mastery threshold. `retention`: mean predicted FSRS recall now of the
-reviewed concepts, 0–1 (0 when none was reviewed). `enrolled`: curated tracks
-on which the caller has concepts (always `false` on their own tracks).
+reviewed concepts, 0–1 (0 when none was reviewed). `description`: a curated
+track's catalog blurb (`null` on learners' tracks). `enrolled`: the caller
+enrolled in this curated track (always `false` on their own tracks); a curated
+track they are not enrolled in is paused like an archived one (`due_count` 0,
+out of the queue).
 
 **Concept state** (Track detail items, Concept): `new` (never answered) →
 `mastered` (at the mastery threshold) → `due` (due now) → `learning`
@@ -365,7 +378,7 @@ concept filed under an item (an item without one is a `not_covered` row with
 |---|---|---|---|---|---|
 | GET | `/v1/tracks` | token | — | `[Track]`: the caller's tracks (newest first, archived ones included and flagged), then curated ones | 401 |
 | POST | `/v1/tracks` | token | `{name (1–120, trimmed), kind?: "notes", outline?: string (≤ 20 000), syllabus?: [str]}` | `Track` (counts 0). `outline` → a `draft` agenda, source `user`, with the outline kept verbatim and cut mechanically into items (one per line, bullets stripped, indentation nests; keys are slugs) for the next sync to tidy. `syllabus` → a `refined` agenda, source `user`. Neither → `none` (grows from uploads). | 401; 422 blank name, both `outline` and `syllabus`, `kind` other than `notes` (DSA tracks are curated, BE-09) |
-| GET | `/v1/tracks/{track_id}` | token | — | `Track` + `{items: [TrackItem], due_today: [{concept_id, title, question_id, last_answer}], recent_sources: [{id, title, kind: photos\|pdf\|file, page_count, uploaded_at}], off_plan_count}`. `due_today`: most overdue first, `question_id` is the one the next session serves, `last_answer` the learner's latest words (null before any answer); empty when archived. `recent_sources`: the track's 5 newest confirmed uploads. A curated track shows only the caller's concepts. | 401, 404 `track not found` |
+| GET | `/v1/tracks/{track_id}` | token | — | `Track` + `{items: [TrackItem], due_today: [{concept_id, title, question_id, last_answer}], recent_sources: [{id, title, kind: photos\|pdf\|file, page_count, uploaded_at}], off_plan_count}`. `due_today`: most overdue first, `question_id` is the one the next session serves, `last_answer` the learner's latest words (null before any answer); empty when archived (or a curated track not enrolled). `recent_sources`: the track's 5 newest confirmed uploads. A curated track lists every one of Jolt's concepts on it (for DSA: the patterns, in syllabus order): `new` until the caller's first answer on it, then by their card; `question_count` is its playable problems. | 401, 404 `track not found` |
 | PATCH | `/v1/tracks/{track_id}` | token | `{name?: string (1–120), archived?: bool}` | `Track`. Archiving pauses the track: its concepts leave review sessions and `due_count` until it is unarchived. | 401; 404 (not the caller's own track, curated included); 409 concurrent change; 422 |
 | POST | `/v1/tracks/{track_id}/agenda/lock` | token | — | `Agenda` (status `locked`) | 401, 404 (not found, or not the caller's track) |
 | POST | `/v1/tracks/{track_id}/agenda/unlock` | token | — | `Agenda` (`refined` if it has a syllabus, else `none`) | 401, 404 |
@@ -386,7 +399,11 @@ question_version, interval_days (days since the previous answer, null first)}]
 rewrite reason; null for version 1), fsrs: {stability, difficulty,
 retrievability (predicted recall now, 0 before any review), due_at (null when
 retired or superseded), reps, lapses}, pending_corrections: [{note,
-created_at}], created_at}`.
+created_at}], library: PatternLibrary | null, created_at}`. `library`: a DSA
+pattern's library entry (section 7), else `null`. A curated concept is readable
+before the caller's first answer on it (`state: new`, empty timeline, zero
+FSRS); a DSA pattern never lists its problems in `current_question` /
+`question_versions`.
 
 | Method | Path | Auth | Request | Response | Errors |
 |---|---|---|---|---|---|
@@ -417,10 +434,84 @@ created_at}], created_at}`.
 
 ---
 
+## 7. Curated tracks and the DSA pattern trainer (BE-09)
+
+**Curated tracks (decision D7).** Jolt-authored tracks live in the same
+containers as learners' tracks: `origin: "jolt"`, `user_id: null`, a `kind`
+that tells the app which UI to use (`dsa_patterns` today), agenda `locked`.
+Every client may read them; none may write them (rename, archive, agenda,
+logging concepts, questions, corrections: 404 / the tool's not-found). A learner
+**enrols** to add one; enrolment is kept on their user document and counts as
+`has_track` on `GET /v1/me`. Their cards on the track are created lazily, by
+their first answer. Leaving keeps the cards and answers as history but takes
+the track out of the queue (it is paused, like an archived track) until they
+enrol again.
+
+| Method | Path | Auth | Request | Response | Errors |
+|---|---|---|---|---|---|
+| GET | `/v1/tracks/catalog` | token | — | `[Track]`: the curated tracks anyone can add (oldest first), with the caller's `enrolled` and counts | 401 |
+| POST | `/v1/tracks/{track_id}/enrol` | token | — | `{track_id, enrolled: true, enrolled_at}`. Idempotent: enrolling again returns the first `enrolled_at`. | 401; 404 `curated track not found` (unknown, or a learner's own track); 409 concurrent change |
+| DELETE | `/v1/tracks/{track_id}/enrol` | token | — | 204. Idempotent. | 401, 404, 409 |
+| GET | `/v1/tracks/{track_id}/library` | token | — | `{track_id, patterns: [{concept_id, concept_key, name, problem_count, library: PatternLibrary}]}` in syllabus order. Readable without enrolling. | 401, 404 (not a curated track, or nothing imported yet) |
+| GET | `/v1/tracks/{track_id}/decision-tree` | token | — | `{track_id, root, nodes: [{id, kind: question\|leaf, prompt, short, yes, no, pattern, note, concept_id}]}`: questions carry `prompt` (the guided walk), `short` (the flowchart box) and the `yes` / `no` node ids; leaves carry `pattern`, `note` and the pattern's `concept_id` on this track when it is one. Free (decision D3). | 401, 404 |
+
+`PatternLibrary = {category, time, space, when_to_reach, tells: [str],
+pseudocode: [str] (lines), explanation: [str] (paragraphs), animation_id}`.
+`animation_id` names the pattern's step animation (v1's reel for that pattern;
+the pattern's slug), `null` when there is none.
+
+**The DSA track** (`id: "dsa"`, decision D2). Concepts = the 24 patterns (the
+syllabus; `concept_key` = the pattern's slug, e.g. `arrays-and-hashing`), each
+carrying its library entry. Questions = the v1 problems, type `pattern_match`:
+the original description (also the `stem`), the I/O contract and examples,
+`options` = all 24 patterns (the same order everywhere), `correct_index` = the
+problem's pattern, acceptable patterns that score `partial`, difficulty, time
+weight, near duplicate, LeetCode link; the title is stored but served only by
+stage 2 (section 4). A review of a problem updates the learner's card **for its
+pattern**: spaced repetition runs per pattern.
+
+**DSA sessions** (`POST /v1/review-sessions {kind: "dsa_patterns"}`), by the v1
+rules:
+
+* **One continuous clock** (`time_budget_minutes`, default 30): problems are
+  drawn until their time weights (Easy 2, Medium 4, Hard 7 minutes) fill it, so a
+  hard sitting holds fewer problems. The app runs the clock; the count is
+  variable.
+* **Difficulty mix**: each pick orders the difficulties by a weighted random
+  shuffle of `difficulty_mix` (default 20 / 55 / 25) and takes the best problem
+  of the first one that still fits the time left.
+* **Never two near duplicates** in one session, and no problem twice.
+* **Which problem is best**: one whose pattern is due for the learner, then one
+  whose pattern they have not answered yet, then one still learning; a pattern
+  already drawn in this session goes behind those, and a retired (mastered)
+  pattern last. Ties go to a problem not answered in the last 14 days, then at
+  random.
+
+A due pattern also joins the ordinary queue (no `kind`), one problem per
+pattern, masked the same way, so Today's count includes DSA.
+
+**Import.** `scripts/import_dsa.py --from <Jolt repo> [--include-new] [--dry-run]
+[--prune] [--content export.json]` reads `data/archived/*.json` (and
+`data/new/*.json` with `--include-new`, only problems whose `descriptionStatus`
+is `original`), the library (`library.ts`), the decision tree
+(`decisionTree.ts`) and which patterns have an animation (`animations.ts`),
+validates everything like Jolt's `scripts/check-batch.mjs` (any error: nothing
+is written, exit 1) and upserts by `leetcodeId` with ids derived from stable
+keys, comparing every document before writing: a re-run with the same input
+writes nothing. A retagged problem moves to its new pattern (the old document is
+retired and kept for past reviews); a problem missing from the input stays
+playable unless `--prune`. The TS sources are read directly (plain data
+literals); `--content` takes a JSON export instead
+(`scripts/export_dsa_from_jolt.mjs`, to become `npm run export:dsa` in Jolt).
+In memory mode, `DSA_SEED_FROM=<Jolt repo>` runs the same import at startup.
+
+---
+
 ## Testing against the API without Azure
 
 `STORAGE_MODE=memory DEV_AUTH_ENABLED=true uvicorn jolt.main:app` serves this
-whole API on in-memory fakes (`jolt/data/memory.py`); sign in with
+whole API on in-memory fakes (add `DSA_SEED_FROM=../Jolt` for the curated DSA
+track) (`jolt/data/memory.py`); sign in with
 `POST /v1/auth/dev {"email": "you@example.com"}`, then create an MCP token for
 agents. Tests use the same fakes (`tests/conftest.py`) and verify Google ID tokens
 minted with a test RSA key, so they never call Google.
