@@ -115,6 +115,21 @@ class FSRSGrade(int, Enum):
 # --------------------------------------------------------------------------- #
 # Aggregates
 # --------------------------------------------------------------------------- #
+class UserSettings(BaseModel):
+    """Per-user preferences stored on the user document.
+
+    BE-06 adds the two review behaviours; BE-08 adds the rest of the Settings
+    screen (theme, desired retention, daily cap, data retention) here.
+    """
+
+    # Retire a concept from the review queue once it is mastered (FSRS stability
+    # at or above MASTERY_STABILITY_DAYS after a Good or Easy answer).
+    retire_mastered: bool = True
+    # Decision D8: question rewriting after grading is opt-in per user. When on,
+    # a grading's `rewritten_question` becomes a new question version.
+    allow_question_rewrite: bool = False
+
+
 class User(DocBase):
     """A Jolt account (BE-03).
 
@@ -132,6 +147,7 @@ class User(DocBase):
     # Set by the first successful nightly sync (BE-04); drives onboarding.
     first_sync_at: Optional[datetime] = None
     retention_days: Optional[int] = None  # data-retention preference
+    settings: UserSettings = Field(default_factory=UserSettings)
 
 
 def user_id_for(provider: str, subject: str) -> str:
@@ -304,6 +320,8 @@ class Concept(DocBase):
     source_id: Optional[str] = None
     extraction_id: Optional[str] = None
     text: str
+    # Short label from jolt_log_session (BE-06: queue items and summaries).
+    title: Optional[str] = None
     status: ConceptStatus = ConceptStatus.ACTIVE
     successor_id: Optional[str] = None  # set when superseded
     syllabus_ref: Optional[str] = None  # coverage linkage
@@ -327,15 +345,38 @@ class ConceptState(DocBase):
     step: int = 0
     # Recompute bookkeeping.
     dirty: bool = False
+    # Mastery (BE-06 §5). `mastered_at` is the time of the latest review while
+    # the card is at or above the mastery threshold, None below it; it is
+    # recomputed from the history on every fold. `unretired_at` is when the user
+    # brought the concept back (POST /v1/concepts/{id}/unretire); the concept is
+    # retired again only by a later review that is still mastered. Whether a
+    # mastered concept leaves the queue also depends on the user's
+    # `retire_mastered` setting: see `jolt.domain.mastery.is_retired`.
+    mastered_at: Optional[datetime] = None
+    unretired_at: Optional[datetime] = None
 
 
 class Question(DocBase):
+    """A review question. Every rewrite is a new version (decision D8).
+
+    Versions of one question form a chain through `previous_version_id` (and
+    `superseded_by` forwards). All versions live in the concept's partition and
+    are kept; only the newest is `active` and served by the queue.
+    """
+
     concept_id: str
     stem: str
     options: list[str] = Field(default_factory=list)
     correct_index: int = 0
     expected_answer: str = ""
     status: QuestionStatus = QuestionStatus.ACTIVE
+    version: int = 1
+    previous_version_id: Optional[str] = None
+    rewrite_reason: Optional[str] = None
+    # The grading (review) whose rewrite produced this version.
+    rewritten_from_review_id: Optional[str] = None
+    superseded_by: Optional[str] = None  # the next version's id
+    retired_at: Optional[datetime] = None
 
 
 class Review(DocBase):
@@ -354,6 +395,37 @@ class Review(DocBase):
     final_fsrs_grade: Optional[int] = None
     status: ReviewStatus = ReviewStatus.PENDING_GRADING
     invalidated_by_extraction_id: Optional[str] = None
+    # BE-06: the review session it belongs to, the question version answered,
+    # idempotency keys for both stages, and what the answer moved.
+    session_id: Optional[str] = None
+    question_version: int = 1
+    stage1_request_id: Optional[str] = None
+    stage2_request_id: Optional[str] = None
+    stage2_at: Optional[datetime] = None
+    due_before: Optional[datetime] = None
+    due_after: Optional[datetime] = None
+    retired_now: bool = False  # this answer retired the concept (mastered)
+    # The model's feedback summary, set with the final grade.
+    feedback: Optional[str] = None
+    # The question version a grading's rewrite created from this review.
+    rewritten_question_id: Optional[str] = None
+
+
+class ReviewSession(DocBase):
+    """A review session: the ordered queue served by POST /v1/review-sessions.
+
+    `started_at` is `created_at`. The summary is computed from the session's
+    reviews when it ends, so ending twice returns the same summary.
+    """
+
+    user_id: str
+    track_id: Optional[str] = None
+    concept_id: Optional[str] = None
+    kind: Optional[str] = None
+    limit: int = 0
+    question_ids: list[str] = Field(default_factory=list)
+    concept_ids: list[str] = Field(default_factory=list)
+    ended_at: Optional[datetime] = None
 
 
 class AnswerFeedback(DocBase):

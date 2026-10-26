@@ -27,6 +27,7 @@ CONTAINER_PARTITION_KEYS: dict[str, str] = {
     "concept_states": "/user_id",
     "questions": "/concept_id",
     "reviews": "/user_id",
+    "review_sessions": "/user_id",  # BE-06: review session queues
     "answer_feedback": "/review_id",
     "api_keys": "/user_id",
     "tokens": "/user_id",  # app + MCP tokens (BE-03); resolved by the indexed `lookup`

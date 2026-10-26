@@ -64,6 +64,33 @@ def score_stage_two(
 
 
 @dataclass
+class QuestionRewrite:
+    """A rewritten question proposed with a grading (decision D8, BE-06)."""
+
+    stem: str
+    options: list[str]
+    correct_index: int
+    expected_answer: str
+    rewrite_reason: Optional[str] = None
+
+    def problem(self) -> Optional[str]:
+        """Why this rewrite cannot be stored, or None when it is valid."""
+        if not isinstance(self.stem, str) or not self.stem.strip():
+            return "stem is empty"
+        if not isinstance(self.options, list) or len(self.options) < 2:
+            return "needs at least two options"
+        if not all(isinstance(o, str) and o.strip() for o in self.options):
+            return "options must be non-empty strings"
+        if not isinstance(self.correct_index, int) or not (
+            0 <= self.correct_index < len(self.options)
+        ):
+            return "correct_index is not an index into options"
+        if not isinstance(self.expected_answer, str) or not self.expected_answer.strip():
+            return "expected_answer is empty"
+        return None
+
+
+@dataclass
 class GradingInput:
     """One item of an agent's `submit_gradings` batch (§7.2)."""
 
@@ -71,6 +98,8 @@ class GradingInput:
     suggested_fsrs_grade: int
     rationale: Optional[str] = None
     rubric_version: Optional[str] = None
+    # BE-06: an optional next version of the reviewed question.
+    rewritten_question: Optional[QuestionRewrite] = None
 
 
 @dataclass
@@ -93,6 +122,8 @@ def apply_grading(review: Review, grading: GradingInput) -> GradingResult:
     grade = FSRSGrade(grading.suggested_fsrs_grade)  # validates the range
     review.final_fsrs_grade = grade.value
     review.status = ReviewStatus.GRADED
+    # The rationale doubles as the feedback summary the learner sees (BE-06 §3).
+    review.feedback = grading.rationale
 
     feedback = AnswerFeedback(
         review_id=review.id,

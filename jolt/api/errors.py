@@ -24,3 +24,4 @@ def _err(description: str) -> dict[str, Any]:
 UNAUTHORIZED = {401: _err("Missing or invalid bearer token")}
 NOT_FOUND = {404: _err("Not found, or not owned by the caller")}
 BAD_REQUEST = {400: _err("Request rejected by a business rule")}
+CONFLICT = {409: _err("Conflicts with an earlier request (e.g. a reused request id)")}

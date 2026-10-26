@@ -1,4 +1,4 @@
-"""End-to-end smoke test against a running Jolt backend (BE-02, BE-03, BE-05).
+"""End-to-end smoke test against a running Jolt backend (BE-02, BE-03, BE-05, BE-06).
 
     python scripts/smoke.py --base-url https://<dev-host>
     python scripts/smoke.py --base-url http://localhost:8000      # local, see below
@@ -20,8 +20,14 @@ share it, with a fresh test user:
     signed read URL back), jolt_store_extraction, jolt_log_session,
     jolt_create_questions; then GET /v1/sources/{id} (originals, active read, past
     reads), POST /v1/sources/{id}/reread and jolt_sync lists it, GET /v1/storage
- 8. GET /v1/reviews/due, POST stage1, POST stage2 (inline FSRS)
- 9. jolt_get_pending_gradings + jolt_submit_gradings, then jolt_get_coverage
+ 8. The review loop (BE-06): GET /v1/reviews/due; PATCH /v1/settings to allow
+    question rewrites; POST /v1/review-sessions -> stage 1 and stage 2 (each sent
+    twice with the same client_request_id: same answer back) -> POST
+    /v1/review-sessions/{id}/end with "what moved"
+ 9. jolt_get_pending_gradings + jolt_submit_gradings with a rewritten question ->
+    version 2 (GET /v1/concepts/{id}/questions), the next session serves it, the
+    review shows `graded` with feedback; POST /v1/concepts/{id}/unretire; then
+    jolt_get_coverage
 10. GET /v1/me shows the onboarding progress; revoke the MCP token (/mcp then
     refuses it); sign out (/v1 then refuses the app token)
 
@@ -402,39 +408,109 @@ async def run(
                         f"question {question_id} not due: {due}",
                     )
 
-                with rep.step("POST /v1/reviews/{question_id}/stage1"):
-                    s1 = _json(
-                        await http.post(
-                            f"/v1/reviews/{question_id}/stage1",
-                            json={"concept_id": concept_id, "free_text": "Only nearby keys move"},
-                        )
+                with rep.step("PATCH /v1/settings (allow question rewrites)"):
+                    prefs = _json(
+                        await http.patch("/v1/settings", json={"allow_question_rewrite": True})
                     )
+                    check(prefs["allow_question_rewrite"] is True, f"settings: {prefs}")
+
+                with rep.step("POST /v1/review-sessions"):
+                    session = _json(await http.post("/v1/review-sessions", json={}))
+                    session_id = session["id"]
+                    item = next(
+                        (i for i in session["items"] if i["question_id"] == question_id), None
+                    )
+                    check(item is not None, f"question {question_id} not queued: {session}")
+                    check("options" not in item, "the queue leaked the options before stage 1")
+                    check(item["version"] == 1, f"queue item: {item}")
+
+                with rep.step("POST /v1/reviews/{question_id}/stage1 (idempotent)"):
+                    s1_body = {
+                        "concept_id": concept_id,
+                        "free_text": "Only nearby keys move",
+                        "client_request_id": f"smoke-s1-{secrets.token_hex(4)}",
+                        "session_id": session_id,
+                    }
+                    s1 = _json(await http.post(f"/v1/reviews/{question_id}/stage1", json=s1_body))
                     check(CORRECT_OPTION in s1["options"], f"options: {s1['options']}")
                     review_id = s1["review_id"]
-
-                with rep.step("POST /v1/reviews/{review_id}/stage2"):
-                    s2 = _json(
-                        await http.post(
-                            f"/v1/reviews/{review_id}/stage2",
-                            json={
-                                "selected_index": s1["options"].index(CORRECT_OPTION),
-                                "latency_ms": 4200,
-                            },
-                        )
+                    s1_again = _json(
+                        await http.post(f"/v1/reviews/{question_id}/stage1", json=s1_body)
                     )
+                    check(s1_again == s1, f"stage 1 retry differs: {s1_again} vs {s1}")
+
+                with rep.step("POST /v1/reviews/{review_id}/stage2 (idempotent)"):
+                    s2_body = {
+                        "selected_index": s1["options"].index(CORRECT_OPTION),
+                        "latency_ms": 4200,
+                        "client_request_id": f"smoke-s2-{secrets.token_hex(4)}",
+                    }
+                    s2 = _json(await http.post(f"/v1/reviews/{review_id}/stage2", json=s2_body))
                     check(s2["correct"] is True, f"stage2: {s2}")
                     check(s2["due_at"], f"stage2 has no next due date: {s2}")
+                    check(s2["grading"] == "provisional", f"stage2: {s2}")
+                    check(s2["provisional_grade"] in (1, 2, 3, 4), f"stage2: {s2}")
                     out["next_due_at"] = s2["due_at"]
+                    s2_again = _json(
+                        await http.post(f"/v1/reviews/{review_id}/stage2", json=s2_body)
+                    )
+                    check(s2_again == s2, f"stage 2 retry differs: {s2_again} vs {s2}")
 
-                with rep.step("jolt_get_pending_gradings + jolt_submit_gradings"):
+                with rep.step("POST /v1/review-sessions/{id}/end (what moved)"):
+                    summary = _json(await http.post(f"/v1/review-sessions/{session_id}/end"))
+                    check(summary["reviewed"] == 1 and summary["correct"] == 1, f"{summary}")
+                    moved = {m["concept_id"]: m for m in summary["moved"]}
+                    check(concept_id in moved, f"concept did not move: {summary['moved']}")
+                    check(moved[concept_id]["new_due_at"], f"moved: {moved[concept_id]}")
+                    check(len(summary["upcoming"]) == 7, f"upcoming: {summary['upcoming']}")
+
+                with rep.step("jolt_get_pending_gradings + jolt_submit_gradings (rewrite)"):
                     pending = await _tool(mcp, "jolt_get_pending_gradings")
                     ids = [g["review_id"] for g in pending["gradings"]]
                     check(review_id in ids, f"review {review_id} not pending: {ids}")
+                    check(pending["allow_question_rewrite"] is True, f"pending: {pending}")
                     grading = [
-                        {"review_id": review_id, "suggested_fsrs_grade": 3, "rationale": "smoke"}
+                        {
+                            "review_id": review_id,
+                            "suggested_fsrs_grade": 3,
+                            "rationale": "smoke: right idea, name the predecessor too",
+                            "rewritten_question": {
+                                **CANNED_QUESTION,
+                                "stem": "Which keys change owner when a node joins the ring?",
+                                "rewrite_reason": "smoke: probe the detail",
+                            },
+                        }
                     ]
                     applied = await _tool(mcp, "jolt_submit_gradings", gradings=grading)
                     check(applied["applied"] == 1, f"submit_gradings: {applied}")
+                    check(len(applied["rewritten"]) == 1, f"submit_gradings: {applied}")
+                    version2 = applied["rewritten"][0]
+                    check(version2["version"] == 2, f"rewritten: {version2}")
+                    check(version2["previous_version_id"] == question_id, f"{version2}")
+
+                with rep.step("GET /v1/concepts/{id}/questions (version chain)"):
+                    chain = _json(await http.get(f"/v1/concepts/{concept_id}/questions"))
+                    versions = [(q["version"], q["active"]) for q in chain["question_versions"]]
+                    check(versions == [(1, False), (2, True)], f"versions: {versions}")
+                    current = chain["current_question"] or {}
+                    check(current.get("question_id") == version2["question_id"], f"{chain}")
+
+                with rep.step("GET /v1/reviews/{id} (graded, feedback)"):
+                    review = _json(await http.get(f"/v1/reviews/{review_id}"))
+                    check(review["grading"] == "graded", f"review: {review}")
+                    check(review["feedback"], f"review has no feedback: {review}")
+
+                with rep.step("POST /v1/review-sessions (serves version 2)"):
+                    nxt = _json(
+                        await http.post("/v1/review-sessions", json={"concept_id": concept_id})
+                    )
+                    items = [(i["question_id"], i["version"]) for i in nxt["items"]]
+                    check(items == [(version2["question_id"], 2)], f"queue: {items}")
+                    _json(await http.post(f"/v1/review-sessions/{nxt['id']}/end"))
+
+                with rep.step("POST /v1/concepts/{id}/unretire"):
+                    un = _json(await http.post(f"/v1/concepts/{concept_id}/unretire"))
+                    check(un["retired"] is False, f"unretire: {un}")
 
                 with rep.step("jolt_get_coverage"):
                     cov = await _tool(mcp, "jolt_get_coverage", track_id=track_id)

@@ -79,6 +79,11 @@
       ]
     },
     {
+      "name": "review_sessions",
+      "partitionKey": "/user_id",
+      "compositeIndexes": []
+    },
+    {
       "name": "answer_feedback",
       "partitionKey": "/review_id",
       "compositeIndexes": []

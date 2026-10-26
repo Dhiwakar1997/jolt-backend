@@ -15,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from jolt.api.routes import (
     auth,
+    concepts,
     dev_blob,
     mcp_tokens,
     me,
@@ -90,6 +91,8 @@ def create_app(settings: Settings | None = None, runtime: Runtime | None = None)
     app.include_router(mcp_tokens.router)
     app.include_router(upload.router)
     app.include_router(review.router)
+    app.include_router(review.sessions_router)
+    app.include_router(concepts.router)
     app.include_router(tracks.router)
     app.include_router(sources.router)
     app.include_router(sources.storage_router)

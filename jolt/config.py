@@ -98,6 +98,10 @@ class Settings(BaseSettings):
 
     # ---- FSRS ----
     fsrs_desired_retention: float = Field(default=0.9, ge=0.70, le=0.97)
+    # A concept is mastered once its FSRS stability (days) reaches this after a
+    # Good or Easy answer; with the user's `retire_mastered` on it leaves the
+    # review queue (BE-06 §5, jolt/domain/mastery.py).
+    mastery_stability_days: float = Field(default=21.0, gt=0)
 
     # ---- Key-backed providers (dormant) ----
     anthropic_api_base: str = "https://api.anthropic.com"

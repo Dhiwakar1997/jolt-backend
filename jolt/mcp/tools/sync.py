@@ -1,13 +1,16 @@
 """MCP sync tools: get_unprocessed_sources, get_pending_gradings,
 submit_gradings, sync (LLD §7.2).
 
-`submit_gradings` recomputes FSRS inline (single-service design) — no job.
+`submit_gradings` recomputes FSRS inline (single-service design) — no job — and
+stores rewritten questions as new versions when the user allows it (BE-06).
 """
 
 from __future__ import annotations
 
-from jolt.domain.grading import GradingInput
+from jolt.domain.grading import GradingInput, QuestionRewrite
 from jolt.mcp.context import get_runtime, require_user
+from jolt.services.gradings import GradingService
+from jolt.services.reviews import ReviewService
 from jolt.services.sync import SyncService
 
 
@@ -54,7 +57,9 @@ async def get_unprocessed_sources(limit: int = 10) -> dict:
 
 async def get_pending_gradings(limit: int = 10) -> dict:
     user = await require_user()
-    pending = await SyncService(get_runtime()).get_pending_gradings(user.user_id, limit)
+    rt = get_runtime()
+    pending = await SyncService(rt).get_pending_gradings(user.user_id, limit)
+    settings = await ReviewService(rt).user_settings(user.user_id)
     return {
         "gradings": [
             {
@@ -63,10 +68,30 @@ async def get_pending_gradings(limit: int = 10) -> dict:
                 "question_id": p.question_id,
                 "free_text": p.free_text,
                 "expected_answer": p.expected_answer,
+                "stem": p.stem,
+                "options": p.options,
+                "correct_index": p.correct_index,
+                "question_version": p.question_version,
+                "selected_index": p.selected_index,
+                "is_correct": p.is_correct,
             }
             for p in pending
-        ]
+        ],
+        # BE-06 (decision D8): rewrites are stored only when this is true.
+        "allow_question_rewrite": settings.allow_question_rewrite,
     }
+
+
+def _rewrite(raw) -> QuestionRewrite | None:
+    if not isinstance(raw, dict):
+        return None
+    return QuestionRewrite(
+        stem=raw.get("stem", ""),
+        options=raw.get("options", []),
+        correct_index=raw.get("correct_index", -1),
+        expected_answer=raw.get("expected_answer", ""),
+        rewrite_reason=raw.get("rewrite_reason"),
+    )
 
 
 async def submit_gradings(gradings: list[dict]) -> dict:
@@ -77,8 +102,24 @@ async def submit_gradings(gradings: list[dict]) -> dict:
             suggested_fsrs_grade=g["suggested_fsrs_grade"],
             rationale=g.get("rationale"),
             rubric_version=g.get("rubric_version"),
+            rewritten_question=_rewrite(g.get("rewritten_question")),
         )
         for g in gradings
     ]
-    applied = await SyncService(get_runtime()).submit_gradings(user.user_id, inputs)
-    return {"applied": applied, "submitted": len(inputs)}
+    outcome = await GradingService(get_runtime()).submit(user.user_id, inputs)
+    return {
+        "applied": outcome.applied,
+        "submitted": outcome.submitted,
+        "rewritten": [
+            {
+                "review_id": r.review_id,
+                "question_id": r.question_id,
+                "version": r.version,
+                "previous_version_id": r.previous_version_id,
+            }
+            for r in outcome.rewritten
+        ],
+        "rewrites_skipped": [
+            {"review_id": r.review_id, "reason": r.reason} for r in outcome.rewrites_skipped
+        ],
+    }
