@@ -177,7 +177,8 @@ python scripts/export_contract.py
 ```
 
 Human-readable reference: [`docs/API.md`](./docs/API.md). Screens without an
-endpoint yet: [`docs/GAPS.md`](./docs/GAPS.md).
+endpoint yet: [`docs/GAPS.md`](./docs/GAPS.md). Security review (findings,
+fixes, accepted risks): [`docs/SECURITY.md`](./docs/SECURITY.md).
 
 ## Container / deploy
 

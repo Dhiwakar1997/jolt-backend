@@ -2,7 +2,7 @@
 
 Each screen in the Jolt 2.0 design (Figma prototype, frames listed in
 `Jolt/design/frames/index.json`; screens per pass in `Jolt/docs/v2/PLAN.md` §5 and
-the FE pass briefs) compared with the API as of BE-10 (BE-07 to BE-10 merged, API 0.9.0) ([`API.md`](./API.md)). For
+the FE pass briefs) compared with the API as of BE-10 (BE-07 to BE-10 merged, security review done, API 1.0.0) ([`API.md`](./API.md)). For
 each gap, the backend pass whose brief covers it.
 
 Status: **ready** (today's endpoints are enough) · **partial** (some data
@@ -311,10 +311,13 @@ To fix in the pass named, or sooner.
    several active questions returns them all. Kept as it is for compatibility
    (it now leaves out retired concepts); review sessions (BE-06) serve one
    question per concept and are what the app uses.
-7. **Tokens never expire, and app tokens cannot be listed.** Sign-out and MCP
-   token revocation work, but a lost device's app token stays valid until the
-   pepper rotates, and Settings has no "signed-in devices" list. → BE-10
-   (expiry / idle timeout for app tokens, optional device list).
+7. ~~**Tokens never expire, and app tokens cannot be listed.**~~ Expiry fixed
+   in the BE-10 security review: an app token unused for `APP_TOKEN_IDLE_DAYS`
+   (30) days is refused (`401 "token expired; sign in again"`) and deleted, and
+   the daily maintenance job sweeps the rest; MCP tokens do not expire (a
+   nightly client is the point) and are revoked from Settings. Still open: a
+   "signed-in devices" list (app tokens are not listed; account delete signs
+   every device out). → later, if asked for (docs/SECURITY.md S-21).
 8. ~~**Upload dates and the schedule have no user time zone.**~~ Fixed in BE-08:
    a `time_zone` setting (IANA, default `UTC`) decides the D6 upload date, the
    plan's `upload_dates`, "today" (done today, daily cap), the session summary's
@@ -322,12 +325,13 @@ To fix in the pass named, or sooner.
    `GET /v1/sync/status`. The app should set it from the device after sign-in;
    until then everything stays UTC as before. Upload dates of sessions already
    logged are not rewritten.
-9. **No Streamable HTTP transport.** `/mcp` speaks HTTP+SSE only (mcp 1.2.0), so
-   Codex connects through the `mcp-remote` bridge instead of its native `url =`
+9. **No Streamable HTTP transport.** `/mcp` speaks HTTP+SSE only, so Codex
+   connects through the `mcp-remote` bridge instead of its native `url =`
    config, and every sync holds one long event stream (to check against the
-   Container Apps ingress timeout after deploy). → upgrade `mcp` (≥ 1.8, moves
-   Pydantic to 2.11+) and add Streamable HTTP at `/mcp`; BE-10 or its own pass.
-   See `CONNECT.md`.
+   Container Apps ingress timeout after deploy). The BE-10 security review
+   upgraded `mcp` from 1.2.0 to 1.30.0 (and Pydantic to 2.12) for its
+   advisories, so only the transport itself is left. → add Streamable HTTP at
+   `/mcp` in its own pass. See `CONNECT.md`.
 10. **`jolt_create_questions` accepts any number of options.** The prompt and
     the plan ask for exactly 4 with one correct; the server only checks the
     request shape, and a `rewritten_question` (BE-06) needs only two or more.

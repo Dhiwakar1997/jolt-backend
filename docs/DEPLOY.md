@@ -48,7 +48,7 @@ globally unique and the same on every run.
 | Container Registry (Basic) | `crjoltdev<sfx>` | Images `jolt-api:<git-sha>`. |
 | Cosmos DB for NoSQL, **serverless** | `cosmos-jolt-dev-<sfx>` | Database `jolt`; the 14 containers (`tokens` added by BE-03, `sync_runs` by BE-04, `review_sessions` by BE-06), partition keys and composite indexes of LLD §6 (from `infra/cosmos-containers.json`, kept equal to `jolt/data/cosmos.py` by `tests/test_infra.py`). Account keys disabled. Periodic backup every 24 h, kept 48 h. |
 | Storage account (StorageV2, LRS, Hot) | `stjoltdev<sfx>` | Private container `sources`; Blob CORS for the app origins; blob and container soft delete 7 days; a lifecycle rule deletes data exports (`sources/exports/`, BE-08) a day after they are written; shared keys disabled (uploads use user-delegation SAS). |
-| Key Vault (RBAC) | `kv-jolt-dev-<sfx8>` | Secrets `token-hash-pepper` and `dev-auth-secret` (dev sign-in, BE-03); per-user provider keys `apikey-*` written by the app. Soft delete 7 days, no purge protection (dev). |
+| Key Vault (RBAC) | `kv-jolt-dev-<sfx8>` | Secrets `token-hash-pepper` and `dev-auth-secret` (dev sign-in, BE-03); per-user provider keys `apikey-*` written by the app. Soft delete 7 days, no purge protection (the app purges deleted API keys). Audit log (every secret get / set / delete / purge, with the caller) to `log-jolt-dev` through a diagnostic setting (BE-10 security review): `AzureDiagnostics \| where ResourceProvider == "MICROSOFT.KEYVAULT"`. |
 | Container Apps environment | `cae-jolt-dev` | Consumption plan. |
 | Container App | `jolt-api` | External HTTPS ingress → port 8000, `/health` startup/readiness/liveness probes, scale 0..1, 0.5 vCPU / 1 GiB. |
 | Container Apps Job (scheduled) | `jolt-maintenance` | `python -m jolt.maintenance` daily at 03:17 UTC, same image and identity ([Maintenance job](#maintenance-job)). |
@@ -577,8 +577,10 @@ token-less requests per client IP), `RATE_LIMIT_MCP_PER_MINUTE` (300) per MCP
 token for tool calls and connections, and `RATE_LIMIT_IP_PER_MINUTE` (600) per
 IP across both. Over a limit: `429` with `Retry-After`. Bodies over
 `REQUEST_MAX_BYTES` (1 MiB; `MCP_REQUEST_MAX_BYTES` 4 MiB on `/mcp`) get `413`.
-The client IP is the one Container Apps ingress forwards (Uvicorn runs with
-`--proxy-headers`). With more than one replica each enforces its own buckets;
+The client IP is the right-most `X-Forwarded-For` entry, the one Container Apps
+ingress appends (`TRUSTED_PROXY_HOPS=1`, set by Bicep): a client that sends its
+own `X-Forwarded-For` cannot pick a fresh bucket per request (BE-10 security
+review). With more than one replica each enforces its own buckets;
 a shared limiter (Redis) is only worth it once `maxReplicas` > 1. Change a
 limit without a code change: `az containerapp update -g <rg> -n jolt-api --set-env-vars RATE_LIMIT_REST_PER_MINUTE=240`
 (or add it to `infra/modules/containerapp.bicep`).
@@ -612,6 +614,13 @@ container by Bicep (`infra/modules/containerapp.bicep`):
 | `APPLICATIONINSIGHTS_CONNECTION_STRING` | `appi-jolt-<env>`'s connection string (Container Apps secret `appinsights-connection-string`) | Bicep | — |
 | `RATE_LIMIT_ENABLED` (`true`), `RATE_LIMIT_REST_PER_MINUTE` (120), `RATE_LIMIT_MCP_PER_MINUTE` (300), `RATE_LIMIT_IP_PER_MINUTE` (600), `REQUEST_MAX_BYTES` (1 MiB), `MCP_REQUEST_MAX_BYTES` (4 MiB) | defaults | code (BE-10) | — ([Rate and size limits](#rate-and-size-limits)) |
 | `ABANDONED_UPLOAD_HOURS` (24) | default | code (BE-10), read by the maintenance job | — |
+| `TRUSTED_PROXY_HOPS` | `1` (the ingress) | Bicep (BE-10 security review) | — |
+| `APP_TOKEN_IDLE_DAYS` (30) | default | code (BE-10 security review): app tokens unused this long are refused and swept | — |
+| `API_DOCS_ENABLED` | unset: `/docs`, `/redoc`, `/openapi.json` on in dev, off in prod | code (BE-10 security review) | — |
+
+With `STORAGE_MODE=azure` the API refuses to start if `TOKEN_HASH_PEPPER` is the
+`.env.example` placeholder or shorter than 32 characters. Security findings,
+what was fixed and what is accepted: [`SECURITY.md`](./SECURITY.md).
 
 To change a value without a code change, edit the Bicep parameter and run
 `scripts/deploy-infra.sh --skip-build`. To rotate the pepper (logs every user

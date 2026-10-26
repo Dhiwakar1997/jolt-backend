@@ -46,7 +46,11 @@ next call.
 take a URL and, for auth, only OAuth (which Jolt does not offer: its tokens are
 opaque, per user, and pasted by the user, LLD §5). The trade-off is accepted
 because an MCP token only opens `/mcp` (never `/v1`), is one per client, and is
-revoked in one tap. The server strips `token=` values from its access log. Treat
+revoked in one tap. The server strips `token=` (and `session_id=`) values from
+its access log and from the request URLs it sends to Application Insights. A
+header client also gets its session bound to its token (messages with any other
+credential are refused); a `?token=` session cannot be, and relies on its
+random session id staying secret (docs/SECURITY.md). Treat
 a connector URL with a token like a password, and revoke the token if the URL
 leaks. Where a client can send a header (Codex, Claude Desktop's local config),
 use the header.
@@ -185,8 +189,8 @@ Correct this page with whatever the real clients need.
 ## Follow-ups
 
 - **Streamable HTTP transport** at `/mcp`: lets Codex connect natively (`url` +
-  `bearer_token_env_var`) and avoids long-lived streams. Needs the `mcp` package
-  upgraded from 1.2.0 to ≥ 1.8, which also moves Pydantic to 2.11+; do it in its
-  own change and re-export the contract.
+  `bearer_token_env_var`) and avoids long-lived streams. The `mcp` package is
+  already new enough (1.30.0 since the BE-10 security review); what is left is
+  mounting the transport and re-exporting the contract.
 - **OAuth for connectors**: would let Claude's connector UI sign in without a token
   in the URL. Not planned for the MVP (LLD §5).
