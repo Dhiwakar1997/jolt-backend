@@ -18,7 +18,7 @@ have no endpoint yet are listed in [`GAPS.md`](./GAPS.md).
 
 | | |
 |---|---|
-| **Base paths** | REST under `/v1`. MCP over HTTP+SSE: connect to `/mcp/sse`, post to `/mcp/messages/`. `GET /health` → `{status: "ok"}` (no auth). |
+| **Base paths** | REST under `/v1`. MCP over HTTP+SSE: connect to `/mcp/sse`, post to `/mcp/messages/`. `GET /health` → `{status: "ok", version}` (no auth). CORS: the origins in `CORS_ORIGINS` / `CORS_ORIGIN_REGEX`, no credentials (the token is a header). |
 | **Auth** | `Authorization: Bearer <token>` on every `/v1` route except `POST /v1/accounts`, and on the MCP connection. Today there is one token kind (`jolt_live_…`) for both surfaces; BE-03 splits app and MCP tokens. A bare token without `Bearer` is also accepted. |
 | **Scope** | Identity comes only from the token. No route or tool takes a `user_id`. |
 | **Errors (REST)** | Non-2xx bodies are `{"detail": "<message>"}` (`ErrorResponse`). Request-validation failures are `422` with `{"detail": [ {loc, msg, type} ]}` (`HTTPValidationError`). `401` always carries `WWW-Authenticate: Bearer`. |
@@ -67,6 +67,11 @@ background job).
 The app (REST) or an agent (MCP) asks for a signed PUT URL, the client uploads the
 bytes straight to Blob, then the app confirms. The source stays `unprocessed` until
 a sync claims it.
+
+The PUT to `upload_url` is a plain Azure Blob "Put Blob" with a SAS: send the raw
+bytes with headers `x-ms-blob-type: BlockBlob` and `Content-Type: <content_type>`;
+success is `201`. Browsers can do this from the origins in Blob CORS (see
+`docs/DEPLOY.md`).
 
 | Method | Path | Auth | Request | Response | Errors |
 |---|---|---|---|---|---|
@@ -133,6 +138,19 @@ inline. The agent later replaces the provisional grade (section 2).
 ## Testing against the API without Azure
 
 `STORAGE_MODE=memory uvicorn jolt.main:app` serves this whole API on in-memory
-fakes (`jolt/data/memory.py`). Blob URLs are then opaque `memory://` strings that
-nothing serves, so a client cannot complete a real upload in this mode. Tests use
-the same fakes (`tests/conftest.py`).
+fakes (`jolt/data/memory.py`). Tests use the same fakes (`tests/conftest.py`).
+
+Uploads work too when the server knows its own URL:
+
+```bash
+STORAGE_MODE=memory PUBLIC_BASE_URL=http://localhost:8000 uvicorn jolt.main:app --port 8000
+```
+
+`upload_url` / `read_url` then point at `/_dev/blob/<container>/<path>?sp=…&sig=…`
+on that server, which accepts the same PUT (201) and GET as Blob, checks the
+signature, and is mounted only in memory mode (not part of the contract). Without
+`PUBLIC_BASE_URL` the URLs are opaque `memory://` strings that nothing serves.
+`python scripts/smoke.py --base-url http://localhost:8000` runs the whole loop.
+
+`GET /health` returns `{status: "ok", version}`; `version` is the image's git SHA
+(`dev` locally).

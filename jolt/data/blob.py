@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+from urllib.parse import quote
 
 from azure.storage.blob import BlobSasPermissions, generate_blob_sas
 from azure.storage.blob.aio import BlobServiceClient
@@ -59,7 +60,7 @@ class BlobGateway:
                 start=start,
             )
         base = self.service.url.rstrip("/")
-        return f"{base}/{self.container}/{blob_path}?{token}"
+        return f"{base}/{self.container}/{quote(blob_path)}?{token}"
 
     async def upload_url(self, blob_path: str) -> str:
         """Short-TTL PUT url scoped to exactly one blob path (LLD §7.1)."""

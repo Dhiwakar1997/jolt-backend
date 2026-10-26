@@ -15,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from jolt.api.routes import (
     accounts,
+    dev_blob,
     progress,
     review,
     sources,
@@ -64,12 +65,18 @@ def create_app(settings: Settings | None = None, runtime: Runtime | None = None)
     if runtime is not None:
         app.state.runtime = runtime
 
+    # CORS for the browser app (BE-02), from CORS_ORIGINS / CORS_ORIGIN_REGEX.
+    # Applied app-wide so it covers /v1 and, in memory mode, the /_dev/blob
+    # upload URLs; non-browser clients (MCP agents) ignore it. The token rides
+    # the Authorization header, never a cookie, so credentials stay off.
     app.add_middleware(
         CORSMiddleware,
         allow_origins=cfg.cors_origin_list,
-        allow_credentials=True,
-        allow_methods=["*"],
+        allow_origin_regex=cfg.cors_origin_regex or None,
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["*"],
+        max_age=600,
     )
 
     # REST (LLD §4 api/routes)
@@ -80,13 +87,17 @@ def create_app(settings: Settings | None = None, runtime: Runtime | None = None)
     app.include_router(sources.router)
     app.include_router(progress.router)
     app.include_router(settings_routes.router)
+    if cfg.storage_mode == "memory":
+        # Serves the in-memory blob fake's upload/read URLs (dev only).
+        app.include_router(dev_blob.router)
 
     # MCP surface (LLD §4 mcp/) mounted at /mcp
     app.mount("/mcp", build_mcp_app())
 
     @app.get("/health", tags=["ops"])
     async def health() -> dict:
-        return {"status": "ok"}
+        # `version` lets the deploy workflow wait for the new revision.
+        return {"status": "ok", "version": cfg.app_version}
 
     return app
 

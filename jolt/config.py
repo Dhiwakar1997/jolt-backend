@@ -25,7 +25,20 @@ class Settings(BaseSettings):
     # ---- General ----
     jolt_env: Literal["dev", "prod"] = "dev"
     auth_mode: Literal["managed_identity", "key"] = "key"
-    cors_origins: str = "*"
+    # Browser origins allowed to call the API (comma-separated exact origins, or
+    # `*`). The app sends its token in the Authorization header, never cookies,
+    # so credentials are not allowed cross-origin.
+    cors_origins: str = "http://localhost:5173"
+    # Optional regex for origins that cannot be listed exactly, e.g. Netlify
+    # deploy previews: ^https://deploy-preview-\d+--jolt\.netlify\.app$
+    cors_origin_regex: str = ""
+    # Build identifier reported by /health (the image sets it to the git SHA).
+    app_version: str = "dev"
+    # Public base URL of this server. Used in memory mode only: when set, the
+    # in-memory blob fake mints upload/read URLs served by this app at
+    # /_dev/blob/... so a browser or scripts/smoke.py can PUT/GET for real.
+    # Empty -> opaque memory:// URLs that nothing serves (tests).
+    public_base_url: str = ""
     # Where state lives: `azure` (Cosmos/Blob/Key Vault) or `memory` (in-process
     # fakes from jolt/data/memory.py — tests and cloud-free local runs only;
     # everything is lost on restart).

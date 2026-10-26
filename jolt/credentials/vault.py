@@ -52,12 +52,23 @@ class VaultClient:
         return secret.value
 
     async def delete_key(self, user_id: str, provider: str) -> None:
+        """Delete, then purge, so the delete is real (LLD §5.1).
+
+        The vault has soft delete on; without the purge the name stays taken by
+        a deleted secret and re-adding a key for the same provider would fail
+        with a conflict until the retention period ends.
+        """
         client = self._ensure()
-        poller = await client.begin_delete_secret(secret_name(user_id, provider))
+        name = secret_name(user_id, provider)
         try:
+            poller = await client.begin_delete_secret(name)
             await poller.wait()
         except Exception:
             pass  # already gone / soft-delete in progress
+        try:
+            await client.purge_deleted_secret(name)
+        except Exception:
+            pass  # not soft-deleted (or purge protection on): nothing more to do
 
     async def close(self) -> None:
         if self._client is not None:

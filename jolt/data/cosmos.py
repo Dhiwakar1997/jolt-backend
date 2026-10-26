@@ -50,6 +50,19 @@ COMPOSITE_INDEXES: dict[str, list[list[dict]]] = {
 }
 
 
+def indexing_policy(container: str) -> dict | None:
+    """The container's indexing policy, or None for the Cosmos default."""
+    if container not in COMPOSITE_INDEXES:
+        return None
+    return {
+        "automatic": True,
+        "indexingMode": "consistent",
+        "includedPaths": [{"path": "/*"}],
+        "excludedPaths": [{"path": '/"_etag"/?'}],
+        "compositeIndexes": COMPOSITE_INDEXES[container],
+    }
+
+
 @dataclass
 class CosmosGateway:
     client: CosmosClient
@@ -80,28 +93,33 @@ def _build_client(settings: Settings) -> CosmosClient:
 
 
 async def init_cosmos(settings: Settings | None = None) -> CosmosGateway:
-    """Create the client, ensure database + containers exist, return the gateway.
+    """Create the client and return the gateway with one client per container.
 
     Called once from the FastAPI lifespan (LLD §4 main.py assembly).
+
+    With a key (local dev / emulator) the database and containers are created if
+    missing. Under Managed Identity they are not: Cosmos data-plane RBAC (the
+    "Built-in Data Contributor" role the app holds) cannot create databases or
+    containers, so in Azure they are provisioned by `infra/` (Bicep) from
+    `infra/cosmos-containers.json`, which a test keeps in step with
+    `CONTAINER_PARTITION_KEYS` / `COMPOSITE_INDEXES` above.
     """
     settings = settings or get_settings()
     client = _build_client(settings)
-    database = await client.create_database_if_not_exists(id=settings.cosmos_database)
 
+    if settings.use_managed_identity:
+        database = client.get_database_client(settings.cosmos_database)
+        containers = {
+            name: database.get_container_client(name) for name in CONTAINER_PARTITION_KEYS
+        }
+        return CosmosGateway(client=client, database=database, _containers=containers)
+
+    database = await client.create_database_if_not_exists(id=settings.cosmos_database)
     containers: dict[str, ContainerProxy] = {}
     for name, pk_path in CONTAINER_PARTITION_KEYS.items():
-        indexing_policy = None
-        if name in COMPOSITE_INDEXES:
-            indexing_policy = {
-                "automatic": True,
-                "indexingMode": "consistent",
-                "includedPaths": [{"path": "/*"}],
-                "excludedPaths": [{"path": '/"_etag"/?'}],
-                "compositeIndexes": COMPOSITE_INDEXES[name],
-            }
         containers[name] = await database.create_container_if_not_exists(
             id=name,
             partition_key=PartitionKey(path=pk_path),
-            indexing_policy=indexing_policy,
+            indexing_policy=indexing_policy(name),
         )
     return CosmosGateway(client=client, database=database, _containers=containers)

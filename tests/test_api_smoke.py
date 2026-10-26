@@ -12,7 +12,7 @@ from jolt.credentials.providers import ValidationResult
 
 
 def test_health(client):
-    assert client.get("/health").json() == {"status": "ok"}
+    assert client.get("/health").json() == {"status": "ok", "version": "dev"}
 
 
 def test_v1_requires_a_valid_bearer_token(client, account):

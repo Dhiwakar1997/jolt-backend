@@ -31,10 +31,12 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import hmac
 import itertools
 import re
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Optional
+from urllib.parse import quote
 
 from azure.core import MatchConditions
 from azure.cosmos import exceptions as cosmos_exc
@@ -275,20 +277,37 @@ class _StoredBlob:
 class InMemoryBlobGateway:
     """Drop-in for `jolt.data.blob.BlobGateway`.
 
-    URLs are opaque `memory://` strings: nothing serves them. Tests simulate the
-    client's direct PUT with `put()`.
+    By default URLs are opaque `memory://` strings that nothing serves; tests
+    simulate the client's direct PUT with `put()`. With a `base_url` of
+    `<server>/_dev/blob` (set from `PUBLIC_BASE_URL` in memory mode), the URLs are
+    served by the dev-only routes in `jolt/api/routes/dev_blob.py`, so a browser
+    or `scripts/smoke.py` can PUT and GET for real. The `sig` is an HMAC over
+    permission + path with `signing_key`, checked by `verify()`; like a SAS, a
+    URL grants exactly one permission on exactly one blob.
     """
 
     container: str = "sources"
     base_url: str = "memory://blob"
+    signing_key: str = "memory"
     _blobs: dict[str, _StoredBlob] = field(default_factory=dict)
 
     def blob_path(self, user_id: str, source_id: str, filename: str) -> str:
         return f"{user_id}/{source_id}/{filename}"
 
+    def _sig(self, blob_path: str, perm: str) -> str:
+        msg = f"{perm}:{self.container}/{blob_path}".encode()
+        return hmac.new(self.signing_key.encode(), msg, hashlib.sha256).hexdigest()[:32]
+
     def _url(self, blob_path: str, perm: str) -> str:
-        sig = hashlib.sha256(f"{perm}:{blob_path}".encode()).hexdigest()[:16]
-        return f"{self.base_url}/{self.container}/{blob_path}?sp={perm}&sig={sig}"
+        sig = self._sig(blob_path, perm)
+        path = quote(blob_path)
+        return f"{self.base_url}/{self.container}/{path}?sp={perm}&sig={sig}"
+
+    def verify(self, blob_path: str, perm: str, sig: str, needed: str) -> bool:
+        """True if (`perm`, `sig`) was minted for `blob_path` and grants `needed`."""
+        if not perm or not set(needed) & set(perm):
+            return False
+        return hmac.compare_digest(sig, self._sig(blob_path, perm))
 
     async def upload_url(self, blob_path: str) -> str:
         return self._url(blob_path, "cw")
@@ -303,8 +322,11 @@ class InMemoryBlobGateway:
         return {"size": len(blob.data), "content_type": blob.content_type}
 
     def put(self, blob_path: str, data: bytes, content_type: Optional[str] = None) -> None:
-        """Simulate the client's direct PUT to the SAS URL (test helper)."""
+        """Store bytes as the client's direct PUT to the upload URL would."""
         self._blobs[blob_path] = _StoredBlob(data=data, content_type=content_type)
+
+    def get(self, blob_path: str) -> Optional[_StoredBlob]:
+        return self._blobs.get(blob_path)
 
     async def close(self) -> None:
         return None
@@ -350,6 +372,14 @@ def build_memory_gateways(settings: Settings | None = None):
     settings = settings or get_settings()
     return (
         InMemoryCosmosGateway(),
-        InMemoryBlobGateway(container=settings.blob_container),
+        InMemoryBlobGateway(
+            container=settings.blob_container,
+            base_url=(
+                f"{settings.public_base_url.rstrip('/')}/_dev/blob"
+                if settings.public_base_url
+                else "memory://blob"
+            ),
+            signing_key=settings.token_hash_pepper,
+        ),
         (InMemoryVault()),
     )
