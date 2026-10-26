@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Jolt API",
-    "version": "0.5.0"
+    "version": "0.6.0"
   },
   "paths": {
     "/v1/auth/google": {
@@ -621,6 +621,16 @@
               }
             }
           },
+          "409": {
+            "description": "Conflicts with an earlier request (e.g. a reused request id)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "422": {
             "description": "Validation Error",
             "content": {
@@ -690,6 +700,350 @@
           },
           "400": {
             "description": "Request rejected by a business rule",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/reviews/{review_id}": {
+      "get": {
+        "tags": [
+          "reviews"
+        ],
+        "summary": "Get Review",
+        "operationId": "get_review",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "review_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Review Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, or not owned by the caller",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/review-sessions": {
+      "post": {
+        "tags": [
+          "reviews"
+        ],
+        "summary": "Start Review Session",
+        "operationId": "start_review_session",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartSessionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewSessionResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, or not owned by the caller",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/v1/review-sessions/{session_id}/end": {
+      "post": {
+        "tags": [
+          "reviews"
+        ],
+        "summary": "End Review Session",
+        "operationId": "end_review_session",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionSummaryResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, or not owned by the caller",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/concepts/{concept_id}/unretire": {
+      "post": {
+        "tags": [
+          "concepts"
+        ],
+        "summary": "Unretire Concept",
+        "operationId": "unretire_concept",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "concept_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Concept Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnretireResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, or not owned by the caller",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicts with an earlier request (e.g. a reused request id)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/concepts/{concept_id}/questions": {
+      "get": {
+        "tags": [
+          "concepts"
+        ],
+        "summary": "List Question Versions",
+        "operationId": "list_question_versions",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "concept_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Concept Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuestionVersionsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, or not owned by the caller",
             "content": {
               "application/json": {
                 "schema": {
@@ -1423,6 +1777,96 @@
         }
       }
     },
+    "/v1/settings": {
+      "get": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Get Settings",
+        "operationId": "get_settings",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Update Settings",
+        "operationId": "update_settings",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SettingsPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
     "/v1/settings/api-key": {
       "get": {
         "tags": [
@@ -2050,6 +2494,24 @@
         ],
         "title": "ConceptDetailResponse"
       },
+      "ConceptRefResponse": {
+        "properties": {
+          "concept_id": {
+            "type": "string",
+            "title": "Concept Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          }
+        },
+        "type": "object",
+        "required": [
+          "concept_id",
+          "title"
+        ],
+        "title": "ConceptRefResponse"
+      },
       "ConceptStatePoint": {
         "properties": {
           "reviewed_at": {
@@ -2085,6 +2547,53 @@
               }
             ],
             "title": "Is Correct"
+          },
+          "review_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Id"
+          },
+          "question_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Question Id"
+          },
+          "question_version": {
+            "type": "integer",
+            "title": "Question Version",
+            "default": 1
+          },
+          "grading": {
+            "type": "string",
+            "enum": [
+              "provisional",
+              "graded"
+            ],
+            "title": "Grading",
+            "default": "provisional"
+          },
+          "feedback": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Feedback"
           }
         },
         "type": "object",
@@ -2530,6 +3039,51 @@
         ],
         "title": "MeResponse"
       },
+      "MovedResponse": {
+        "properties": {
+          "concept_id": {
+            "type": "string",
+            "title": "Concept Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "old_due_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Old Due At"
+          },
+          "new_due_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "New Due At",
+            "description": "null when the concept was retired"
+          }
+        },
+        "type": "object",
+        "required": [
+          "concept_id",
+          "title",
+          "old_due_at",
+          "new_due_at"
+        ],
+        "title": "MovedResponse"
+      },
       "OnboardingResponse": {
         "properties": {
           "has_track": {
@@ -2561,6 +3115,255 @@
           "first_sync_at"
         ],
         "title": "OnboardingResponse"
+      },
+      "PatternMatch": {
+        "properties": {
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "io_contract": {
+            "type": "string",
+            "title": "Io Contract"
+          },
+          "examples": {
+            "items": {
+              "$ref": "#/components/schemas/PatternMatchExample"
+            },
+            "type": "array",
+            "title": "Examples"
+          },
+          "difficulty": {
+            "type": "string",
+            "enum": [
+              "Easy",
+              "Medium",
+              "Hard"
+            ],
+            "title": "Difficulty"
+          },
+          "time_weight": {
+            "type": "number",
+            "title": "Time Weight"
+          }
+        },
+        "type": "object",
+        "required": [
+          "description",
+          "io_contract",
+          "examples",
+          "difficulty",
+          "time_weight"
+        ],
+        "title": "PatternMatch",
+        "description": "BE-09 `pattern_match` payload; always null until BE-09."
+      },
+      "PatternMatchExample": {
+        "properties": {
+          "input": {
+            "type": "string",
+            "title": "Input"
+          },
+          "output": {
+            "type": "string",
+            "title": "Output"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          }
+        },
+        "type": "object",
+        "required": [
+          "input",
+          "output"
+        ],
+        "title": "PatternMatchExample"
+      },
+      "QuestionVersionResponse": {
+        "properties": {
+          "question_id": {
+            "type": "string",
+            "title": "Question Id"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "stem": {
+            "type": "string",
+            "title": "Stem"
+          },
+          "previous_version_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous Version Id"
+          },
+          "rewrite_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rewrite Reason"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "active": {
+            "type": "boolean",
+            "title": "Active"
+          }
+        },
+        "type": "object",
+        "required": [
+          "question_id",
+          "version",
+          "stem",
+          "previous_version_id",
+          "rewrite_reason",
+          "created_at",
+          "active"
+        ],
+        "title": "QuestionVersionResponse"
+      },
+      "QuestionVersionsResponse": {
+        "properties": {
+          "concept_id": {
+            "type": "string",
+            "title": "Concept Id"
+          },
+          "current_question": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QuestionVersionResponse"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The version the next session serves"
+          },
+          "question_versions": {
+            "items": {
+              "$ref": "#/components/schemas/QuestionVersionResponse"
+            },
+            "type": "array",
+            "title": "Question Versions",
+            "description": "Oldest first (D8)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "concept_id",
+          "current_question",
+          "question_versions"
+        ],
+        "title": "QuestionVersionsResponse"
+      },
+      "QueueItemResponse": {
+        "properties": {
+          "concept_id": {
+            "type": "string",
+            "title": "Concept Id"
+          },
+          "concept_title": {
+            "type": "string",
+            "title": "Concept Title"
+          },
+          "question_id": {
+            "type": "string",
+            "title": "Question Id"
+          },
+          "question_type": {
+            "type": "string",
+            "enum": [
+              "free_text",
+              "pattern_match"
+            ],
+            "title": "Question Type"
+          },
+          "stem": {
+            "type": "string",
+            "title": "Stem"
+          },
+          "track_id": {
+            "type": "string",
+            "title": "Track Id"
+          },
+          "track_name": {
+            "type": "string",
+            "title": "Track Name"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "interval_days": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Interval Days",
+            "description": "Days since the last review; null if first"
+          },
+          "review_number": {
+            "type": "integer",
+            "title": "Review Number"
+          },
+          "rewritten": {
+            "type": "boolean",
+            "title": "Rewritten",
+            "description": "This version was rewritten after the last answer"
+          },
+          "pattern_match": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PatternMatch"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "concept_id",
+          "concept_title",
+          "question_id",
+          "question_type",
+          "stem",
+          "track_id",
+          "track_name",
+          "version",
+          "interval_days",
+          "review_number",
+          "rewritten"
+        ],
+        "title": "QueueItemResponse"
       },
       "ReadResponse": {
         "properties": {
@@ -2766,6 +3569,329 @@
           "retention_days"
         ],
         "title": "RetentionResponse"
+      },
+      "ReviewResponse": {
+        "properties": {
+          "review_id": {
+            "type": "string",
+            "title": "Review Id"
+          },
+          "concept_id": {
+            "type": "string",
+            "title": "Concept Id"
+          },
+          "question_id": {
+            "type": "string",
+            "title": "Question Id"
+          },
+          "question_version": {
+            "type": "integer",
+            "title": "Question Version"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          },
+          "free_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Free Text"
+          },
+          "locked_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Locked At"
+          },
+          "selected_index": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected Index"
+          },
+          "correct": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Correct"
+          },
+          "provisional_grade": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provisional Grade"
+          },
+          "final_grade": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Final Grade"
+          },
+          "grading": {
+            "type": "string",
+            "enum": [
+              "provisional",
+              "graded"
+            ],
+            "title": "Grading"
+          },
+          "feedback": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Feedback",
+            "description": "The model's feedback summary, once graded"
+          },
+          "due_after": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Due After"
+          },
+          "rewritten_question_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rewritten Question Id",
+            "description": "The question version a rewrite created from this answer"
+          }
+        },
+        "type": "object",
+        "required": [
+          "review_id",
+          "concept_id",
+          "question_id",
+          "question_version",
+          "session_id",
+          "free_text",
+          "locked_at",
+          "selected_index",
+          "correct",
+          "provisional_grade",
+          "final_grade",
+          "grading",
+          "feedback",
+          "due_after",
+          "rewritten_question_id"
+        ],
+        "title": "ReviewResponse"
+      },
+      "ReviewSessionResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Started At"
+          },
+          "track_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Track Id"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/QueueItemResponse"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "done_today": {
+            "type": "integer",
+            "title": "Done Today",
+            "description": "Answers given since midnight UTC"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "started_at",
+          "track_id",
+          "items",
+          "done_today"
+        ],
+        "title": "ReviewSessionResponse"
+      },
+      "SessionSummaryResponse": {
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "title": "Session Id"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Started At"
+          },
+          "ended_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Ended At"
+          },
+          "reviewed": {
+            "type": "integer",
+            "title": "Reviewed"
+          },
+          "correct": {
+            "type": "integer",
+            "title": "Correct"
+          },
+          "provisional": {
+            "type": "integer",
+            "title": "Provisional"
+          },
+          "graded": {
+            "type": "integer",
+            "title": "Graded"
+          },
+          "retired": {
+            "items": {
+              "$ref": "#/components/schemas/ConceptRefResponse"
+            },
+            "type": "array",
+            "title": "Retired"
+          },
+          "moved": {
+            "items": {
+              "$ref": "#/components/schemas/MovedResponse"
+            },
+            "type": "array",
+            "title": "Moved"
+          },
+          "upcoming": {
+            "items": {
+              "$ref": "#/components/schemas/UpcomingDayResponse"
+            },
+            "type": "array",
+            "title": "Upcoming"
+          }
+        },
+        "type": "object",
+        "required": [
+          "session_id",
+          "started_at",
+          "ended_at",
+          "reviewed",
+          "correct",
+          "provisional",
+          "graded",
+          "retired",
+          "moved",
+          "upcoming"
+        ],
+        "title": "SessionSummaryResponse"
+      },
+      "SettingsPatch": {
+        "properties": {
+          "retire_mastered": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retire Mastered"
+          },
+          "allow_question_rewrite": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allow Question Rewrite"
+          }
+        },
+        "type": "object",
+        "title": "SettingsPatch"
+      },
+      "SettingsResponse": {
+        "properties": {
+          "retire_mastered": {
+            "type": "boolean",
+            "title": "Retire Mastered",
+            "description": "Mastered concepts leave the review queue"
+          },
+          "allow_question_rewrite": {
+            "type": "boolean",
+            "title": "Allow Question Rewrite",
+            "description": "Let the model rewrite a question after grading (decision D8, opt-in)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "retire_mastered",
+          "allow_question_rewrite"
+        ],
+        "title": "SettingsResponse"
       },
       "SignInResponse": {
         "properties": {
@@ -3133,6 +4259,32 @@
           "free_text": {
             "type": "string",
             "title": "Free Text"
+          },
+          "client_request_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Request Id",
+            "description": "Idempotency key: a retry with the same id returns the first response"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id",
+            "description": "The review session this answer belongs to"
           }
         },
         "type": "object",
@@ -3154,12 +4306,18 @@
             },
             "type": "array",
             "title": "Options"
+          },
+          "locked_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Locked At"
           }
         },
         "type": "object",
         "required": [
           "review_id",
-          "options"
+          "options",
+          "locked_at"
         ],
         "title": "StageOneResponse"
       },
@@ -3179,6 +4337,20 @@
               }
             ],
             "title": "Latency Ms"
+          },
+          "client_request_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Request Id",
+            "description": "Idempotency key: a retry with the same id returns the first response"
           }
         },
         "type": "object",
@@ -3212,6 +4384,72 @@
               }
             ],
             "title": "Due At"
+          },
+          "grading": {
+            "type": "string",
+            "enum": [
+              "provisional",
+              "graded"
+            ],
+            "title": "Grading"
+          },
+          "provisional_grade": {
+            "type": "integer",
+            "maximum": 4.0,
+            "minimum": 1.0,
+            "title": "Provisional Grade",
+            "description": "FSRS grade set from the choice"
+          },
+          "interval_days": {
+            "type": "integer",
+            "title": "Interval Days",
+            "description": "Days until the next review, at least 1"
+          },
+          "match": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "correct",
+                  "partial",
+                  "incorrect"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Match",
+            "description": "pattern_match questions only (BE-09); null today"
+          },
+          "question_title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Question Title",
+            "description": "pattern_match questions only (BE-09); null today"
+          },
+          "retired": {
+            "type": "boolean",
+            "title": "Retired",
+            "description": "The concept is mastered and out of the queue"
+          },
+          "feedback": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Feedback",
+            "description": "The model's feedback, once graded"
           }
         },
         "type": "object",
@@ -3219,9 +4457,80 @@
           "correct",
           "expected_answer",
           "correct_index",
-          "due_at"
+          "due_at",
+          "grading",
+          "provisional_grade",
+          "interval_days",
+          "retired"
         ],
         "title": "StageTwoResponse"
+      },
+      "StartSessionRequest": {
+        "properties": {
+          "track_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Track Id",
+            "description": "Only this track's due questions"
+          },
+          "limit": {
+            "type": "integer",
+            "maximum": 500.0,
+            "minimum": 1.0,
+            "title": "Limit",
+            "description": "Most questions in the queue",
+            "default": 100
+          },
+          "concept_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Concept Id",
+            "description": "Practise one concept now, due or not (ignores the rest)"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "notes",
+                  "dsa_patterns"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind",
+            "description": "BE-09: DSA sessions; every track is `notes` today"
+          },
+          "time_budget_minutes": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Time Budget Minutes",
+            "description": "BE-09 DSA sessions; accepted and ignored today"
+          }
+        },
+        "type": "object",
+        "title": "StartSessionRequest"
       },
       "StorageResponse": {
         "properties": {
@@ -3589,6 +4898,57 @@
           "user_id"
         ],
         "title": "TrackResponse"
+      },
+      "UnretireResponse": {
+        "properties": {
+          "concept_id": {
+            "type": "string",
+            "title": "Concept Id"
+          },
+          "retired": {
+            "type": "boolean",
+            "const": false,
+            "title": "Retired",
+            "default": false
+          },
+          "due_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Due At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "concept_id",
+          "due_at"
+        ],
+        "title": "UnretireResponse"
+      },
+      "UpcomingDayResponse": {
+        "properties": {
+          "date": {
+            "type": "string",
+            "format": "date",
+            "title": "Date"
+          },
+          "questions": {
+            "type": "integer",
+            "title": "Questions"
+          }
+        },
+        "type": "object",
+        "required": [
+          "date",
+          "questions"
+        ],
+        "title": "UpcomingDayResponse"
       },
       "UploadPage": {
         "properties": {

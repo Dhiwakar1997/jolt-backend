@@ -14,7 +14,7 @@ from jolt.domain.models import (
 )
 from jolt.mcp.context import get_runtime, require_user
 from jolt.services.sync import ConceptInput, QuestionInput, SyncService
-from jolt.services.sync_runs import SyncRunService, add_change
+from jolt.services.sync_runs import SyncRunService, add_change, concept_title
 from jolt.services.tracks import AgendaLocked, TrackError, TrackService
 from jolt.services.uploads import PageSpec, UploadInvalid, UploadService
 
@@ -65,7 +65,7 @@ async def log_session(source_ids: list[str], concepts: list[dict]) -> dict:
                 SyncChange(
                     kind=SyncChangeKind.CONCEPT_ADDED,
                     concept_id=concept.id,
-                    concept_title=_concept_title(concept),
+                    concept_title=concept_title(concept),
                     track_id=concept.track_id,
                     source_id=source.id if source else None,
                     source_uploaded_at=source.uploaded_at if source else None,
@@ -83,13 +83,6 @@ async def log_session(source_ids: list[str], concepts: list[dict]) -> dict:
         "session_ids": [s.id for s in logged.sessions],
         "concept_ids": [c.id for c in logged.concepts],
     }
-
-
-def _concept_title(concept) -> str:
-    if concept.title:
-        return concept.title
-    text = " ".join(concept.text.split())
-    return text if len(text) <= 80 else text[:79].rstrip() + "…"
 
 
 async def store_extraction(
@@ -162,7 +155,7 @@ async def correct_concept(track_id: str, concept_id: str, text: str) -> dict:
         change = SyncChange(
             kind=SyncChangeKind.CONCEPT_UPDATED,
             concept_id=concept_id,
-            concept_title=_concept_title(updated),
+            concept_title=concept_title(updated),
             track_id=track_id,
             source_id=source.id if source else None,
             source_uploaded_at=source.uploaded_at if source else None,

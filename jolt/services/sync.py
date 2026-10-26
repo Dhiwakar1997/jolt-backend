@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from jolt.data.leases import SourceLeases
-from jolt.domain.grading import GradingInput, apply_grading
+from jolt.domain.grading import GradingInput
 from jolt.domain.models import (
     AgendaStatus,
     Concept,
@@ -31,7 +31,6 @@ from jolt.domain.models import (
     SyllabusItem,
     TrackOrigin,
 )
-from jolt.domain.scheduling import fold_history
 from jolt.domain.sync import (
     PlanGrading,
     PlanReread,
@@ -42,6 +41,8 @@ from jolt.domain.sync import (
     upload_day,
 )
 from jolt.runtime import Runtime
+from jolt.services.gradings import GradingService
+from jolt.services.reviews import ReviewService
 from jolt.services.tracks import TrackError, TrackService
 
 
@@ -118,6 +119,13 @@ class PendingGrading:
     question_id: str
     free_text: str
     expected_answer: str
+    # BE-06: the question as answered, so the agent can rewrite it (D8).
+    stem: str = ""
+    options: list[str] = field(default_factory=list)
+    correct_index: int = 0
+    question_version: int = 1
+    selected_index: Optional[int] = None
+    is_correct: Optional[bool] = None
 
 
 class SyncService:
@@ -368,7 +376,7 @@ class SyncService:
                 source_id=c.source_id,
                 extraction_id=extraction_id,
                 text=c.text,
-                title=c.title,
+                title=(c.title or "").strip()[:120] or None,
                 # The concept's coverage key is its agenda concept_key.
                 syllabus_ref=c.effective_key(),
                 status=ConceptStatus.ACTIVE,
@@ -542,6 +550,12 @@ class SyncService:
                     question_id=review.question_id,
                     free_text=review.free_text or "",
                     expected_answer=question.expected_answer if question else "",
+                    stem=question.stem if question else "",
+                    options=list(question.options) if question else [],
+                    correct_index=question.correct_index if question else 0,
+                    question_version=question.version if question else review.question_version,
+                    selected_index=review.selected_index,
+                    is_correct=review.is_correct,
                 )
             )
         return out
@@ -550,35 +564,10 @@ class SyncService:
         """Apply semantic grades idempotently and re-fold each affected card inline.
 
         Returns the number of gradings newly applied (idempotent no-ops excluded).
+        BE-06: delegates to `GradingService`, which also stores question
+        rewrites (decision D8) and recomputes mastery.
         """
-        applied = 0
-        touched_concepts: set[str] = set()
-        for g in gradings:
-            review = await self._rt.repos.reviews.get_review(g.review_id, user_id)
-            if review is None:
-                continue
-            result = apply_grading(review, g)
-            if not result.applied:
-                continue
-            await self._rt.repos.reviews.replace(result.review, etag=result.review.etag)
-            if result.feedback is not None:
-                await self._rt.repos.answer_feedback.create(result.feedback)
-            applied += 1
-            touched_concepts.add(review.concept_id)
-
-        # Inline FSRS re-fold for each concept whose grade changed (LLD §7.4).
-        for concept_id in touched_concepts:
-            await self._recompute_card(user_id, concept_id)
-        return applied
+        return (await GradingService(self._rt).submit(user_id, gradings)).applied
 
     async def _recompute_card(self, user_id: str, concept_id: str) -> ConceptState:
-        history = await self._rt.repos.reviews.history_for_concept(user_id, concept_id)
-        state = await self._rt.repos.concept_states.for_concept(user_id, concept_id)
-        if state is None:
-            state = ConceptState(user_id=user_id, concept_id=concept_id)
-            state = await self._rt.repos.concept_states.create(state)
-        folded = fold_history(state, history)
-        folded.id = state.id
-        folded.etag = state.etag
-        folded.track_id = state.track_id
-        return await self._rt.repos.concept_states.replace(folded, etag=state.etag) or folded
+        return await ReviewService(self._rt).recompute_card(user_id, concept_id)

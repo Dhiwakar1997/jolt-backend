@@ -3,19 +3,23 @@ submit_gradings (LLD §7.2, BE-04).
 
 `jolt_sync` opens (or continues) the caller's sync run and returns the plan;
 the other tools add what they did to that run. `submit_gradings` recomputes
-FSRS inline (single-service design) — no job.
+FSRS inline (single-service design) — no job — and stores rewritten questions
+as new versions when the user allows it (BE-06); each new version is a
+`question_rewritten` change on the run.
 """
 
 from __future__ import annotations
 
 from typing import Optional
 
-from jolt.domain.grading import GradingInput
-from jolt.domain.models import SyncRun, SyncRunStatus
+from jolt.domain.grading import GradingInput, QuestionRewrite
+from jolt.domain.models import SyncChange, SyncChangeKind, SyncRun, SyncRunStatus
 from jolt.domain.sync import SyncPlan
 from jolt.mcp.context import get_runtime, require_user
+from jolt.services.gradings import GradingService, Rewritten
+from jolt.services.reviews import ReviewService
 from jolt.services.sync import SyncService
-from jolt.services.sync_runs import SyncRunService, add_error
+from jolt.services.sync_runs import SyncRunService, add_change, add_error, concept_title
 
 
 def _iso(value) -> Optional[str]:
@@ -151,7 +155,9 @@ async def get_unprocessed_sources(limit: int = 10) -> dict:
 
 async def get_pending_gradings(limit: int = 10) -> dict:
     user = await require_user()
-    pending = await SyncService(get_runtime()).get_pending_gradings(user.user_id, limit)
+    rt = get_runtime()
+    pending = await SyncService(rt).get_pending_gradings(user.user_id, limit)
+    settings = await ReviewService(rt).user_settings(user.user_id)
     return {
         "gradings": [
             {
@@ -160,10 +166,30 @@ async def get_pending_gradings(limit: int = 10) -> dict:
                 "question_id": p.question_id,
                 "free_text": p.free_text,
                 "expected_answer": p.expected_answer,
+                "stem": p.stem,
+                "options": p.options,
+                "correct_index": p.correct_index,
+                "question_version": p.question_version,
+                "selected_index": p.selected_index,
+                "is_correct": p.is_correct,
             }
             for p in pending
-        ]
+        ],
+        # BE-06 (decision D8): rewrites are stored only when this is true.
+        "allow_question_rewrite": settings.allow_question_rewrite,
     }
+
+
+def _rewrite(raw) -> QuestionRewrite | None:
+    if not isinstance(raw, dict):
+        return None
+    return QuestionRewrite(
+        stem=raw.get("stem", ""),
+        options=raw.get("options", []),
+        correct_index=raw.get("correct_index", -1),
+        expected_answer=raw.get("expected_answer", ""),
+        rewrite_reason=raw.get("rewrite_reason"),
+    )
 
 
 async def submit_gradings(gradings: list[dict]) -> dict:
@@ -175,14 +201,61 @@ async def submit_gradings(gradings: list[dict]) -> dict:
             suggested_fsrs_grade=g["suggested_fsrs_grade"],
             rationale=g.get("rationale"),
             rubric_version=g.get("rubric_version"),
+            rewritten_question=_rewrite(g.get("rewritten_question")),
         )
         for g in gradings
     ]
-    applied = await SyncService(rt).submit_gradings(user.user_id, inputs)
-    if applied:
+    outcome = await GradingService(rt).submit(user.user_id, inputs)
+    new_versions = [r for r in outcome.rewritten if r.created]
+    if outcome.applied or new_versions:
+        changes = [await _rewrite_change(rt, user.user_id, r) for r in new_versions]
 
-        def graded(r: SyncRun) -> None:
-            r.gradings_submitted += applied
+        def graded(run: SyncRun) -> None:
+            run.gradings_submitted += outcome.applied
+            for change in changes:
+                if change is not None:
+                    add_change(run, change)
 
         await SyncRunService(rt).record(user, graded)
-    return {"applied": applied, "submitted": len(inputs)}
+    return {
+        "applied": outcome.applied,
+        "submitted": outcome.submitted,
+        "rewritten": [
+            {
+                "review_id": r.review_id,
+                "question_id": r.question_id,
+                "version": r.version,
+                "previous_version_id": r.previous_version_id,
+            }
+            for r in outcome.rewritten
+        ],
+        "rewrites_skipped": [
+            {"review_id": r.review_id, "reason": r.reason} for r in outcome.rewrites_skipped
+        ],
+    }
+
+
+async def _rewrite_change(rt, user_id: str, r: Rewritten) -> Optional[SyncChange]:
+    """A `question_rewritten` change for the run's "New since last sync" (BE-06)."""
+    try:
+        state = await rt.repos.concept_states.for_concept(user_id, r.concept_id)
+        if state is None or not state.track_id:
+            return None
+        concept = await rt.repos.concepts.get_concept(r.concept_id, state.track_id)
+        if concept is None:
+            return None
+        source = (
+            await rt.repos.sources.get_source(concept.source_id, user_id)
+            if concept.source_id
+            else None
+        )
+        return SyncChange(
+            kind=SyncChangeKind.QUESTION_REWRITTEN,
+            concept_id=concept.id,
+            concept_title=concept_title(concept),
+            track_id=concept.track_id,
+            source_id=source.id if source else None,
+            source_uploaded_at=source.uploaded_at if source else None,
+        )
+    except Exception:  # bookkeeping only: never fail the grading over it
+        return None

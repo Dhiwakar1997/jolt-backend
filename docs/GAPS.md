@@ -2,7 +2,7 @@
 
 Each screen in the Jolt 2.0 design (Figma prototype, frames listed in
 `Jolt/design/frames/index.json`; screens per pass in `Jolt/docs/v2/PLAN.md` §5 and
-the FE pass briefs) compared with the API as of BE-05 ([`API.md`](./API.md)). For
+the FE pass briefs) compared with the API as of BE-06 ([`API.md`](./API.md)). For
 each gap, the backend pass whose brief covers it.
 
 Status: **ready** (today's endpoints are enough) · **partial** (some data
@@ -25,7 +25,7 @@ Frame numbers are phone / web / tablet.
 
 | Screen part | Frames | Needs | Today | Status | Covered by |
 |---|---|---|---|---|---|
-| Due card | 5 / 22 / 37 | Due count and per-track breakdown | `GET /v1/reviews/due` gives a count and items, but items carry no `track_id` | partial | BE-06 (review sessions), BE-07 (due per track in `GET /v1/tracks`) |
+| Due card | 5 / 22 / 37 | Due count and per-track breakdown | `POST /v1/review-sessions` items carry `track_id`, `track_name` (BE-06); a per-track count without starting a session is still missing | partial | BE-07 (due per track in `GET /v1/tracks`) |
 | Sync line | 5 / 22 / 37 | Last sync time, client, late / never | `GET /v1/sync/status`: `last_run` (`started_at`, `finished_at`, `client_label`, counts), `health`, `next_expected_at` (pass `?tz=`) | ready | — |
 | Stats | 5 / 22 / 37 | Streak, retention, reviews this week | — | missing | BE-08 (`GET /v1/progress`) |
 | Tracks | 5 / 22 / 37 | Concepts, due and sources count per track | `GET /v1/tracks` has no counts | partial | BE-07 |
@@ -37,11 +37,11 @@ Frame numbers are phone / web / tablet.
 
 | Screen | Frames | Needs | Today | Status | Covered by |
 |---|---|---|---|---|---|
-| Queue / session start | — | Ordered queue interleaving tracks, most overdue first | `GET /v1/reviews/due` (no session, no interleaving) | partial | BE-06 (`POST /v1/review-sessions`) |
-| Review 1 · Your own words | 6 / 23 / 38 | Stage 1 locks the text, then releases options; idempotent on a client request id | `POST /v1/reviews/{question_id}/stage1` (not idempotent) | partial | BE-06 |
-| Review 2 · Pick the best match | 7 / 24 / 39 | Options only after stage 1 | Returned by stage 1 | ready | — |
-| Review 3 · Result | 8 / 25 / 40 | Correct, expected answer, next due date, provisional grade, "question rewritten" note | `POST /v1/reviews/{review_id}/stage2` has no provisional grade, no version note, no idempotency | partial | BE-06 |
-| Review 4 · Session complete | 9 / 26 | Summary with "what moved" (old and new due dates) | — | missing | BE-06 (`POST /v1/review-sessions/{id}/end`) |
+| Queue / session start | — | Ordered queue interleaving tracks, most overdue first | `POST /v1/review-sessions {track_id?, limit?, concept_id?, kind?}` → `{id, started_at, track_id, items, done_today}` (BE-06) | ready | Daily cap: BE-08 |
+| Review 1 · Your own words | 6 / 23 / 38 | Stage 1 locks the text, then releases options; idempotent on a client request id | `POST /v1/reviews/{question_id}/stage1 {…, client_request_id?, session_id?}` → `locked_at` (BE-06) | ready | — |
+| Review 2 · Pick the best match | 7 / 24 / 39 | Options only after stage 1 | Returned by stage 1 only; queue items carry the stem only | ready | — |
+| Review 3 · Result | 8 / 25 / 40 | Correct, expected answer, next due date, provisional grade, "question rewritten" note | Stage 2 returns `grading`, `provisional_grade`, `interval_days`, `retired`, `feedback`; idempotent (BE-06). The "rewritten" note is on the *queue item* of the next session (`rewritten`, `version`): a rewrite only happens at the nightly grading, after the result screen | ready | — |
+| Review 4 · Session complete | 9 / 26 | Summary with "what moved" (old and new due dates) | `POST /v1/review-sessions/{id}/end` → reviewed, correct, provisional / graded, retired, moved, upcoming (BE-06) | ready | — |
 
 ## Tracks and concepts (FE-07)
 
@@ -53,7 +53,7 @@ Frame numbers are phone / web / tablet.
 | Syllabus mode pill and overlay | 11 / 28 / 42, 54 | `agenda.status` | In every `Track` | ready | — |
 | Lock toggle | 11 / 28 / 42 | Lock / unlock | `POST /v1/tracks/{id}/agenda/lock` and `/unlock` | ready | — |
 | "Added to the syllabus from your notes" | 11 / 28 / 42 | Per-item provenance (auto-added vs authored) | Only track-level `agenda.source` | partial | BE-07 (not named in the brief; add a per-item `source`) |
-| Concept | 12 / 29 / 43 | Summary, source and page, answer timeline (date, your words, correct, grade, feedback, question version), adaptive question note, FSRS state | `GET /v1/progress/concepts/{id}`: FSRS state and timeline of date, grade, correct; no text, no words, no feedback, no versions, no source | partial | BE-07 (`GET /v1/concepts/{id}`), BE-06 (question versions, feedback summary) |
+| Concept | 12 / 29 / 43 | Summary, source and page, answer timeline (date, your words, correct, grade, feedback, question version), adaptive question note, FSRS state | `GET /v1/progress/concepts/{id}`: FSRS state and timeline with grade, correct, `grading`, `feedback`, `question_version` (BE-06); `GET /v1/concepts/{id}/questions`: version chain with `rewrite_reason` (BE-06); `GET /v1/reviews/{id}` has the learner's words; `POST /v1/concepts/{id}/unretire` (BE-06). No summary, source, words in the timeline, or `retired` flag in one call | partial | BE-07 (`GET /v1/concepts/{id}` folds these together) |
 | Feedback panel gate | 12 / 29 / 43 | `has_api_key` | `has_api_key` on `GET /v1/me` (added in BE-03 for BE-08) | ready | panel content BE-11 |
 | "Something's wrong with this concept" | 12 / 29 / 43 | Store a correction note for the next sync | Agents can call `jolt_correct_concept`; no REST route | missing | BE-07 (`POST /v1/concepts/{id}/correction`) |
 | DSA track (placeholder) | 13 / 30 / 44 | Curated track, enrol, patterns as syllabus, `pattern_match` questions, decision tree, library | — | missing | BE-09 |
@@ -98,6 +98,27 @@ Frame numbers are phone / web / tablet.
 - **`preferred_model` is a hint.** Any connected client may answer a read-again
   request; the plan shows the preference.
 
+**BE-06 decisions and follow-ups for the review screens**
+
+- **One question per concept per session**, rotating through the concept's
+  active questions. Answering several questions of one concept on one day would
+  fold several same-day reviews into FSRS. The FE-02 mock serves every active
+  question; the item shape is the same.
+- **"Today" is the UTC day** for `done_today` and `upcoming`: the server does
+  not know the user's time zone yet. → BE-08 (a time zone setting) if it matters.
+- **`time_budget_minutes` and `kind: dsa_patterns`** are accepted; DSA sessions
+  are empty until BE-09 adds DSA tracks and `pattern_match` questions (`match`,
+  `question_title`, `pattern_match` are `null` until then).
+- **Mastery threshold**: FSRS stability ≥ `MASTERY_STABILITY_DAYS` (21) after a
+  Good or Easy answer, the same number as the FE mock. Retirement is evaluated
+  when reading (setting on/off takes effect at once, no rewrite of cards).
+- **Rewrites happen at grading, not at the result screen.** The result screen
+  cannot say "rewritten"; the next session's queue item does (`rewritten`).
+  Today → "New since last sync" lists them: each new version is a
+  `question_rewritten` change on the sync run (`GET /v1/sync/status`).
+- **"Today" is the UTC day** also for D6 upload sessions; see 8 below.
+- **No daily review cap yet.** → BE-08.
+
 ## Progress and settings (FE-09)
 
 | Screen part | Frames | Needs | Today | Status | Covered by |
@@ -106,7 +127,7 @@ Frame numbers are phone / web / tablet.
 | Settings · Model | 20 / 36 / 50 | MCP status, last sync and health, connected clients (create / revoke tokens), nightly prompt | `GET`/`POST /v1/mcp-tokens`, `DELETE /v1/mcp-tokens/{id}` with `label`, `last_used_at` (BE-03); `GET /v1/sync/status`, `GET /v1/sync/runs`, `GET /v1/sync/prompt` (BE-04) | partial | BE-08 (`model_status` block in `GET /v1/settings`, which can reuse these) |
 | Settings · API key + sheet | 20 / 36 / 50, 51, 58 | Add, list (`added_at`), remove | `POST`, `GET` (no `added_at`), `DELETE /v1/settings/api-key` | partial | BE-08 |
 | Settings · Appearance | 20 / 36 / 50 | Theme | — | missing | BE-08 (`GET/PATCH /v1/settings`) |
-| Settings · Reviews | 20 / 36 / 50 | Desired retention (FSRS), daily cap, retire mastered, allow question rewrite | — (`FSRS_DESIRED_RETENTION` is a server-wide setting) | missing | BE-08 (settings), BE-06 (behaviour) |
+| Settings · Reviews | 20 / 36 / 50 | Desired retention (FSRS), daily cap, retire mastered, allow question rewrite | `GET` / `PATCH /v1/settings {retire_mastered, allow_question_rewrite}` with their behaviour (BE-06); desired retention is still server-wide (`FSRS_DESIRED_RETENTION`), no daily cap | partial | BE-08 (desired retention, daily cap, the rest of the body) |
 | Settings · Data | 20 / 36 / 50, 59 | Storage used, export, delete account | `GET /v1/storage` `{bytes_used, source_count, page_count}` (BE-05); `PUT /v1/settings/retention` stores a data-retention preference in days that nothing uses yet | partial | BE-08 (export, `DELETE /v1/me`) |
 
 ## After the MVP (FE-12)
@@ -126,8 +147,9 @@ To fix in the pass named, or sooner.
    are partitioned by track and concept, not by user, and these paths check only
    that the caller has *a* valid token, not that the track or concept is theirs:
    `jolt_get_recent_concepts`, `jolt_diff_extractions`, `jolt_correct_concept`,
-   `jolt_create_questions`, `jolt_log_session` (any `track_id`), and
-   `POST /v1/reviews/{question_id}/stage1` (any `concept_id`). IDs are random
+   `jolt_create_questions`, `jolt_log_session` (any `track_id`). (Stage 1 now
+   requires the caller's card for the concept: fixed in BE-06; the new concept
+   routes check the same.) IDs are random
    32-hex values, so this is not exploitable by guessing, but it breaks the
    LLD §5 scope rule. → BE-07 (it reworks the concept read models), confirmed in the
    BE-10 security review.
@@ -146,8 +168,9 @@ To fix in the pass named, or sooner.
 5. ~~**Token lookup scans every user** (Argon2 verify per user).~~ Fixed in
    BE-03: an indexed HMAC lookup key, then one Argon2 verify.
 6. **`GET /v1/reviews/due` `limit`** counts cards, not questions; a card with
-   several active questions returns them all. → BE-06 replaces it with review
-   sessions.
+   several active questions returns them all. Kept as it is for compatibility
+   (it now leaves out retired concepts); review sessions (BE-06) serve one
+   question per concept and are what the app uses.
 7. **Tokens never expire, and app tokens cannot be listed.** Sign-out and MCP
    token revocation work, but a lost device's app token stays valid until the
    pepper rotates, and Settings has no "signed-in devices" list. → BE-10
@@ -165,5 +188,5 @@ To fix in the pass named, or sooner.
    See `CONNECT.md`.
 10. **`jolt_create_questions` accepts any number of options.** The prompt and
     the plan ask for exactly 4 with one correct; the server only checks the
-    request shape. → BE-06 (question versions) can enforce 4 when it reworks
-    questions.
+    request shape, and a `rewritten_question` (BE-06) needs only two or more.
+    → BE-07 or a later pass: enforce 4 in both.

@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from jolt.api.deps import RuntimeDep, UserDep
 from jolt.api.errors import NOT_FOUND, UNAUTHORIZED
+from jolt.services.reviews import grading_of
 
 router = APIRouter(prefix="/v1/progress", tags=["progress"], responses=UNAUTHORIZED)
 
@@ -17,6 +19,12 @@ class ConceptStatePoint(BaseModel):
     reviewed_at: datetime | None
     grade: int | None
     is_correct: bool | None
+    # BE-06: which answer, of which question version, and its grading state.
+    review_id: str | None = None
+    question_id: str | None = None
+    question_version: int = 1
+    grading: Literal["provisional", "graded"] = "provisional"
+    feedback: str | None = None
 
 
 class ConceptDetailResponse(BaseModel):
@@ -41,6 +49,11 @@ async def concept_detail(concept_id: str, user: UserDep, rt: RuntimeDep) -> Conc
             reviewed_at=r.free_text_locked_at or r.created_at,
             grade=r.final_fsrs_grade or r.provisional_fsrs_grade,
             is_correct=r.is_correct,
+            review_id=r.id,
+            question_id=r.question_id,
+            question_version=r.question_version,
+            grading=grading_of(r),
+            feedback=r.feedback if grading_of(r) == "graded" else None,
         )
         for r in history
     ]

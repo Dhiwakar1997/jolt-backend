@@ -189,15 +189,37 @@ class PendingGradingOut(_Out):
     question_id: str
     free_text: str
     expected_answer: str
+    # BE-06: the question as answered (for a rewrite) and the learner's choice.
+    stem: str
+    options: list[str]
+    correct_index: int
+    question_version: int
+    selected_index: Optional[int]
+    is_correct: Optional[bool]
 
 
 class GetPendingGradingsOut(_Out):
     gradings: list[PendingGradingOut]
+    allow_question_rewrite: bool
+
+
+class RewrittenQuestionOut(_Out):
+    review_id: str
+    question_id: str  # the new version
+    version: int
+    previous_version_id: Optional[str]
+
+
+class RewriteSkippedOut(_Out):
+    review_id: str
+    reason: str
 
 
 class SubmitGradingsOut(_Out):
     applied: int
     submitted: int
+    rewritten: list[RewrittenQuestionOut]
+    rewrites_skipped: list[RewriteSkippedOut]
 
 
 # -- sources / extraction --------------------------------------------------

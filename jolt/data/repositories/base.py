@@ -48,6 +48,21 @@ class Repository(Generic[T]):
         doc = await self._c.create_item(self._to_doc(model))
         return self._from_doc(doc)
 
+    async def create_if_absent(self, model: T, partition_value: str) -> tuple[T, bool]:
+        """Create, or return the stored document with the same id (BE-06).
+
+        Returns (document, created). Used with deterministic ids to make a
+        write idempotent and race-safe: of two concurrent creates, exactly one
+        wins and the other reads the winner's document.
+        """
+        try:
+            return await self.create(model), True
+        except cosmos_exc.CosmosResourceExistsError:
+            existing = await self.get(model.id, partition_value=partition_value)
+            if existing is None:  # deleted in between: try once more
+                return await self.create(model), True
+            return existing, False
+
     async def upsert(self, model: T) -> T:
         doc = await self._c.upsert_item(self._to_doc(model))
         return self._from_doc(doc)

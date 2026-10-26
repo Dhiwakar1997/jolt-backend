@@ -190,8 +190,11 @@ async def test_nightly_loop_across_mcp_and_rest(api, runtime):
     pending = await call("jolt_get_pending_gradings")
     assert [g["review_id"] for g in pending["gradings"]] == [s1["review_id"]]
     grading = [{"review_id": s1["review_id"], "suggested_fsrs_grade": 3, "rationale": "ok"}]
-    assert await call("jolt_submit_gradings", gradings=grading) == {"applied": 1, "submitted": 1}
-    assert await call("jolt_submit_gradings", gradings=grading) == {"applied": 0, "submitted": 1}
+    no_rewrites = {"rewritten": [], "rewrites_skipped": []}
+    first = await call("jolt_submit_gradings", gradings=grading)
+    assert first == {"applied": 1, "submitted": 1, **no_rewrites}
+    again = await call("jolt_submit_gradings", gradings=grading)
+    assert again == {"applied": 0, "submitted": 1, **no_rewrites}
     assert (await call("jolt_get_pending_gradings"))["gradings"] == []
 
     cov = await call("jolt_get_coverage", track_id=tid)

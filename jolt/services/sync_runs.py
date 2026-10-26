@@ -53,6 +53,14 @@ def add_change(run: SyncRun, change: SyncChange) -> None:
         run.changes.append(change)
 
 
+def concept_title(concept) -> str:
+    """How a change names its concept: the agent's title, else its text (80 chars)."""
+    if concept.title:
+        return concept.title
+    text = " ".join(concept.text.split())
+    return text if len(text) <= 80 else text[:79].rstrip() + "…"
+
+
 class SyncRunService:
     def __init__(self, rt: Runtime) -> None:
         self._rt = rt

@@ -26,6 +26,7 @@ from jolt.data.repositories.concepts import (
 from jolt.data.repositories.credentials import ApiKeyRefRepository
 from jolt.data.repositories.reviews import (
     AnswerFeedbackRepository,
+    ReviewSessionsRepository,
     ReviewsRepository,
     SessionsRepository,
 )
@@ -48,6 +49,7 @@ class Repositories:
     reviews: ReviewsRepository
     answer_feedback: AnswerFeedbackRepository
     sessions: SessionsRepository
+    review_sessions: ReviewSessionsRepository
     api_keys: ApiKeyRefRepository
     tokens: TokensRepository
     sync_runs: SyncRunsRepository
@@ -76,6 +78,7 @@ class Runtime:
             reviews=ReviewsRepository(cosmos),
             answer_feedback=AnswerFeedbackRepository(cosmos),
             sessions=SessionsRepository(cosmos),
+            review_sessions=ReviewSessionsRepository(cosmos),
             api_keys=ApiKeyRefRepository(cosmos),
             tokens=TokensRepository(cosmos),
             sync_runs=SyncRunsRepository(cosmos),
