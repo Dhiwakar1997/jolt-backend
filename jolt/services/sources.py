@@ -204,7 +204,7 @@ class SourceService:
         pages = [
             PageView(
                 index=p.index,
-                url=await self._rt.blob.read_url(p.blob_path),
+                url=await self._rt.blob.read_url(p.blob_path, content_type=p.content_type),
                 content_type=p.content_type,
                 size=p.size_bytes if p.size_bytes is not None else (p.declared_size or 0),
             )

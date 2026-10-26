@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Jolt API",
-    "version": "0.9.0"
+    "version": "1.0.0"
   },
   "paths": {
     "/v1/auth/google": {
@@ -4300,11 +4300,15 @@
         "properties": {
           "provider": {
             "type": "string",
+            "maxLength": 32,
             "title": "Provider"
           },
           "key": {
             "type": "string",
-            "title": "Key"
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Key",
+            "description": "Validated, then kept in Key Vault"
           }
         },
         "type": "object",
@@ -5284,6 +5288,7 @@
         "properties": {
           "id_token": {
             "type": "string",
+            "maxLength": 8192,
             "minLength": 1,
             "title": "Id Token",
             "description": "Google ID token (a JWT) from Google sign-in"
@@ -8619,6 +8624,10 @@
           "type": {
             "type": "string",
             "title": "Error Type"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
           }
         },
         "type": "object",

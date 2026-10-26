@@ -27,7 +27,11 @@ dev_router = APIRouter(prefix="/v1/auth", tags=["auth"])
 
 
 class GoogleSignInRequest(BaseModel):
-    id_token: str = Field(min_length=1, description="Google ID token (a JWT) from Google sign-in")
+    id_token: str = Field(
+        min_length=1,
+        max_length=8192,
+        description="Google ID token (a JWT) from Google sign-in",
+    )
 
 
 class DevSignInRequest(BaseModel):

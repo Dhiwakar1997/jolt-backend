@@ -1,13 +1,21 @@
 # --- Web / ASGI ---
-fastapi==0.115.6
+# BE-10 security review: 0.115.6 pinned Starlette 0.41.3, which pip-audit flags
+# (Host-header URL reconstruction, form-limit and Range-header DoS fixes up to
+# 1.3.1). Starlette is pinned explicitly so the audit sees the version shipped.
+fastapi==0.162.0
+starlette==1.10.0
 uvicorn[standard]==0.34.0
 
 # --- Config ---
-pydantic==2.10.4
+pydantic==2.12.5
 pydantic-settings==2.7.1
 
 # --- MCP ---
-mcp==1.2.0
+# 1.30.0 (BE-10 security review): 1.2.0 had five pip-audit advisories, among
+# them SSE messages routed to a session by its id alone (fixed by binding the
+# session to the credential that opened it, jolt/mcp/server.py). Needs
+# Pydantic >= 2.11. The transport is still HTTP+SSE (GAPS #9).
+mcp==1.30.0
 
 # --- Azure SDKs (async) ---
 azure-cosmos==4.9.0
@@ -17,7 +25,9 @@ azure-identity==1.19.0
 # HTTP transport of the async Azure SDK clients (azure.*.aio). Not a dependency
 # of the SDK packages themselves: without it the first Cosmos/Blob call in
 # Azure fails with "No module named 'aiohttp'" (found in BE-10).
-aiohttp==3.12.15
+# 3.14.5 (BE-10 security review): 3.12.15 had pip-audit advisories (client
+# decompression, cookie and redirect handling, parser DoS).
+aiohttp==3.14.5
 
 # --- Observability (BE-10) ---
 # OpenTelemetry -> Application Insights; loaded only when

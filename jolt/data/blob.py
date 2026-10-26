@@ -37,44 +37,56 @@ class BlobGateway:
         return page_blob_path(user_id, source_id, filename, page)
 
     async def _sas(
-        self, blob_path: str, permission: BlobSasPermissions, ttl_seconds: Optional[int] = None
+        self,
+        blob_path: str,
+        permission: BlobSasPermissions,
+        ttl_seconds: Optional[int] = None,
+        content_type: Optional[str] = None,
     ) -> str:
+        """A SAS for exactly one blob, HTTPS only, expiring after `ttl_seconds`
+        (BLOB_SAS_TTL_SECONDS). `content_type` makes Blob serve the download
+        with that type whatever the uploader sent (`rsct`)."""
         ttl = ttl_seconds or self.settings.blob_sas_ttl_seconds
         expiry = datetime.now(timezone.utc) + timedelta(seconds=ttl)
         account_name = self.service.account_name
+        common = {
+            "account_name": account_name,
+            "container_name": self.container,
+            "blob_name": blob_path,
+            "permission": permission,
+            "expiry": expiry,
+            "protocol": "https",
+            "content_type": content_type,
+        }
         if self.account_key:
-            token = generate_blob_sas(
-                account_name=account_name,
-                container_name=self.container,
-                blob_name=blob_path,
-                account_key=self.account_key,
-                permission=permission,
-                expiry=expiry,
-            )
+            token = generate_blob_sas(account_key=self.account_key, **common)
         else:
-            # Managed Identity path: sign with a user-delegation key.
+            # Managed Identity path: sign with a user-delegation key, valid for
+            # this SAS's lifetime only.
             start = datetime.now(timezone.utc) - timedelta(minutes=5)
             udk = await self.service.get_user_delegation_key(start, expiry)
-            token = generate_blob_sas(
-                account_name=account_name,
-                container_name=self.container,
-                blob_name=blob_path,
-                user_delegation_key=udk,
-                permission=permission,
-                expiry=expiry,
-                start=start,
-            )
+            token = generate_blob_sas(user_delegation_key=udk, start=start, **common)
         base = self.service.url.rstrip("/")
         return f"{base}/{self.container}/{quote(blob_path)}?{token}"
 
     async def upload_url(self, blob_path: str) -> str:
-        """Short-TTL PUT url scoped to exactly one blob path (LLD §7.1)."""
+        """Short-TTL PUT url scoped to exactly one blob path (LLD §7.1).
+        Create + write only: it cannot read, list or delete."""
         return await self._sas(blob_path, BlobSasPermissions(create=True, write=True))
 
-    async def read_url(self, blob_path: str, ttl_seconds: Optional[int] = None) -> str:
+    async def read_url(
+        self,
+        blob_path: str,
+        ttl_seconds: Optional[int] = None,
+        content_type: Optional[str] = None,
+    ) -> str:
         """Short-TTL GET url for an agent to read the original source (LLD §7.2).
-        `ttl_seconds` overrides BLOB_SAS_TTL_SECONDS (export downloads, BE-08)."""
-        return await self._sas(blob_path, BlobSasPermissions(read=True), ttl_seconds)
+        `ttl_seconds` overrides BLOB_SAS_TTL_SECONDS (export downloads, BE-08);
+        `content_type` (the declared, accepted type of an upload) is what Blob
+        serves it as, so a file PUT as `text/html` is never served as a page."""
+        return await self._sas(
+            blob_path, BlobSasPermissions(read=True), ttl_seconds, content_type=content_type
+        )
 
     async def upload_bytes(
         self,

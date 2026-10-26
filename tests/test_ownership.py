@@ -323,3 +323,53 @@ async def test_rest_routes_refuse_another_users_ids(api, world, runtime):
     assert mine["enrolled"] is False
 
     assert await _snapshot(runtime) == before
+
+
+async def test_be08_be09_routes_refuse_another_users_ids_and_show_nothing_of_theirs(
+    api, world, runtime
+):
+    """BE-10 security review: the routes added after BE-07 (library, decision
+    tree, enrol, review-session end, progress, storage, sync, settings, export)
+    refuse the owner's ids for the intruder and show none of the owner's data."""
+    w = world
+    eve = w["eve_headers"]
+    owner_session = await ok(await api.post("/v1/review-sessions", json={"concept_id": w["cid"]}))
+    before = await _snapshot(runtime)
+
+    for method, path in [
+        ("GET", f"/v1/tracks/{w['tid']}/library"),
+        ("GET", f"/v1/tracks/{w['tid']}/decision-tree"),
+        ("POST", f"/v1/tracks/{w['tid']}/enrol"),
+        ("DELETE", f"/v1/tracks/{w['tid']}/enrol"),
+        ("POST", f"/v1/review-sessions/{owner_session['id']}/end"),
+        ("DELETE", "/v1/mcp-tokens/" + (await ok(await api.get("/v1/mcp-tokens")))[0]["id"]),
+    ]:
+        resp = await api.request(method, path, headers=eve)
+        assert resp.status_code == 404, (method, path, resp.status_code, resp.text)
+
+    # Aggregates: nothing of the owner's leaks into the intruder's views.
+    owner_ids = {w["tid"], w["sid"], w["cid"], w["qid"], w["rid"], owner_session["id"]}
+    for path in (
+        "/v1/progress",
+        "/v1/storage",
+        "/v1/sync/runs",
+        "/v1/sync/status",
+        "/v1/reviews/due",
+        "/v1/settings",
+        "/v1/mcp-tokens",
+        "/v1/sources",
+        "/v1/tracks/catalog",
+        "/v1/me",
+    ):
+        text = (await api.get(path, headers=eve)).text
+        assert not any(i in text for i in owner_ids), path
+    tokens = await ok(await api.get("/v1/mcp-tokens", headers=eve))
+    assert [t["label"] for t in tokens] == ["Eve's agent"]
+
+    export = await ok(await api.post("/v1/export", headers=eve))
+    path = export["download_url"].split("/sources/", 1)[1].split("?")[0]
+    bundle = runtime.blob.get(path).data.decode()
+    assert path.startswith(f"exports/{w['eve_id']}/")
+    assert not any(i in bundle for i in owner_ids)
+
+    assert await _snapshot(runtime) == before

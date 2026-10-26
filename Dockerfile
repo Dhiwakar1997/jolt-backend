@@ -26,5 +26,7 @@ EXPOSE 8000
 
 # Container Apps ingress terminates TLS and forwards to Uvicorn on 8000;
 # --proxy-headers makes request URLs report the original https scheme and host.
+# The per-IP rate limit does not trust the client-written part of
+# X-Forwarded-For (TRUSTED_PROXY_HOPS, jolt/api/limits.py). No `server` header.
 CMD ["uvicorn", "jolt.main:app", "--host", "0.0.0.0", "--port", "8000", \
-     "--proxy-headers", "--forwarded-allow-ips", "*"]
+     "--proxy-headers", "--forwarded-allow-ips", "*", "--no-server-header"]

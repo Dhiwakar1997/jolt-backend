@@ -91,6 +91,7 @@ def prod_like_server():
     settings = Settings(
         _env_file=None,
         storage_mode="memory",
+        jolt_env="prod",
         app_version="prod-smoke",
         google_oauth_client_id="prod-client.apps.googleusercontent.com",
         cors_origins="https://jolt.example.com",
@@ -119,7 +120,7 @@ async def test_public_smoke_passes_against_a_prod_like_server(prod_like_server):
         origin="https://jolt.example.com",
         expect_dev_auth_off=True,
     )
-    assert out["steps_passed"] == 8 and out["mode"] == "public"
+    assert out["steps_passed"] == 10 and out["mode"] == "public"
 
 
 async def test_public_smoke_fails_when_dev_auth_is_on(live_server):

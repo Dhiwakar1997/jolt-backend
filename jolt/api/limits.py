@@ -13,7 +13,9 @@ and refills continuously. Buckets:
   answered `202 Accepted`, so an over-limit call fails as an MCP tool error
   ("rate limit exceeded; retry in N s") instead of an HTTP 429;
 * per client IP over `/v1` and `/mcp`: `RATE_LIMIT_IP_PER_MINUTE`, a coarse cap
-  that also covers random-token floods.
+  that also covers random-token floods. Behind the Container Apps ingress the
+  client IP is the right-most `X-Forwarded-For` entry (`TRUSTED_PROXY_HOPS`),
+  so a client cannot pick a fresh bucket per request.
 
 A token is keyed by the SHA-256 of its value: the same token always maps to the
 same bucket without a database read (the middleware runs before
@@ -143,7 +145,20 @@ def check_mcp_call(token: Optional[str]) -> None:
         _current.check_mcp_call(token)
 
 
-def _client_ip(scope) -> str:
+def _client_ip(scope, trusted_hops: int = 0) -> str:
+    """The caller's address for the per-IP limit.
+
+    Behind `trusted_hops` proxies that each append the address they saw to
+    `X-Forwarded-For` (Container Apps ingress: 1), the client is the entry that
+    many places from the right; anything left of it was written by the client
+    and is ignored. Uvicorn's `--proxy-headers` rewrites `scope["client"]` to
+    the *leftmost* entry, which the client controls, so it is not used then.
+    """
+    if trusted_hops > 0:
+        forwarded = _headers(scope).get("x-forwarded-for", "")
+        hops = [h.strip() for h in forwarded.split(",") if h.strip()]
+        if len(hops) >= trusted_hops:
+            return hops[-trusted_hops]
     client = scope.get("client")
     return client[0] if client else "unknown"
 
@@ -173,6 +188,7 @@ class RateLimitMiddleware:
         self.app = app
         self.limits = limits
         self.query_tokens = settings.mcp_query_token_enabled
+        self.proxy_hops = settings.trusted_proxy_hops
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http" or not self.limits.enabled or scope["method"] == "OPTIONS":
@@ -186,7 +202,8 @@ class RateLimitMiddleware:
             return
         surface = "rest" if is_rest else "mcp"
 
-        wait = self.limits.ip.acquire("ip:" + _client_ip(scope))
+        ip = _client_ip(scope, self.proxy_hops)
+        wait = self.limits.ip.acquire("ip:" + ip)
         scope_name = "ip"
         if wait == 0:
             headers = _headers(scope)
@@ -196,7 +213,7 @@ class RateLimitMiddleware:
                 values = parse_qs(scope.get("query_string", b"").decode()).get("token")
                 token = values[0].strip() if values and values[0].strip() else None
             if is_rest:
-                key = token_key(token) if token else "ip:" + _client_ip(scope)
+                key = token_key(token) if token else "ip:" + ip
                 scope_name = "token" if token else "ip"
                 wait = self.limits.rest.acquire(key)
             elif is_stream and token:

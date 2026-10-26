@@ -22,7 +22,7 @@ infra/workbook.json charts them):
   unauthorized / rate_limited).
 * `jolt.rate_limited` (counter): `surface` (rest / mcp), `scope` (token / ip).
 * `jolt.maintenance.deleted` (counter): `kind` (abandoned_upload /
-  expired_source / blob).
+  expired_source / blob / expired_app_token).
 
 Cosmos RU: every Cosmos HTTP response carries `x-ms-request-charge`. The
 Cosmos client is built with `raw_response_hook=cosmos_response_hook`
@@ -74,7 +74,8 @@ def configure_telemetry(settings: Settings, *, service_name: str = SERVICE_NAME)
     configure_azure_monitor(
         connection_string=conn,
         # Only Jolt's own loggers: never the access log (it can carry ?token=,
-        # which is redacted there, but there is no reason to ship it).
+        # which is redacted there, but there is no reason to ship it). Request
+        # spans get the same redaction (instrument_app).
         logger_name="jolt",
         resource=Resource.create(
             {
@@ -315,13 +316,30 @@ def install_telemetry(app, settings: Settings) -> bool:
     enabled = configure_telemetry(settings)
     if enabled:
         try:
-            from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-
-            FastAPIInstrumentor.instrument_app(app, excluded_urls="health")
+            instrument_app(app)
         except Exception:  # pragma: no cover - the distro may already have done it
             logger.debug("telemetry: FastAPI instrumentation skipped", exc_info=True)
     app.add_middleware(RequestMetricsMiddleware)
     return enabled
+
+
+def instrument_app(app, *, tracer_provider: Any = None) -> None:
+    """Request spans (the App Insights `requests` table) for `app`.
+
+    `redact_span` blanks `?token=` (an MCP token) and `session_id=` in the
+    span's URL attributes before export: the instrumentation records the full
+    URL, query string included (BE-10 security review, docs/SECURITY.md).
+    """
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+
+    from jolt.api.security import redact_span
+
+    FastAPIInstrumentor.instrument_app(
+        app,
+        excluded_urls="health",
+        server_request_hook=redact_span,
+        tracer_provider=tracer_provider,
+    )
 
 
 def flush() -> None:

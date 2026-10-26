@@ -8,12 +8,14 @@ any handler runs. `/v1` accepts **app tokens** only (BE-03); an MCP token gets a
 
 from __future__ import annotations
 
-from typing import Annotated
+from datetime import timedelta
+from typing import Annotated, Optional
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from jolt.auth.context import AuthError, UserContext, authenticate, bearer_from_header
+from jolt.config import Settings
 from jolt.domain.models import TokenKind
 from jolt.runtime import Runtime
 
@@ -46,6 +48,7 @@ async def get_user_context(
             tokens=rt.repos.tokens,
             users=rt.repos.users,
             pepper=rt.settings.token_hash_pepper,
+            idle_timeout=app_token_idle_timeout(rt.settings),
         )
     except AuthError as exc:
         raise HTTPException(
@@ -53,6 +56,12 @@ async def get_user_context(
             detail=str(exc),
             headers={"WWW-Authenticate": "Bearer"},
         ) from exc
+
+
+def app_token_idle_timeout(settings: Settings) -> Optional[timedelta]:
+    """`APP_TOKEN_IDLE_DAYS` as a timedelta; None when app tokens never expire."""
+    days = settings.app_token_idle_days
+    return timedelta(days=days) if days > 0 else None
 
 
 RuntimeDep = Annotated[Runtime, Depends(get_runtime)]

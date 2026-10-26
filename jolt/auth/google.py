@@ -3,7 +3,8 @@
 The app gets an ID token from Google Identity Services and posts it to
 `POST /v1/auth/google`. The server verifies it itself, without trusting the
 client: RS256 signature against Google's published keys (JWKS), issuer
-(`accounts.google.com`), audience (one of `GOOGLE_OAUTH_CLIENT_ID`) and expiry.
+(`accounts.google.com`), audience (one of `GOOGLE_OAUTH_CLIENT_ID`), expiry,
+`iat` / `nbf` not in the future (30 s leeway), and a verified email.
 
 Keys come from a `KeySource`. Production uses `GoogleJwks`, which fetches
 https://www.googleapis.com/oauth2/v3/certs and caches it for the response's
@@ -175,10 +176,18 @@ class GoogleIdTokenVerifier:
             raise GoogleTokenError("bad signature") from exc
         except jwt.InvalidTokenError as exc:
             raise GoogleTokenError(f"invalid token: {exc}") from exc
+        # The account is keyed on `sub`, but the email is shown, exported and
+        # used as the display-name fallback: refuse one Google has not
+        # verified (BE-10 security review). Google sends the claim as a bool;
+        # older tokens used the string "true".
+        email = claims.get("email")
+        verified = claims.get("email_verified", False) in (True, "true")
+        if email and not verified:
+            raise GoogleTokenError("the Google account's email address is not verified")
         return GoogleIdentity(
             sub=str(claims["sub"]),
-            email=claims.get("email"),
-            email_verified=bool(claims.get("email_verified", False)),
+            email=email,
+            email_verified=verified,
             name=claims.get("name"),
             picture=claims.get("picture"),
         )

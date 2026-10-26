@@ -162,6 +162,9 @@ var baseEnv = [
   { name: 'GOOGLE_OAUTH_CLIENT_ID', value: googleOAuthClientId }
   { name: 'MCP_SERVER_URL', value: effectiveMcpServerUrl }
   { name: 'DEV_AUTH_ENABLED', value: devAuthEnabled ? 'true' : 'false' }
+  // The ingress (Envoy) appends the caller's address to X-Forwarded-For: the
+  // per-IP rate limit reads that entry, not one the client wrote (BE-10).
+  { name: 'TRUSTED_PROXY_HOPS', value: '1' }
 ]
 var devAuthEnv = devAuthEnabled ? [
   { name: 'DEV_AUTH_SECRET', secretRef: 'dev-auth-secret' }

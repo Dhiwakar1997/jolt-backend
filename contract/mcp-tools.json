@@ -678,6 +678,7 @@
           },
           "concepts": {
             "items": {
+              "additionalProperties": true,
               "type": "object"
             },
             "title": "Concepts",
@@ -733,6 +734,7 @@
           },
           "syllabus": {
             "items": {
+              "additionalProperties": true,
               "type": "object"
             },
             "title": "Syllabus",
@@ -937,6 +939,7 @@
             "anyOf": [
               {
                 "items": {
+                  "additionalProperties": true,
                   "type": "object"
                 },
                 "type": "array"
@@ -1156,6 +1159,7 @@
           },
           "questions": {
             "items": {
+              "additionalProperties": true,
               "type": "object"
             },
             "title": "Questions",
@@ -1888,6 +1892,7 @@
         "properties": {
           "gradings": {
             "items": {
+              "additionalProperties": true,
               "type": "object"
             },
             "title": "Gradings",
@@ -2174,6 +2179,7 @@
           },
           "proposed_concepts": {
             "items": {
+              "additionalProperties": true,
               "type": "object"
             },
             "title": "Proposed Concepts",

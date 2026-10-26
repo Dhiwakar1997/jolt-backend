@@ -115,7 +115,8 @@ def test_dev_blob_read_url(served: TestClient):
 
 
 def test_dev_blob_routes_absent_outside_memory_mode():
-    settings = Settings(_env_file=None, storage_mode="azure")
+    # A real pepper: the API refuses the placeholder with azure storage (BE-10).
+    settings = Settings(_env_file=None, storage_mode="azure", token_hash_pepper="p" * 40)
     app = create_app(settings=settings, runtime=Runtime.in_memory(settings))
     with TestClient(app) as c:
         assert c.put("/_dev/blob/sources/x?sp=cw&sig=y", content=b"x").status_code == 404

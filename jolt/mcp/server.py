@@ -15,7 +15,8 @@ of that connection sees.
 Every tool is wrapped so an exception it raises is also recorded on the caller's
 open sync run (BE-04) before it reaches the agent as an MCP tool error. The same
 wrapper applies the per-token rate limit to each tool call and records the
-call's outcome and Cosmos RU (BE-10, jolt/api/limits.py, jolt/telemetry.py).
+call's outcome and Cosmos RU (BE-10, jolt/api/limits.py, jolt/telemetry.py),
+and checks the call's input sizes (jolt/mcp/input_limits.py).
 """
 
 from __future__ import annotations
@@ -24,13 +25,13 @@ import functools
 import inspect
 import json
 import logging
-import re
 from urllib.parse import parse_qs
 
 from mcp.server.fastmcp import FastMCP
 
 from jolt import telemetry
 from jolt.api import limits
+from jolt.api.security import redact_secrets
 from jolt.auth.context import bearer_from_header
 from jolt.mcp.context import (
     MCPAuthError,
@@ -41,6 +42,7 @@ from jolt.mcp.context import (
     set_current_token,
 )
 from jolt.mcp.descriptions.tools import TOOL_DESCRIPTIONS
+from jolt.mcp.input_limits import check_tool_inputs
 from jolt.mcp.tools import extract as t_extract
 from jolt.mcp.tools import read as t_read
 from jolt.mcp.tools import sync as t_sync
@@ -87,6 +89,8 @@ def _recording_errors(name: str, func):
         with telemetry.metering() as charge:
             try:
                 limits.check_mcp_call(current_token())
+                # BE-10: list and text sizes, before anything is written.
+                check_tool_inputs(kwargs)
                 return await func(*args, **kwargs)
             except limits.RateLimited:
                 outcome = "rate_limited"
@@ -130,16 +134,15 @@ def _query_token(scope) -> str | None:
     return values[0].strip() if values and values[0].strip() else None
 
 
-# `token=<value>` in a logged request line or URL.
-_TOKEN_IN_URL = re.compile(r"([?&]token=)[^&\s\"']+")
-
-
 def redact_token(text: str) -> str:
-    return _TOKEN_IN_URL.sub(r"\1[redacted]", text)
+    """Blank `?token=` (and `session_id=`) values in a logged line or URL."""
+    return redact_secrets(text)
 
 
 class RedactTokenFilter(logging.Filter):
-    """Strip `?token=` values from access-log lines (uvicorn.access)."""
+    """Strip `?token=` and `session_id=` values from access-log lines
+    (uvicorn.access). A session id routes messages into an open MCP session,
+    so it is treated like the token (BE-10, docs/SECURITY.md)."""
 
     def filter(self, record: logging.LogRecord) -> bool:
         if record.args:
@@ -169,6 +172,16 @@ class _TokenCaptureMiddleware:
     connection with a 401 instead of failing every tool call later. Tools still
     re-check on each call, so revoking a token cuts off an open connection at its
     next call.
+
+    Session binding (BE-10 security review, mcp >= 1.27.2): a session opened
+    with an `Authorization` header only accepts messages (`POST /messages/`)
+    that carry the same token; any other credential, or none, gets the 404 an
+    unknown session gets. The SDK compares `scope["user"]` of both requests,
+    set here to the token's SHA-256 key (`limits.token_key`). A session opened
+    with `?token=` cannot be bound that way (the client posts to the announced
+    URL without a credential), so it relies on its session id staying secret:
+    128 random bits, sent only to the stream, redacted from the access log and
+    from telemetry (jolt/api/security.py).
     """
 
     def __init__(self, app) -> None:
@@ -181,7 +194,9 @@ class _TokenCaptureMiddleware:
             is_stream = scope["type"] == "http" and scope.get("path", "").rstrip("/").endswith(
                 "/sse"
             )
-            if token is None and is_stream and _query_tokens_allowed():
+            if token is not None:
+                scope = {**scope, "user": _principal(token)}
+            elif is_stream and _query_tokens_allowed():
                 token = _query_token(scope)
             set_current_token(token)
             if is_stream:
@@ -191,6 +206,15 @@ class _TokenCaptureMiddleware:
                     await _unauthorized(send, str(exc))
                     return
         await self._app(scope, receive, send)
+
+
+def _principal(token: str):
+    """The SDK's session-owner identity for a header token: its SHA-256 key,
+    never the token itself (the SDK keeps owners in memory per session)."""
+    from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
+    from mcp.server.auth.provider import AccessToken
+
+    return AuthenticatedUser(AccessToken(token="", client_id=limits.token_key(token), scopes=[]))
 
 
 def _query_tokens_allowed() -> bool:
@@ -219,21 +243,27 @@ async def _unauthorized(send, message: str) -> None:
 def build_mcp_app():
     """Return the ASGI app to mount at /mcp, wrapped with token capture.
 
-    Builds the SSE transport app directly (mcp 1.2.0 has no public `sse_app()`),
-    mirroring FastMCP.run_sse_async: a `/sse` event stream plus a `/messages/`
-    post endpoint. Mounted at /mcp, the client connects to /mcp/sse.
+    Builds the SSE transport app directly, mirroring FastMCP's `sse_app()`: a
+    `/sse` event stream plus a `/messages/` post endpoint, both behind the
+    token capture. Mounted at /mcp, the client connects to /mcp/sse.
     """
     from mcp.server.sse import SseServerTransport
     from starlette.applications import Starlette
+    from starlette.responses import Response
     from starlette.routing import Mount, Route
 
     mcp = build_mcp()
     server = mcp._mcp_server  # low-level Server the transport drives
-    sse = SseServerTransport("/mcp/messages/")
+    # Relative to the mount: the transport prefixes the scope's root_path
+    # (`/mcp`), so clients are told to post to /mcp/messages/.
+    sse = SseServerTransport("/messages/")
 
     async def handle_sse(request):
         async with sse.connect_sse(request.scope, request.receive, request._send) as streams:
             await server.run(streams[0], streams[1], server.create_initialization_options())
+        # The stream already answered; Starlette still expects a response object
+        # from an endpoint (None fails with a TypeError once the client leaves).
+        return Response()
 
     starlette_app = Starlette(
         routes=[

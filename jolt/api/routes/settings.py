@@ -44,8 +44,8 @@ DATA_RETENTION_DAYS_MAX = 3650
 
 
 class ApiKeyRequest(BaseModel):
-    provider: str
-    key: str
+    provider: str = Field(max_length=32)
+    key: str = Field(min_length=1, max_length=512, description="Validated, then kept in Key Vault")
 
 
 class ApiKeyResponse(BaseModel):

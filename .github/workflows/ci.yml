@@ -47,3 +47,22 @@ jobs:
 
       - name: Contract is up to date
         run: python scripts/export_contract.py --check
+
+  audit:
+    # BE-10 security review (docs/SECURITY.md S-08, S-28): known vulnerabilities
+    # in the pinned runtime dependencies fail the build (and so the deploy).
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: pip-audit
+        run: |
+          python -m pip install --upgrade pip
+          pip install pip-audit==2.10.1
+          pip-audit -r requirements.txt

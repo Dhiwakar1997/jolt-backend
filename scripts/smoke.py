@@ -74,7 +74,9 @@ and no throwaway account can be made: it checks only what needs no account.
 `/health` (and `--expect-version`), `/v1/me` and `/mcp/sse` refuse a missing or
 bogus token (401), Google sign-in is configured (a garbage ID token gets 401, not
 503), an oversized body gets 413, and with `--origin` the CORS preflight allows
-that origin. `--expect-dev-auth-off` also checks `POST /v1/auth/dev` is 404.
+that origin, and API responses carry the security headers (nosniff, no-store,
+no framing). `--expect-dev-auth-off` (prod) also checks `POST /v1/auth/dev`,
+`/docs` and `/openapi.json` are 404.
 Over HTTPS, httpx verifies the certificate, so a custom domain whose managed
 certificate is not bound fails here.
 
@@ -865,6 +867,12 @@ async def run_public(
             resp = await http.get("/v1/me", headers={"Authorization": "Bearer jolt_app_bogus"})
             check(resp.status_code == 401, f"GET /v1/me -> {resp.status_code}")
 
+        with rep.step("Security headers on API responses (BE-10)"):
+            h = resp.headers
+            check(h.get("x-content-type-options") == "nosniff", "no X-Content-Type-Options")
+            check(h.get("cache-control") == "no-store", "API response is cacheable")
+            check(h.get("x-frame-options") == "DENY", "no X-Frame-Options")
+
         with rep.step("GET /mcp/sse without / with a bogus token -> 401"):
             async with http.stream("GET", "/mcp/sse") as resp:
                 check(resp.status_code == 401, f"no token -> {resp.status_code}")
@@ -888,6 +896,11 @@ async def run_public(
             with rep.step("POST /v1/auth/dev -> 404 (dev sign-in off)"):
                 resp = await http.post("/v1/auth/dev", json={"email": "smoke@smoke.jolt.test"})
                 check(resp.status_code == 404, f"dev sign-in is reachable: {resp.status_code}")
+
+            with rep.step("GET /docs and /openapi.json -> 404 (no live API docs in prod)"):
+                for path in ("/docs", "/openapi.json"):
+                    resp = await http.get(path)
+                    check(resp.status_code == 404, f"{path} is served: {resp.status_code}")
 
         if origin:
             with rep.step(f"CORS preflight from {origin}"):

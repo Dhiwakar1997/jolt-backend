@@ -281,7 +281,7 @@ class SyncService:
                 index=p.index,
                 filename=p.filename,
                 content_type=p.content_type,
-                read_url=await self._rt.blob.read_url(p.blob_path),
+                read_url=await self._rt.blob.read_url(p.blob_path, content_type=p.content_type),
             )
             for p in source.page_list()
         ]

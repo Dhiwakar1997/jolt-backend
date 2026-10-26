@@ -29,6 +29,15 @@ class TokensRepository(Repository[AuthToken]):
             return self._from_doc(doc)
         return None
 
+    async def list_kind_across_users(self, kind: TokenKind) -> list[AuthToken]:
+        """Every token of `kind`, across partitions. Maintenance only (the
+        expired app token sweep, BE-10): a daily fan-out, never on a request."""
+        iterator = self._c.query_items(
+            query="SELECT * FROM c WHERE c.kind = @kind",
+            parameters=[{"name": "@kind", "value": kind.value}],
+        )
+        return [self._from_doc(doc) async for doc in iterator]
+
     async def list_for_user(self, user_id: str, kind: TokenKind) -> list[AuthToken]:
         """The user's tokens of one kind, newest first."""
         return await self._query(

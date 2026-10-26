@@ -8,10 +8,14 @@ variables. Nothing here is a secret at rest — it is the map of where secrets l
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Literal
+from typing import Literal, Optional
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# The placeholder pepper of .env.example; never accepted with real storage.
+DEFAULT_PEPPER = "change-me-to-a-long-random-string"
+MIN_PEPPER_CHARS = 32
 
 
 class Settings(BaseSettings):
@@ -55,7 +59,7 @@ class Settings(BaseSettings):
     # /mcp. Keep the prefixes stable once tokens exist.
     app_token_prefix: str = "jolt_app_"
     mcp_token_prefix: str = "jolt_live_"
-    token_hash_pepper: str = "change-me-to-a-long-random-string"
+    token_hash_pepper: str = DEFAULT_PEPPER
     # Google sign-in: the OAuth client id(s) an ID token must be issued to (its
     # `aud`). Comma-separated, so a web and a mobile client can both sign in.
     # Empty -> POST /v1/auth/google answers 503 (not configured).
@@ -69,6 +73,12 @@ class Settings(BaseSettings):
     # as the `X-Jolt-Dev-Auth-Secret` header (the deployed smoke test).
     dev_auth_enabled: bool = False
     dev_auth_secret: str = ""
+    # BE-10 security review (GAPS #7): an app token (a signed-in device) stops
+    # working after this many days without a request, and the next request
+    # answers 401 "token expired" (the app signs in again). Every request
+    # renews it. 0: app tokens never expire. MCP tokens never expire (a nightly
+    # client may be idle for weeks); they end when the user revokes them.
+    app_token_idle_days: int = Field(default=30, ge=0, le=3650)
 
     # ---- Cosmos ----
     cosmos_endpoint: str = ""
@@ -114,6 +124,12 @@ class Settings(BaseSettings):
     rate_limit_mcp_per_minute: int = Field(default=300, ge=1)
     # Coarse cap per client IP over /v1 and /mcp, whatever the token.
     rate_limit_ip_per_minute: int = Field(default=600, ge=1)
+    # Reverse proxies in front of the app that append the caller's address to
+    # X-Forwarded-For (Container Apps ingress: 1). The client IP used by the
+    # per-IP limit is the entry that many places from the right, so a client
+    # cannot pick its own bucket by sending its own X-Forwarded-For. 0: the
+    # TCP peer (no proxy, local runs).
+    trusted_proxy_hops: int = Field(default=0, ge=0, le=5)
     # Request body caps (bytes): 413 above them. Uploads go straight to Blob,
     # so no API body carries a file; MCP extractions can be long markdown.
     request_max_bytes: int = Field(default=1024 * 1024, ge=1024)
@@ -121,6 +137,11 @@ class Settings(BaseSettings):
     # Maintenance sweep (python -m jolt.maintenance, a scheduled Container Apps
     # Job): unconfirmed uploads older than this are deleted.
     abandoned_upload_hours: int = Field(default=24, ge=1)
+
+    # Interactive API docs (/docs, /redoc) and the live /openapi.json. Unset:
+    # on everywhere except JOLT_ENV=prod. The contract is published in the
+    # repo (contract/openapi.json), so prod needs no live copy.
+    api_docs_enabled: Optional[bool] = None
 
     # ---- Key Vault ----
     keyvault_url: str = ""
@@ -171,6 +192,28 @@ class Settings(BaseSettings):
                 "(a public dev server must not mint accounts for anyone)"
             )
         return self
+
+    @property
+    def docs_enabled(self) -> bool:
+        if self.api_docs_enabled is not None:
+            return self.api_docs_enabled
+        return self.jolt_env != "prod"
+
+    def check_serving_secrets(self) -> None:
+        """Refuse to serve real data with a placeholder token pepper (BE-10).
+
+        Called when the API starts (jolt/main.py lifespan), not on every
+        Settings load: the maintenance job reads no tokens and gets no pepper.
+        """
+        if self.storage_mode != "azure":
+            return
+        pepper = self.token_hash_pepper
+        if pepper == DEFAULT_PEPPER or len(pepper) < MIN_PEPPER_CHARS:
+            raise ValueError(
+                "TOKEN_HASH_PEPPER must be a random secret of at least "
+                f"{MIN_PEPPER_CHARS} characters with STORAGE_MODE=azure "
+                "(Key Vault secret `token-hash-pepper`, docs/DEPLOY.md)"
+            )
 
     @property
     def google_client_ids(self) -> list[str]:

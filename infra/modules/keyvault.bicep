@@ -26,6 +26,9 @@ param devAuthReaderPrincipalId string = ''
 @description('Days a deleted vault or secret is kept before it can be purged.')
 param softDeleteRetentionInDays int = 7
 
+@description('Log Analytics workspace that receives the vault\'s audit log (every secret read, write, delete and purge, with the caller). Empty: no diagnostic setting.')
+param logAnalyticsWorkspaceId string = ''
+
 // Secrets Officer, not Secrets User: the app also sets, deletes and purges the
 // per-user `apikey-*` secrets. It covers reading the pepper too.
 var secretsOfficerRoleId = 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7'
@@ -115,6 +118,25 @@ resource developerSecrets 'Microsoft.Authorization/roleAssignments@2022-04-01' =
     )
     principalId: developerPrincipalId
     principalType: 'User'
+  }
+}
+
+// BE-10 security review: Key Vault access is logged. The `audit` category
+// group is the AuditEvent log: every data-plane call (get / set / delete /
+// purge of a secret, including the per-user `apikey-*` secrets) with the
+// caller's identity, result and client IP, kept for the workspace retention.
+// Query: AzureDiagnostics | where ResourceProvider == "MICROSOFT.KEYVAULT".
+resource auditLogs 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (!empty(logAnalyticsWorkspaceId)) {
+  name: 'audit-to-log-analytics'
+  scope: vault
+  properties: {
+    workspaceId: logAnalyticsWorkspaceId
+    logs: [
+      {
+        categoryGroup: 'audit'
+        enabled: true
+      }
+    ]
   }
 }
 

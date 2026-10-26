@@ -313,7 +313,12 @@ class InMemoryBlobGateway:
     async def upload_url(self, blob_path: str) -> str:
         return self._url(blob_path, "cw")
 
-    async def read_url(self, blob_path: str, ttl_seconds: Optional[int] = None) -> str:
+    async def read_url(
+        self,
+        blob_path: str,
+        ttl_seconds: Optional[int] = None,
+        content_type: Optional[str] = None,
+    ) -> str:
         return self._url(blob_path, "r")  # memory URLs do not expire
 
     async def upload_bytes(

@@ -48,12 +48,14 @@ async def authenticate(
     tokens: TokensRepository,
     users: UsersRepository,
     pepper: str,
+    idle_timeout: Optional[timedelta] = None,
 ) -> UserContext:
     """Return the UserContext for a valid token of `kind`, or raise AuthError.
 
     One indexed lookup (HMAC of the token) and one Argon2 verify; no scan. A
     revoked token's document is gone, so revocation takes effect on the next
-    request.
+    request. With `idle_timeout` (app tokens, `APP_TOKEN_IDLE_DAYS`), a token
+    unused for longer is deleted and refused as expired (BE-10, GAPS #7).
     """
     if not token:
         raise AuthError("missing bearer token")
@@ -66,6 +68,12 @@ async def authenticate(
     if record.kind != kind:
         surface = "/v1 accepts app tokens" if kind == TokenKind.APP else "/mcp accepts MCP tokens"
         raise AuthError(f"wrong token kind: {surface} only")
+    if idle_timeout is not None and is_idle(record, idle_timeout):
+        try:
+            await tokens.revoke(record.user_id, record.id)
+        except Exception:  # already gone; refuse it either way
+            logger.debug("could not delete expired token %s", record.id, exc_info=True)
+        raise AuthError("token expired; sign in again")
     user = await users.get_user(record.user_id)
     if user is None:
         raise AuthError("invalid token")
@@ -77,6 +85,15 @@ async def authenticate(
         token_kind=record.kind,
         token_label=record.label,
     )
+
+
+def is_idle(record: AuthToken, idle_timeout: timedelta, now: Optional[datetime] = None) -> bool:
+    """True when the token has not been used (or, never used, issued) within
+    `idle_timeout`. `last_used_at` is written at most once a minute, so the
+    timeout is exact to `LAST_USED_RESOLUTION`."""
+    now = now or datetime.now(timezone.utc)
+    last = record.last_used_at or record.created_at
+    return now - last > idle_timeout
 
 
 async def _touch(record: AuthToken, tokens: TokensRepository) -> None:

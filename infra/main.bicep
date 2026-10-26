@@ -194,6 +194,10 @@ var promotionRegistry = 'crjolt${promoteFromEnvironment}${uniqueString(subscript
 
 var browserOrigins = union(appOrigins, netlifyOrigins)
 
+// Dev sign-in can never reach prod, whatever the parameter file says (the app
+// also refuses DEV_AUTH_ENABLED with JOLT_ENV=prod). BE-10 security review.
+var devAuth = devAuthEnabled && environmentName != 'prod'
+
 resource rg 'Microsoft.Resources/resourceGroups@2024-03-01' = {
   name: resourceGroupName
   location: location
@@ -284,7 +288,9 @@ module keyVault 'modules/keyvault.bicep' = {
     devAuthSecret: devAuthSecret
     softDeleteRetentionInDays: keyVaultSoftDeleteDays
     // The deploy workflow reads the dev sign-in secret for its smoke test.
-    devAuthReaderPrincipalId: devAuthEnabled ? identity.outputs.githubIdentityPrincipalId : ''
+    devAuthReaderPrincipalId: devAuth ? identity.outputs.githubIdentityPrincipalId : ''
+    // BE-10: every Key Vault access is logged to the workspace.
+    logAnalyticsWorkspaceId: monitoring.outputs.id
   }
 }
 
@@ -315,7 +321,7 @@ module app 'modules/containerapp.bicep' = if (!empty(containerImage)) {
     corsOriginRegex: corsOriginRegex
     googleOAuthClientId: googleOAuthClientId
     mcpServerUrl: mcpServerUrl
-    devAuthEnabled: devAuthEnabled
+    devAuthEnabled: devAuth
     devAuthSecretName: keyVault.outputs.devAuthSecretName
     minReplicas: minReplicas
     maxReplicas: maxReplicas

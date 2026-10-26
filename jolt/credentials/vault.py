@@ -7,9 +7,12 @@ log, or in a response body.
 
 from __future__ import annotations
 
+import logging
 import re
 
 from jolt.config import Settings, get_settings
+
+logger = logging.getLogger("jolt.vault")
 
 
 def secret_name(user_id: str, provider: str) -> str:
@@ -54,21 +57,38 @@ class VaultClient:
     async def delete_key(self, user_id: str, provider: str) -> None:
         """Delete, then purge, so the delete is real (LLD §5.1).
 
-        The vault has soft delete on; without the purge the name stays taken by
-        a deleted secret and re-adding a key for the same provider would fail
-        with a conflict until the retention period ends.
+        The vault has soft delete on; without the purge the deleted value stays
+        recoverable for the retention period (90 days in prod) and the name
+        stays taken, so re-adding a key for the same provider would conflict.
+
+        A secret that does not exist (never stored, or deleted before) is fine.
+        Any other failure to *delete* is raised, so the caller keeps its Cosmos
+        reference and the delete can be retried (BE-10: it used to be
+        swallowed, which could drop the reference and leave the key behind). A
+        failed *purge* (purge protection, a delete still settling) is logged by
+        secret name, never value: the secret is deleted and unreadable, and
+        expires with soft-delete retention.
         """
+        from azure.core.exceptions import HttpResponseError, ResourceNotFoundError
+
         client = self._ensure()
         name = secret_name(user_id, provider)
         try:
             poller = await client.begin_delete_secret(name)
             await poller.wait()
-        except Exception:
-            pass  # already gone / soft-delete in progress
+        except ResourceNotFoundError:
+            pass  # nothing active; it may still be soft-deleted, so purge anyway
         try:
             await client.purge_deleted_secret(name)
-        except Exception:
-            pass  # not soft-deleted (or purge protection on): nothing more to do
+        except ResourceNotFoundError:
+            pass  # nothing soft-deleted under that name
+        except HttpResponseError as exc:
+            logger.warning(
+                "key vault: %s deleted but not purged (HTTP %s); it expires with "
+                "soft-delete retention",
+                name,
+                exc.status_code,
+            )
 
     async def close(self) -> None:
         if self._client is not None:

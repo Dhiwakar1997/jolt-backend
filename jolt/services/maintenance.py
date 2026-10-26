@@ -1,7 +1,7 @@
 """Maintenance sweep: abandoned uploads and data retention (BE-10, BE-08 follow-up).
 
 Run daily by the `jolt-maintenance` Container Apps Job (`python -m
-jolt.maintenance`, infra/modules/containerapp.bicep). Two passes:
+jolt.maintenance`, infra/modules/containerapp.bicep). Three passes:
 
 1. **Abandoned uploads.** A source whose upload was requested but never
    confirmed (`confirmed_at` unset) more than `ABANDONED_UPLOAD_HOURS` (24)
@@ -13,6 +13,11 @@ jolt.maintenance`, infra/modules/containerapp.bicep). Two passes:
    learned from it stays: concepts, questions, review history and FSRS state
    are the user's study record, not the upload, and sessions keep their (now
    dangling) source ids. A retention of None keeps uploads forever.
+
+3. **Expired app tokens** (BE-10 security review): app tokens unused for more
+   than `APP_TOKEN_IDLE_DAYS` are already refused at sign-in time
+   (jolt/auth/context.py); the sweep deletes their documents so a lost
+   device's token does not linger in the database. MCP tokens never expire.
 
 Deletes are idempotent, so a sweep interrupted half way is finished by the next
 one. Blob soft delete (and versioning in prod) keeps deleted blobs recoverable
@@ -28,7 +33,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from jolt import telemetry
-from jolt.domain.models import Source
+from jolt.auth.context import is_idle
+from jolt.domain.models import Source, TokenKind
 from jolt.runtime import Runtime
 
 logger = logging.getLogger("jolt.maintenance")
@@ -46,6 +52,7 @@ class SweepReport:
     expired_sources: int = 0
     extractions: int = 0
     blobs: int = 0
+    expired_app_tokens: int = 0
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -60,10 +67,12 @@ class MaintenanceService:
         report = SweepReport(dry_run=dry_run)
         await self._sweep_abandoned(now, report)
         await self._sweep_retention(now, report)
+        await self._sweep_idle_app_tokens(now, report)
         if not dry_run:
             telemetry.record_maintenance("abandoned_upload", report.abandoned_uploads)
             telemetry.record_maintenance("expired_source", report.expired_sources)
             telemetry.record_maintenance("blob", report.blobs)
+            telemetry.record_maintenance("expired_app_token", report.expired_app_tokens)
         logger.info("maintenance sweep: %s", report.as_dict())
         return report
 
@@ -91,6 +100,19 @@ class MaintenanceService:
                 report.expired_sources += 1
                 if not report.dry_run:
                     await self._delete_source(source, report)
+
+    async def _sweep_idle_app_tokens(self, now: datetime, report: SweepReport) -> None:
+        days = self._rt.settings.app_token_idle_days
+        if days <= 0:
+            return
+        idle = timedelta(days=days)
+        tokens = self._rt.repos.tokens
+        for record in await tokens.list_kind_across_users(TokenKind.APP):
+            if not is_idle(record, idle, now):
+                continue
+            report.expired_app_tokens += 1
+            if not report.dry_run:
+                await tokens.revoke(record.user_id, record.id)
 
     async def _delete_source(self, source: Source, report: SweepReport) -> None:
         """Blobs first, then reads, then the source: a failure leaves the source

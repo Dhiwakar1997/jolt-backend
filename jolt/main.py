@@ -11,6 +11,7 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 
 from jolt.api.limits import install_limits
@@ -28,6 +29,11 @@ from jolt.api.routes import (
     upload,
 )
 from jolt.api.routes import settings as settings_routes
+from jolt.api.security import (
+    SecurityHeadersMiddleware,
+    document_validation_errors,
+    validation_error_handler,
+)
 from jolt.config import Settings, get_settings
 from jolt.mcp.context import set_runtime as set_mcp_runtime
 from jolt.mcp.server import build_mcp_app, install_log_redaction
@@ -36,10 +42,15 @@ from jolt.telemetry import install_telemetry
 
 logger = logging.getLogger("jolt")
 
+# The REST + MCP contract version (contract/openapi.json `info.version`).
+API_VERSION = "1.0.0"
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     cfg: Settings = app.state.settings
+    # BE-10: never serve real data with the placeholder token pepper.
+    cfg.check_serving_secrets()
     logger.info(
         "Starting jolt-api (env=%s, auth=%s, storage=%s)",
         cfg.jolt_env,
@@ -79,13 +90,22 @@ async def _seed_curated(runtime: Runtime, cfg: Settings) -> None:
 def create_app(settings: Settings | None = None, runtime: Runtime | None = None) -> FastAPI:
     """Build the app. `settings` / `runtime` are injection points for tests."""
     cfg = settings or get_settings()
+    docs = cfg.docs_enabled
     app = FastAPI(
         title="Jolt API",
-        version="0.9.0",
+        version=API_VERSION,
         lifespan=lifespan,
         # Stable, readable operationIds (the handler name) for generated clients.
         generate_unique_id_function=lambda route: route.name,
+        # BE-10: no interactive docs or live schema in prod (API_DOCS_ENABLED);
+        # the contract is published in contract/openapi.json.
+        docs_url="/docs" if docs else None,
+        redoc_url="/redoc" if docs else None,
+        openapi_url="/openapi.json" if docs else None,
     )
+    # 422 bodies without the rejected input (it can be a key or an ID token).
+    app.add_exception_handler(RequestValidationError, validation_error_handler)
+    document_validation_errors(app)
     app.state.settings = cfg
     if runtime is not None:
         app.state.runtime = runtime
@@ -95,6 +115,9 @@ def create_app(settings: Settings | None = None, runtime: Runtime | None = None)
     # still carries CORS headers.
     install_limits(app, cfg)
     install_telemetry(app, cfg)
+    # BE-10 security review: nosniff, no framing, no-store on API responses,
+    # HSTS in prod (jolt/api/security.py). Outside the limits, so a 429 has them.
+    app.add_middleware(SecurityHeadersMiddleware, settings=cfg)
 
     # CORS for the browser app (BE-02), from CORS_ORIGINS / CORS_ORIGIN_REGEX.
     # Applied app-wide so it covers /v1 and, in memory mode, the /_dev/blob
