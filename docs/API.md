@@ -11,7 +11,8 @@ Regenerate both with `python scripts/export_contract.py` after changing a route,
 tool, a tool description or `jolt/mcp/schemas.py`. This file is written by hand:
 update it in the same change.
 
-State: API version 0.2.0, the MVP plus the track agenda model (PR #3). Screens that
+State: API version 0.2.0, the MVP plus the track agenda model (PR #3), sources
+(BE-05) and the review loop (BE-06). Screens that
 have no endpoint yet are listed in [`GAPS.md`](./GAPS.md).
 
 ## Conventions
@@ -57,8 +58,8 @@ background job).
 | `jolt_store_extraction` | `source_id, markdown, confidence?=0, model_id?, supersede?=false` | `{extraction_id, status: "active"}` | Marks the source `processed` (or back to `unprocessed` if a read-again request arrived while the sync held it) and points it at the new extraction. The previous active extraction always becomes `superseded` (one active read per source). Records the MCP token's label as the read's `client_label`. Concept reconciliation on supersede is **not implemented yet** (see GAPS). Raises if the source is not the caller's. |
 | `jolt_log_session` | `source_ids: [str]`, `concepts: [{text, track_id, title?, concept_key?, syllabus_ref?, parent?, source_id?}]` | `{session_id, concept_ids}` (input order) | Creates concepts plus an FSRS card due now, and auto-adds unknown `concept_key`s to each track's agenda (skipped on locked agendas). Not idempotent. |
 | `jolt_create_questions` | `concept_id`, `questions: [{stem, options: [str], correct_index, expected_answer}]` | `{question_ids}` (input order) | Not idempotent. |
-| `jolt_get_pending_gradings` | `limit?=10` | `{gradings: [{review_id, concept_id, question_id, free_text, expected_answer}]}` | Reviews with stage 1 submitted and no final grade. |
-| `jolt_submit_gradings` | `gradings: [{review_id, suggested_fsrs_grade: 1–4, rationale?, rubric_version?}]` | `{applied, submitted}` | Idempotent per review. Re-folds each affected card inline. Raises on a grade outside 1–4. |
+| `jolt_get_pending_gradings` | `limit?=10` | `{gradings: [{review_id, concept_id, question_id, free_text, expected_answer, stem, options, correct_index, question_version, selected_index, is_correct}], allow_question_rewrite}` | Reviews with stage 1 submitted and no final grade. The question fields are the version the learner answered (BE-06), so the agent can rewrite it; `allow_question_rewrite` is the user's opt-in (decision D8). |
+| `jolt_submit_gradings` | `gradings: [{review_id, suggested_fsrs_grade: 1–4, rationale?, rubric_version?, rewritten_question?: {stem, options, correct_index, expected_answer, rewrite_reason?}}]` | `{applied, submitted, rewritten: [{review_id, question_id, version, previous_version_id}], rewrites_skipped: [{review_id, reason}]}` | Idempotent per review. Re-folds each affected card inline (FSRS and mastery). `rationale` is the feedback the learner sees. A `rewritten_question` becomes version n+1 of the question only when the user's `allow_question_rewrite` is on (section 4, question versions); otherwise, or when invalid, it is listed in `rewrites_skipped` and the grade still lands. A retry lists the version it created again, never a second one. Raises on a grade outside 1–4. |
 
 ---
 
@@ -132,15 +133,66 @@ The Reader gets **originals only**: `pages[].url` points at the uploaded file
 
 ## 4. Review
 
-Two stages. Stage 1 stores the learner's own words and only then releases the
-options; stage 2 scores the choice, sets a provisional grade and recomputes FSRS
-inline. The agent later replaces the provisional grade (section 2).
+A review session serves an ordered queue; each question is answered in two
+stages. Stage 1 stores the learner's own words and only then releases the
+options (no other route returns options, correct index or expected answer
+before it: the server-side stage lock); stage 2 scores the choice, sets a
+provisional grade and recomputes FSRS inline. The agent later replaces the
+provisional grade (section 2): `grading` goes from `provisional` to `graded`,
+with the model's feedback.
+
+**Queue order.** Due concepts (FSRS `due_at` ≤ now, retired ones left out),
+most overdue first, interleaving tracks: each round takes the most overdue
+concept of every track, the most overdue of those first. **One question per
+concept**: a concept with several active questions serves them in rotation
+(`reps mod n`); a concept with no question is skipped. Only the newest version of
+a question is active.
+
+**Idempotency.** Both stages take an optional `client_request_id` (1–128 chars).
+Stage 1 with a key already used by this user returns the first review unchanged
+(same `review_id`, `locked_at`, options; the first free text stays locked); the
+same key on a different question is `409`. Stage 2 resent with the stage-2 key
+it was first sent with returns the stored result; any other second stage 2 is
+`400 stage 2 already submitted`.
+
+**Mastery and retirement.** A concept is *mastered* when, after a fold, its FSRS
+stability is at least `MASTERY_STABILITY_DAYS` (21 days) and the latest grade was
+Good or Easy; a lapse un-masters it. With the user's `retire_mastered` setting on
+(the default), a mastered concept is *retired*: out of sessions and the due list,
+`retired: true` on stage 2, listed in the session summary. The rule is applied
+when reading, so switching the setting off brings mastered concepts back at once.
+`unretire` puts a retired concept back, due now; a later answer that is still
+mastered retires it again.
+
+**Question versions (decision D8).** A rewrite from `jolt_submit_gradings` is a
+new question: `version` n+1, `previous_version_id` = version n, `rewrite_reason`.
+Version n is kept, marked inactive, and leaves the queue; the next session
+serves version n+1 with `rewritten: true`. A rewrite of an old version extends
+the chain from its newest version.
+
+`QueueItem = {concept_id, concept_title, question_id, question_type: "free_text"
+(BE-09 adds "pattern_match"), stem, track_id, track_name, version, interval_days
+(days since the last review, null on the first), review_number, rewritten,
+pattern_match: null (BE-09)}`
+
+`Summary = {session_id, started_at, ended_at, reviewed, correct, provisional,
+graded, retired: [{concept_id, title}], moved: [{concept_id, title, old_due_at,
+new_due_at}], upcoming: [{date, questions}]}`. `moved` lists each concept the
+session answered whose next review changed: `old_due_at` from before its first
+answer in the session, `new_due_at` now (`null` when retired). `upcoming` counts
+questions due on each of the next 7 days (UTC dates, one per concept).
+`reviewed` counts answers with stage 2 done.
 
 | Method | Path | Auth | Request | Response | Errors |
 |---|---|---|---|---|---|
-| GET | `/v1/reviews/due` | token | query `limit?=100` (cards) | `{count, items: [{concept_id, question_id, stem}]}`: every active question of each due card, most overdue card first | 401, 422 |
-| POST | `/v1/reviews/{question_id}/stage1` | token | `{concept_id, free_text}` | `{review_id, options: [str]}` | 401, 404 `question not found`, 422 |
-| POST | `/v1/reviews/{review_id}/stage2` | token | `{selected_index, latency_ms?}` | `{correct, expected_answer, correct_index, due_at}` | 400 `review not found` / `stage 1 not submitted…` / `stage 2 already submitted` / `question not found`; 401; 422 |
+| POST | `/v1/review-sessions` | token | `{track_id?, limit?=100 (1–500), concept_id?, kind?: notes\|dsa_patterns, time_budget_minutes?}`. `concept_id` = practise that concept now (its next question, due or not, retired or not). `kind: dsa_patterns` is empty until BE-09; `time_budget_minutes` is accepted and ignored until BE-09. | `{id, started_at, track_id, items: [QueueItem], done_today}`. `done_today` = answers since midnight UTC. | 401; 404 `track not found` / `concept not found`; 422 |
+| POST | `/v1/review-sessions/{session_id}/end` | token | — | `Summary`. Ending again returns the same summary (recomputed, so later gradings show as `graded`). | 401, 404 `session not found` |
+| GET | `/v1/reviews/due` | token | query `limit?=100` (cards) | `{count, items: [{concept_id, question_id, stem}]}`: every active question of each due card, most overdue card first, retired concepts left out. Kept for compatibility; the app uses sessions. | 401, 422 |
+| POST | `/v1/reviews/{question_id}/stage1` | token | `{concept_id, free_text, client_request_id?, session_id?}` | `{review_id, options: [str], locked_at}` | 401; 404 `question not found` (also when the concept is not the caller's: they hold no card for it) / `session not found`; 409 key reused for another question; 422 |
+| POST | `/v1/reviews/{review_id}/stage2` | token | `{selected_index, latency_ms?, client_request_id?}` | `{correct, expected_answer, correct_index, due_at, grading: provisional\|graded, provisional_grade: 1–4, interval_days (≥ 1), match: null, question_title: null, retired, feedback}`. `match` / `question_title` are for BE-09 `pattern_match` questions. | 400 `review not found` / `stage 1 not submitted…` / `stage 2 already submitted` / `selected_index is out of range` / `question not found`; 401; 422 |
+| GET | `/v1/reviews/{review_id}` | token | — | `{review_id, concept_id, question_id, question_version, session_id, free_text, locked_at, selected_index, correct, provisional_grade, final_grade, grading, feedback, due_after, rewritten_question_id}`; `feedback` once graded | 401, 404 `review not found` |
+| POST | `/v1/concepts/{concept_id}/unretire` | token | — | `{concept_id, retired: false, due_at}`. A concept that is not retired is left as it is. | 401, 404 `concept not found`, 409 |
+| GET | `/v1/concepts/{concept_id}/questions` | token | — | `{concept_id, current_question: QuestionVersion \| null, question_versions: [QuestionVersion]}` oldest first; `QuestionVersion = {question_id, version, stem, previous_version_id, rewrite_reason, created_at, active}`. `current_question` is the one the next session serves. BE-07 folds this into `GET /v1/concepts/{id}`. | 401, 404 `concept not found` |
 
 ---
 
@@ -153,7 +205,7 @@ inline. The agent later replaces the provisional grade (section 2).
 | POST | `/v1/tracks/{track_id}/agenda/lock` | token | — | `Agenda` (status `locked`) | 401, 404 (not found, or not the caller's track) |
 | POST | `/v1/tracks/{track_id}/agenda/unlock` | token | — | `Agenda` (`refined` if it has a syllabus, else `none`) | 401, 404 |
 | GET | `/v1/tracks/{track_id}/coverage` | token | — | `{track_id, total_concepts, studied_concepts, decaying_concepts, coverage_ratio, by_syllabus: [{syllabus_ref, total_concepts, studied_concepts, coverage_ratio}], uncovered_syllabus: [str]}` | 401, 404 |
-| GET | `/v1/progress/concepts/{concept_id}` | token | — | `{concept_id, stability, difficulty, retrievability, due_at, reps, lapses, timeline: [{reviewed_at, grade, is_correct}]}` | 401, 404 `no state for this concept` |
+| GET | `/v1/progress/concepts/{concept_id}` | token | — | `{concept_id, stability, difficulty, retrievability, due_at, reps, lapses, timeline: [{reviewed_at, grade, is_correct, review_id, question_id, question_version, grading, feedback}]}` | 401, 404 `no state for this concept` |
 
 | Tool | Arguments | Returns | Notes / errors |
 |---|---|---|---|
@@ -170,6 +222,8 @@ inline. The agent later replaces the provisional grade (section 2).
 
 | Method | Path | Auth | Request | Response | Errors |
 |---|---|---|---|---|---|
+| GET | `/v1/settings` | token | — | `{retire_mastered, allow_question_rewrite}` (defaults `true`, `false`: rewriting is opt-in, decision D8). BE-08 adds the rest of the Settings screen to this body. | 401 |
+| PATCH | `/v1/settings` | token | `{retire_mastered?: bool, allow_question_rewrite?: bool}` | Same as `GET` | 401, 409 concurrent change, 422 |
 | POST | `/v1/settings/api-key` | token | `{provider: anthropic\|openai, key}` | `{provider, last4, status: "validated"}`. The key is checked with the provider, stored in Key Vault, and only a reference is kept in Cosmos. | 400 unsupported provider; 401; 422 provider rejected the key (string `detail`) or invalid body |
 | GET | `/v1/settings/api-key` | token | — | `[{provider, last4, status: "stored"}]` | 401 |
 | DELETE | `/v1/settings/api-key/{provider}` | token | — | 204 (Key Vault secret first, then the reference) | 400 unsupported provider; 401 |
