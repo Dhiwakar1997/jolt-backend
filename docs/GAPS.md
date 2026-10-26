@@ -2,7 +2,7 @@
 
 Each screen in the Jolt 2.0 design (Figma prototype, frames listed in
 `Jolt/design/frames/index.json`; screens per pass in `Jolt/docs/v2/PLAN.md` §5 and
-the FE pass briefs) compared with the API as of BE-03 ([`API.md`](./API.md)). For
+the FE pass briefs) compared with the API as of BE-04 ([`API.md`](./API.md)). For
 each gap, the backend pass whose brief covers it.
 
 Status: **ready** (today's endpoints are enough) · **partial** (some data
@@ -17,21 +17,21 @@ Frame numbers are phone / web / tablet.
 |---|---|---|---|---|---|
 | Splash, Welcome | 1, 2 / 21 | — | — | client | — |
 | Sign in (Google) | 2 / 21 | `POST /v1/auth/google` → app token + user | `POST /v1/auth/google` (BE-03); dev mode: `POST /v1/auth/dev` | ready | — |
-| Connect your model | 3 / 21 | Create an MCP token shown once, MCP server URL, per-client steps, nightly prompt | `POST /v1/mcp-tokens` (token shown once), `mcp_server_url` on `GET /v1/me` (BE-03); no prompt or per-client steps | partial | BE-04 (`docs/CONNECT.md`, `GET /v1/sync/prompt`) |
+| Connect your model | 3 / 21 | Create an MCP token shown once, MCP server URL, per-client steps, nightly prompt | `POST /v1/mcp-tokens` (token shown once), `mcp_server_url` on `GET /v1/me` (BE-03); per-client steps in `docs/CONNECT.md` (static copy for the screen; Claude's connector URL is `mcp_server_url?token=<token>`), prompt from `GET /v1/sync/prompt` (BE-04) | ready | — (client setups **deploy pending**, see `CONNECT.md`) |
 | First track | 4 / 21 | Create a notes track with name and optional outline (→ `draft`); or enrol in curated DSA | `POST /v1/tracks {name, syllabus}` gives a `refined` agenda, no outline/`draft`, no `kind` | partial | BE-07 (outline → `draft`, `kind`), BE-09 (catalog, enrol) |
-| Waiting for first sync | — / 21 | Poll sync status; resume point for a returning user | `GET /v1/me` `onboarding` (BE-03); `first_sync_at` stays `null` until BE-04 sets it | partial | BE-04 (`GET /v1/sync/status`, sets `first_sync_at`) |
+| Waiting for first sync | — / 21 | Poll sync status; resume point for a returning user | `GET /v1/sync/status` (`health: never` until the first run), `GET /v1/me` `onboarding.first_sync_at` (set when the first run closes) | ready | — |
 
 ## Today (FE-04)
 
 | Screen part | Frames | Needs | Today | Status | Covered by |
 |---|---|---|---|---|---|
 | Due card | 5 / 22 / 37 | Due count and per-track breakdown | `GET /v1/reviews/due` gives a count and items, but items carry no `track_id` | partial | BE-06 (review sessions), BE-07 (due per track in `GET /v1/tracks`) |
-| Sync line | 5 / 22 / 37 | Last sync time, client, late / never | — | missing | BE-04 |
+| Sync line | 5 / 22 / 37 | Last sync time, client, late / never | `GET /v1/sync/status`: `last_run` (`started_at`, `finished_at`, `client_label`, counts), `health`, `next_expected_at` (pass `?tz=`) | ready | — |
 | Stats | 5 / 22 / 37 | Streak, retention, reviews this week | — | missing | BE-08 (`GET /v1/progress`) |
 | Tracks | 5 / 22 / 37 | Concepts, due and sources count per track | `GET /v1/tracks` has no counts | partial | BE-07 |
 | Tonight's uploads | 5 / 22 / 37 | Unprocessed sources with their track | `GET /v1/sources` (filter on the client; no `track_id`) | partial | BE-05 |
-| What's new | 5 / 22 / 37 | Concepts added by the last sync, with the source date ("Found in your 12 Sep notes") | — | missing | **No brief covers it.** Proposal: BE-04 records concept ids per sync run and `GET /v1/sync/runs` returns them, or BE-07 adds `GET /v1/concepts?since=` |
-| Empty / first-run states | — | Same data as above, plus `GET /v1/me` | `GET /v1/me` (BE-03) | partial | BE-04 |
+| What's new | 5 / 22 / 37 | Concepts added by the last sync, with the source date ("Found in your 12 Sep notes") | `changes[]` on each sync run (`GET /v1/sync/status` → `last_run`, `GET /v1/sync/runs`): `concept_added` / `concept_updated` with `concept_title`, `track_id`, `source_id`, `source_uploaded_at`, `added_to_syllabus` (decision A25, BE-04) | ready | — |
+| Empty / first-run states | — | Same data as above, plus `GET /v1/me` | `GET /v1/me` (BE-03), sync status (BE-04); due, stats and track counts still partial (rows above) | partial | BE-05, BE-07, BE-08 |
 
 ## Review (FE-06)
 
@@ -67,7 +67,7 @@ Frame numbers are phone / web / tablet.
 | Source · Original | 15 | Signed GET URL per page | Only via MCP `jolt_get_source_content`; no REST route | missing | BE-05 (`GET /v1/sources/{id}`) |
 | Source · What it found | 16 / 32 / 46 | Active extraction markdown | `GET /v1/sources/{id}/extractions` omits the markdown | missing | BE-05 |
 | Source · Past reads | 17 / 33 / 47 | Every read: model, time, concepts found, questions written | `GET /v1/sources/{id}/extractions`: model, confidence, time, status; no counts | partial | BE-05 |
-| Read again sheet | 53 | Queue a re-read with an optional preferred model; the next `jolt_sync` plan lists it | — | missing | BE-05 (`POST /v1/sources/{id}/reread`), BE-04 (plan) |
+| Read again sheet | 53 | Queue a re-read with an optional preferred model; the next `jolt_sync` plan lists it | The plan side is built (BE-04): `reread_sources` and re-read steps appear once `SourcesRepository.list_reread_requested(user_id)` exists; no way to request one yet | partial | BE-05 (`POST /v1/sources/{id}/reread`, `list_reread_requested`, clearing the flag on the superseding `jolt_store_extraction`) |
 | Reader | 18 / 34 / 48 | Page URLs; screen-size images first, full size on zoom; thumbnails on web | — | missing | BE-05 (page URLs). **Resized renditions and thumbnails are in no brief**: BE-05 should decide (originals only, or renditions) |
 | Toasts | 56, 57 | — | — | client | — |
 
@@ -76,7 +76,7 @@ Frame numbers are phone / web / tablet.
 | Screen part | Frames | Needs | Today | Status | Covered by |
 |---|---|---|---|---|---|
 | Progress | 19 / 35 / 49 | Retention and weekly series, reviews, streak, learning / mastered, daily heatmap, per-track table | Only per-concept `GET /v1/progress/concepts/{id}` | missing | BE-08 (`GET /v1/progress`) |
-| Settings · Model | 20 / 36 / 50 | MCP status, last sync and health, connected clients (create / revoke tokens), nightly prompt | `GET`/`POST /v1/mcp-tokens`, `DELETE /v1/mcp-tokens/{id}` with `label`, `last_used_at` (BE-03) | partial | BE-04 (sync status, prompt), BE-08 (model status block) |
+| Settings · Model | 20 / 36 / 50 | MCP status, last sync and health, connected clients (create / revoke tokens), nightly prompt | `GET`/`POST /v1/mcp-tokens`, `DELETE /v1/mcp-tokens/{id}` with `label`, `last_used_at` (BE-03); `GET /v1/sync/status`, `GET /v1/sync/runs`, `GET /v1/sync/prompt` (BE-04) | partial | BE-08 (`model_status` block in `GET /v1/settings`, which can reuse these) |
 | Settings · API key + sheet | 20 / 36 / 50, 51, 58 | Add, list (`added_at`), remove | `POST`, `GET` (no `added_at`), `DELETE /v1/settings/api-key` | partial | BE-08 |
 | Settings · Appearance | 20 / 36 / 50 | Theme | — | missing | BE-08 (`GET/PATCH /v1/settings`) |
 | Settings · Reviews | 20 / 36 / 50 | Desired retention (FSRS), daily cap, retire mastered, allow question rewrite | — (`FSRS_DESIRED_RETENTION` is a server-wide setting) | missing | BE-08 (settings), BE-06 (behaviour) |
@@ -124,3 +124,18 @@ To fix in the pass named, or sooner.
    token revocation work, but a lost device's app token stays valid until the
    pepper rotates, and Settings has no "signed-in devices" list. → BE-10
    (expiry / idle timeout for app tokens, optional device list).
+8. **Upload dates and the schedule have no user time zone.** Sessions are split
+   by the UTC date of each upload (D6), so a learner west of UTC who uploads late
+   in the evening sees that upload under the next day; `GET /v1/sync/status`
+   takes the zone per request (`?tz=`) for `next_expected_at`. → BE-08: a
+   `timezone` setting, used for the D6 day and as the default `tz`.
+9. **No Streamable HTTP transport.** `/mcp` speaks HTTP+SSE only (mcp 1.2.0), so
+   Codex connects through the `mcp-remote` bridge instead of its native `url =`
+   config, and every sync holds one long event stream (to check against the
+   Container Apps ingress timeout after deploy). → upgrade `mcp` (≥ 1.8, moves
+   Pydantic to 2.11+) and add Streamable HTTP at `/mcp`; BE-10 or its own pass.
+   See `CONNECT.md`.
+10. **`jolt_create_questions` accepts any number of options.** The prompt and
+    the plan ask for exactly 4 with one correct; the server only checks the
+    request shape. → BE-06 (question versions) can enforce 4 when it reworks
+    questions.

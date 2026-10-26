@@ -103,8 +103,18 @@ POST /v1/mcp-tokens  {label}      -> { id, token, ... }    # token shown ONCE
 
 The app keeps its app token (`jolt_app_…`) and sends it as `Authorization: Bearer`
 on `/v1`. The MCP token (`jolt_live_…`) goes in the Claude / Codex MCP client
-config as the connection's `Authorization` header; `/mcp` accepts only MCP
-tokens, `/v1` only app tokens. See `docs/API.md` §1.
+config as the connection's `Authorization` header (or as `?token=` on the URL for
+Claude's custom connectors); `/mcp` accepts only MCP tokens, `/v1` only app
+tokens. See `docs/API.md` §1 and, for each client's exact setup,
+[`docs/CONNECT.md`](./docs/CONNECT.md).
+
+### The nightly sync
+
+The learner's own Claude or Codex runs a scheduled task daily at 00:15 with the
+prompt in [`docs/NIGHTLY_SYNC_PROMPT.md`](./docs/NIGHTLY_SYNC_PROMPT.md) (served by
+`GET /v1/sync/prompt`): it calls `jolt_sync`, follows the plan's steps, and calls
+`jolt_sync` again until it says done. Each run is recorded; the app reads
+`GET /v1/sync/status` and `GET /v1/sync/runs`. See `docs/API.md` §2.
 
 ## Tests and checks
 
