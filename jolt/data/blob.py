@@ -7,6 +7,8 @@ only mints those URLs and verifies uploads.
 
 from __future__ import annotations
 
+import hashlib
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -30,9 +32,9 @@ class BlobGateway:
     async def close(self) -> None:
         await self.service.close()
 
-    def blob_path(self, user_id: str, source_id: str, filename: str) -> str:
+    def blob_path(self, user_id: str, source_id: str, filename: str, page: int = 0) -> str:
         """Namespace every blob under the owning user to keep the store legible."""
-        return f"{user_id}/{source_id}/{filename}"
+        return page_blob_path(user_id, source_id, filename, page)
 
     async def _sas(self, blob_path: str, permission: BlobSasPermissions) -> str:
         expiry = datetime.now(timezone.utc) + timedelta(seconds=self.settings.blob_sas_ttl_seconds)
@@ -78,6 +80,46 @@ class BlobGateway:
         except Exception:
             return None
         return {"size": props.size, "content_type": props.content_settings.content_type}
+
+    async def sha256(self, blob_path: str) -> Optional[str]:
+        """Hex SHA-256 of the stored bytes, or None if the blob is missing.
+
+        Blob has no server-side SHA-256, so confirm streams the bytes once to
+        check the hash the client declared (BE-05). Callers bound the size first
+        (`stat`), so this never reads more than the per-file upload cap.
+        """
+        blob = self.service.get_blob_client(self.container, blob_path)
+        try:
+            downloader = await blob.download_blob()
+        except Exception:
+            return None
+        digest = hashlib.sha256()
+        async for chunk in downloader.chunks():
+            digest.update(chunk)
+        return digest.hexdigest()
+
+    async def delete(self, blob_path: str) -> None:
+        """Delete a blob; missing is fine (used to drop a rejected upload)."""
+        blob = self.service.get_blob_client(self.container, blob_path)
+        try:
+            await blob.delete_blob()
+        except Exception:
+            pass
+
+
+_UNSAFE = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def page_blob_path(user_id: str, source_id: str, filename: str, page: int = 0) -> str:
+    """`<user>/<source>/<page>-<filename>`, the filename reduced to safe characters.
+
+    The page index keeps two files with the same name (phones often name every
+    photo `image.jpg`) apart, and the reduced name keeps paths free of `/`, `..`
+    and characters that need escaping in a SAS URL.
+    """
+    base = filename.replace("\\", "/").rsplit("/", 1)[-1]
+    safe = _UNSAFE.sub("_", base).strip("._") or "file"
+    return f"{user_id}/{source_id}/{page}-{safe[:120]}"
 
 
 async def init_blob(settings: Settings | None = None) -> BlobGateway:

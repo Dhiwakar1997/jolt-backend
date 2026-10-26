@@ -48,6 +48,9 @@ class ProcessingStatus(str, Enum):
     UNPROCESSED = "unprocessed"
     IN_FLIGHT = "in_flight"
     PROCESSED = "processed"
+    # The source could not be read: its sync lease lapsed `SOURCE_MAX_ATTEMPTS`
+    # times without an extraction (BE-05). Read again resets it to unprocessed.
+    FAILED = "failed"
 
 
 class ExtractionStatus(str, Enum):
@@ -192,27 +195,100 @@ class Track(DocBase):
     agenda: Agenda = Field(default_factory=Agenda)
 
 
+class SourcePage(BaseModel):
+    """One uploaded file of a source (BE-05, decision A7: one source, N pages)."""
+
+    index: int  # 0-based, upload order
+    filename: str
+    content_type: str
+    sha256: str  # lowercase hex, as declared at request time
+    blob_path: str
+    declared_size: Optional[int] = None  # bytes, from the upload request
+    size_bytes: Optional[int] = None  # bytes Blob reported at confirm
+
+
 class Source(DocBase):
+    """An upload: one or more files read together as one note (BE-05).
+
+    `filename`, `content_type`, `sha256` and `blob_path` describe the first page,
+    which keeps documents written before BE-05 (single file, no `pages`) valid;
+    `page_list()` reads both shapes.
+    """
+
     user_id: str
     filename: str
     content_type: str
     sha256: str
     blob_path: str
-    size_bytes: Optional[int] = None
+    size_bytes: Optional[int] = None  # total over all pages, set at confirm
     processing_status: ProcessingStatus = ProcessingStatus.UNPROCESSED
     # Lease bookkeeping (LLD §6 leases).
     lease_expires_at: Optional[datetime] = None
     active_extraction_id: Optional[str] = None
     confirmed_at: Optional[datetime] = None
+    # BE-05: the track the note was added to (None: uploaded without one, e.g.
+    # by an agent), a display title, and the pages.
+    track_id: Optional[str] = None
+    title: Optional[str] = None
+    pages: list[SourcePage] = Field(default_factory=list)
+    # Claims by a sync, and when the latest one was taken (failure detection and
+    # read-again bookkeeping).
+    claim_count: int = 0
+    claimed_at: Optional[datetime] = None
+    failed_reason: Optional[str] = None
+    # Read again (BE-05 §4): set by the app, cleared by the extraction that
+    # answers it.
+    reread_requested_at: Optional[datetime] = None
+    reread_preferred_model: Optional[str] = None
+
+    def page_list(self) -> list[SourcePage]:
+        if self.pages:
+            return sorted(self.pages, key=lambda p: p.index)
+        return [
+            SourcePage(
+                index=0,
+                filename=self.filename,
+                content_type=self.content_type,
+                sha256=self.sha256,
+                blob_path=self.blob_path,
+                size_bytes=self.size_bytes,
+            )
+        ]
+
+    @property
+    def kind(self) -> str:
+        """`photos` (all images), `pdf` (all PDFs) or `file` (a mix)."""
+        types = [p.content_type for p in self.page_list()]
+        if all(t.startswith("image/") for t in types):
+            return "photos"
+        if all(t == "application/pdf" for t in types):
+            return "pdf"
+        return "file"
+
+
+class ExtractionConcept(BaseModel):
+    """A concept a read logged ("Concepts it touched")."""
+
+    concept_id: str
+    title: str
+    is_new: bool = True  # first found by this read
 
 
 class Extraction(DocBase):
+    """One read of a source. `concepts` and `questions_written` are kept on the
+    read itself (filled by jolt_log_session / jolt_create_questions) so Past reads
+    is one single-partition query (BE-05)."""
+
     source_id: str
     markdown: str
     confidence: float = 0.0
     model_id: Optional[str] = None
     status: ExtractionStatus = ExtractionStatus.ACTIVE
     superseded_by: Optional[str] = None
+    # The MCP token's label, e.g. "Claude Desktop" (BE-05).
+    client_label: Optional[str] = None
+    concepts: list[ExtractionConcept] = Field(default_factory=list)
+    questions_written: int = 0
 
 
 class Session(DocBase):

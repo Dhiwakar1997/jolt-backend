@@ -50,6 +50,11 @@ async def test_queries_stay_inside_the_partition_and_order_and_limit():
     await repo.create(_source("u2"))
     rows = await repo.list_for_user("u1")
     assert [r.filename for r in rows] == ["2.png", "1.png", "0.png"]  # created_at DESC
+    # Only confirmed uploads are offered to a sync (BE-05).
+    assert await repo.list_unprocessed("u1", limit=2) == []
+    for row in rows:
+        row.confirmed_at = row.created_at
+        await repo.replace(row)
     assert len(await repo.list_unprocessed("u1", limit=2)) == 2
 
 

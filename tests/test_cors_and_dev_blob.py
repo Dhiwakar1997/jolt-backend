@@ -83,7 +83,7 @@ def test_dev_blob_round_trip(served: TestClient):
     ).json()
     url = ticket["upload_url"]
     assert url.startswith("http://testserver/_dev/blob/sources/")
-    assert "page%201.png" in url
+    assert url.split("?")[0].endswith("/0-page_1.png")  # page index + safe filename
 
     # Not yet uploaded: confirm fails like it would against Azure.
     assert served.post(f"/v1/uploads/{ticket['source_id']}/confirm", json={}).status_code == 400
@@ -126,7 +126,7 @@ def test_dev_blob_routes_absent_outside_memory_mode():
 def test_without_public_base_url_urls_stay_opaque(client, auth):
     ticket = client.post(
         "/v1/uploads/request",
-        json={"filename": "a.png", "content_type": "image/png", "sha256": "h"},
+        json={"filename": "a.png", "content_type": "image/png", "sha256": "a" * 64},
         headers=auth,
     ).json()
     assert ticket["upload_url"].startswith("memory://blob/")

@@ -394,6 +394,16 @@
               }
             }
           },
+          "404": {
+            "description": "Not found, or not owned by the caller",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "422": {
             "description": "Validation Error",
             "content": {
@@ -1005,16 +1015,61 @@
         ],
         "summary": "List Sources",
         "operationId": "list_sources",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "track_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Track Id"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "unprocessed",
+                    "in_flight",
+                    "processed",
+                    "failed"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
+                  "type": "array",
                   "items": {
                     "$ref": "#/components/schemas/SourceResponse"
                   },
-                  "type": "array",
                   "title": "Response List Sources"
                 }
               }
@@ -1029,13 +1084,169 @@
                 }
               }
             }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
           }
-        },
+        }
+      }
+    },
+    "/v1/sources/{source_id}": {
+      "get": {
+        "tags": [
+          "sources"
+        ],
+        "summary": "Get Source",
+        "operationId": "get_source",
         "security": [
           {
             "HTTPBearer": []
           }
-        ]
+        ],
+        "parameters": [
+          {
+            "name": "source_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Source Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceDetailResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, or not owned by the caller",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/sources/{source_id}/reread": {
+      "post": {
+        "tags": [
+          "sources"
+        ],
+        "summary": "Reread Source",
+        "operationId": "reread_source",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "source_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Source Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/RereadRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RereadResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, or not owned by the caller",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/v1/sources/{source_id}/extractions": {
@@ -1107,6 +1318,42 @@
             }
           }
         }
+      }
+    },
+    "/v1/storage": {
+      "get": {
+        "tags": [
+          "sources"
+        ],
+        "summary": "Get Storage",
+        "operationId": "get_storage",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       }
     },
     "/v1/progress/concepts/{concept_id}": {
@@ -1392,6 +1639,103 @@
   },
   "components": {
     "schemas": {
+      "ActiveReadResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "source_id": {
+            "type": "string",
+            "title": "Source Id"
+          },
+          "number": {
+            "type": "integer",
+            "title": "Number",
+            "description": "1-based, oldest first"
+          },
+          "model_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Id"
+          },
+          "client_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Label",
+            "description": "The MCP client that did the read"
+          },
+          "confidence": {
+            "type": "number",
+            "title": "Confidence"
+          },
+          "low_confidence": {
+            "type": "boolean",
+            "title": "Low Confidence"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "superseded"
+            ],
+            "title": "Status"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "concepts_found": {
+            "type": "integer",
+            "title": "Concepts Found"
+          },
+          "questions_written": {
+            "type": "integer",
+            "title": "Questions Written"
+          },
+          "concepts": {
+            "items": {
+              "$ref": "#/components/schemas/TouchedConcept"
+            },
+            "type": "array",
+            "title": "Concepts"
+          },
+          "markdown": {
+            "type": "string",
+            "title": "Markdown"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "source_id",
+          "number",
+          "model_id",
+          "client_label",
+          "confidence",
+          "low_confidence",
+          "status",
+          "created_at",
+          "concepts_found",
+          "questions_written",
+          "concepts",
+          "markdown"
+        ],
+        "title": "ActiveReadResponse"
+      },
       "AgendaResponse": {
         "properties": {
           "status": {
@@ -1585,6 +1929,32 @@
         ],
         "title": "ConceptStatePoint"
       },
+      "ConfirmPageCheck": {
+        "properties": {
+          "index": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Index"
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-fA-F]{64}$",
+            "title": "Sha256"
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Size"
+          }
+        },
+        "type": "object",
+        "required": [
+          "index",
+          "sha256",
+          "size"
+        ],
+        "title": "ConfirmPageCheck"
+      },
       "ConfirmRequest": {
         "properties": {
           "sha256": {
@@ -1596,7 +1966,23 @@
                 "type": "null"
               }
             ],
-            "title": "Sha256"
+            "title": "Sha256",
+            "description": "The first page's hash (single file)"
+          },
+          "pages": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ConfirmPageCheck"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pages",
+            "description": "Optional: what the client uploaded, checked against the request"
           }
         },
         "type": "object",
@@ -2010,6 +2396,174 @@
         ],
         "title": "OnboardingResponse"
       },
+      "ReadResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "source_id": {
+            "type": "string",
+            "title": "Source Id"
+          },
+          "number": {
+            "type": "integer",
+            "title": "Number",
+            "description": "1-based, oldest first"
+          },
+          "model_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Id"
+          },
+          "client_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Label",
+            "description": "The MCP client that did the read"
+          },
+          "confidence": {
+            "type": "number",
+            "title": "Confidence"
+          },
+          "low_confidence": {
+            "type": "boolean",
+            "title": "Low Confidence"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "superseded"
+            ],
+            "title": "Status"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "concepts_found": {
+            "type": "integer",
+            "title": "Concepts Found"
+          },
+          "questions_written": {
+            "type": "integer",
+            "title": "Questions Written"
+          },
+          "concepts": {
+            "items": {
+              "$ref": "#/components/schemas/TouchedConcept"
+            },
+            "type": "array",
+            "title": "Concepts"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "source_id",
+          "number",
+          "model_id",
+          "client_label",
+          "confidence",
+          "low_confidence",
+          "status",
+          "created_at",
+          "concepts_found",
+          "questions_written",
+          "concepts"
+        ],
+        "title": "ReadResponse"
+      },
+      "RereadRequest": {
+        "properties": {
+          "preferred_model": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preferred Model",
+            "description": "e.g. 'claude' or 'codex'; null lets the next client decide"
+          }
+        },
+        "type": "object",
+        "title": "RereadRequest"
+      },
+      "RereadResponse": {
+        "properties": {
+          "source_id": {
+            "type": "string",
+            "title": "Source Id"
+          },
+          "requested_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Requested At"
+          },
+          "preferred_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preferred Model"
+          }
+        },
+        "type": "object",
+        "required": [
+          "source_id",
+          "requested_at",
+          "preferred_model"
+        ],
+        "title": "RereadResponse"
+      },
+      "RereadState": {
+        "properties": {
+          "requested_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Requested At"
+          },
+          "preferred_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preferred Model"
+          }
+        },
+        "type": "object",
+        "required": [
+          "requested_at",
+          "preferred_model"
+        ],
+        "title": "RereadState"
+      },
       "RetentionRequest": {
         "properties": {
           "retention_days": {
@@ -2065,7 +2619,7 @@
         ],
         "title": "SignInResponse"
       },
-      "SourceResponse": {
+      "SourceDetailResponse": {
         "properties": {
           "id": {
             "type": "string",
@@ -2073,14 +2627,22 @@
           },
           "filename": {
             "type": "string",
-            "title": "Filename"
+            "title": "Filename",
+            "description": "The first page's filename"
           },
           "content_type": {
             "type": "string",
-            "title": "Content Type"
+            "title": "Content Type",
+            "description": "The first page's content type"
           },
           "processing_status": {
             "type": "string",
+            "enum": [
+              "unprocessed",
+              "in_flight",
+              "processed",
+              "failed"
+            ],
             "title": "Processing Status"
           },
           "active_extraction_id": {
@@ -2098,6 +2660,102 @@
             "type": "string",
             "format": "date-time",
             "title": "Created At"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "track_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Track Id"
+          },
+          "track_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Track Name"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "photos",
+              "pdf",
+              "file"
+            ],
+            "title": "Kind"
+          },
+          "page_count": {
+            "type": "integer",
+            "title": "Page Count"
+          },
+          "uploaded_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Uploaded At",
+            "description": "When the upload was confirmed"
+          },
+          "concepts_found": {
+            "type": "integer",
+            "title": "Concepts Found",
+            "description": "Concepts the active read logged"
+          },
+          "questions_written": {
+            "type": "integer",
+            "title": "Questions Written",
+            "description": "Questions written for those concepts"
+          },
+          "low_confidence": {
+            "type": "boolean",
+            "title": "Low Confidence",
+            "description": "The active read's confidence is under LOW_CONFIDENCE_THRESHOLD"
+          },
+          "reread_requested": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RereadState"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Read again requested and not yet done"
+          },
+          "pages": {
+            "items": {
+              "$ref": "#/components/schemas/SourcePageResponse"
+            },
+            "type": "array",
+            "title": "Pages"
+          },
+          "active_read": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ActiveReadResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reads": {
+            "items": {
+              "$ref": "#/components/schemas/ReadResponse"
+            },
+            "type": "array",
+            "title": "Reads",
+            "description": "Every read, newest first"
           }
         },
         "type": "object",
@@ -2107,7 +2765,184 @@
           "content_type",
           "processing_status",
           "active_extraction_id",
-          "created_at"
+          "created_at",
+          "title",
+          "track_id",
+          "track_name",
+          "kind",
+          "page_count",
+          "uploaded_at",
+          "concepts_found",
+          "questions_written",
+          "low_confidence",
+          "reread_requested",
+          "pages",
+          "active_read",
+          "reads"
+        ],
+        "title": "SourceDetailResponse"
+      },
+      "SourcePageResponse": {
+        "properties": {
+          "index": {
+            "type": "integer",
+            "title": "Index"
+          },
+          "url": {
+            "type": "string",
+            "title": "Url",
+            "description": "Short-lived signed GET for the original file"
+          },
+          "content_type": {
+            "type": "string",
+            "title": "Content Type"
+          },
+          "size": {
+            "type": "integer",
+            "title": "Size"
+          }
+        },
+        "type": "object",
+        "required": [
+          "index",
+          "url",
+          "content_type",
+          "size"
+        ],
+        "title": "SourcePageResponse"
+      },
+      "SourceResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "filename": {
+            "type": "string",
+            "title": "Filename",
+            "description": "The first page's filename"
+          },
+          "content_type": {
+            "type": "string",
+            "title": "Content Type",
+            "description": "The first page's content type"
+          },
+          "processing_status": {
+            "type": "string",
+            "enum": [
+              "unprocessed",
+              "in_flight",
+              "processed",
+              "failed"
+            ],
+            "title": "Processing Status"
+          },
+          "active_extraction_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active Extraction Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "track_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Track Id"
+          },
+          "track_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Track Name"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "photos",
+              "pdf",
+              "file"
+            ],
+            "title": "Kind"
+          },
+          "page_count": {
+            "type": "integer",
+            "title": "Page Count"
+          },
+          "uploaded_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Uploaded At",
+            "description": "When the upload was confirmed"
+          },
+          "concepts_found": {
+            "type": "integer",
+            "title": "Concepts Found",
+            "description": "Concepts the active read logged"
+          },
+          "questions_written": {
+            "type": "integer",
+            "title": "Questions Written",
+            "description": "Questions written for those concepts"
+          },
+          "low_confidence": {
+            "type": "boolean",
+            "title": "Low Confidence",
+            "description": "The active read's confidence is under LOW_CONFIDENCE_THRESHOLD"
+          },
+          "reread_requested": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RereadState"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Read again requested and not yet done"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "filename",
+          "content_type",
+          "processing_status",
+          "active_extraction_id",
+          "created_at",
+          "title",
+          "track_id",
+          "track_name",
+          "kind",
+          "page_count",
+          "uploaded_at",
+          "concepts_found",
+          "questions_written",
+          "low_confidence",
+          "reread_requested"
         ],
         "title": "SourceResponse"
       },
@@ -2210,6 +3045,30 @@
         ],
         "title": "StageTwoResponse"
       },
+      "StorageResponse": {
+        "properties": {
+          "bytes_used": {
+            "type": "integer",
+            "title": "Bytes Used",
+            "description": "Bytes of every confirmed upload the user keeps"
+          },
+          "source_count": {
+            "type": "integer",
+            "title": "Source Count"
+          },
+          "page_count": {
+            "type": "integer",
+            "title": "Page Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "bytes_used",
+          "source_count",
+          "page_count"
+        ],
+        "title": "StorageResponse"
+      },
       "SyllabusCoverageResponse": {
         "properties": {
           "syllabus_ref": {
@@ -2267,6 +3126,29 @@
         ],
         "title": "SyllabusItemResponse"
       },
+      "TouchedConcept": {
+        "properties": {
+          "concept_id": {
+            "type": "string",
+            "title": "Concept Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "is_new": {
+            "type": "boolean",
+            "title": "Is New"
+          }
+        },
+        "type": "object",
+        "required": [
+          "concept_id",
+          "title",
+          "is_new"
+        ],
+        "title": "TouchedConcept"
+      },
       "TrackResponse": {
         "properties": {
           "id": {
@@ -2314,28 +3196,156 @@
         ],
         "title": "TrackResponse"
       },
-      "UploadRequest": {
+      "UploadPage": {
         "properties": {
           "filename": {
             "type": "string",
+            "maxLength": 255,
+            "minLength": 1,
             "title": "Filename"
           },
           "content_type": {
             "type": "string",
-            "title": "Content Type"
+            "title": "Content Type",
+            "description": "image/jpeg, image/png, image/heic, image/webp or application/pdf"
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Size",
+            "description": "Bytes; at most `max_bytes_per_file`"
           },
           "sha256": {
             "type": "string",
-            "title": "Sha256"
+            "pattern": "^[0-9a-fA-F]{64}$",
+            "title": "Sha256",
+            "description": "Hex SHA-256 of the file"
           }
         },
         "type": "object",
         "required": [
           "filename",
           "content_type",
+          "size",
           "sha256"
         ],
-        "title": "UploadRequest"
+        "title": "UploadPage",
+        "description": "One file of the upload."
+      },
+      "UploadPageTicket": {
+        "properties": {
+          "index": {
+            "type": "integer",
+            "title": "Index"
+          },
+          "upload_url": {
+            "type": "string",
+            "title": "Upload Url"
+          }
+        },
+        "type": "object",
+        "required": [
+          "index",
+          "upload_url"
+        ],
+        "title": "UploadPageTicket"
+      },
+      "UploadRequest": {
+        "properties": {
+          "track_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Track Id",
+            "description": "The caller's track the note belongs to"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title",
+            "description": "Defaults to the first filename"
+          },
+          "filename": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 255,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Filename"
+          },
+          "content_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Type"
+          },
+          "sha256": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[0-9a-fA-F]{64}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sha256"
+          },
+          "size": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size",
+            "description": "Single file: its bytes. Ignored when `pages` is sent."
+          },
+          "pages": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/UploadPage"
+                },
+                "type": "array",
+                "minItems": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pages",
+            "description": "Files of a multi-page note, in page order"
+          }
+        },
+        "type": "object",
+        "title": "UploadRequest",
+        "description": "Either `pages` (one entry per file) or the single-file fields."
       },
       "UploadResponse": {
         "properties": {
@@ -2345,13 +3355,36 @@
           },
           "upload_url": {
             "type": "string",
-            "title": "Upload Url"
+            "title": "Upload Url",
+            "description": "The first page's PUT URL"
+          },
+          "pages": {
+            "items": {
+              "$ref": "#/components/schemas/UploadPageTicket"
+            },
+            "type": "array",
+            "title": "Pages",
+            "description": "One signed PUT URL per page"
+          },
+          "max_bytes_per_file": {
+            "type": "integer",
+            "title": "Max Bytes Per File"
+          },
+          "accepted_types": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Accepted Types"
           }
         },
         "type": "object",
         "required": [
           "source_id",
-          "upload_url"
+          "upload_url",
+          "pages",
+          "max_bytes_per_file",
+          "accepted_types"
         ],
         "title": "UploadResponse"
       },

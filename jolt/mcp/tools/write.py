@@ -8,14 +8,19 @@ from jolt.domain.models import AgendaSource, ConceptStatus, SyllabusItem
 from jolt.mcp.context import get_runtime, require_user
 from jolt.services.sync import ConceptInput, QuestionInput, SyncService
 from jolt.services.tracks import AgendaLocked, TrackError, TrackService
-from jolt.services.uploads import UploadService
+from jolt.services.uploads import PageSpec, UploadInvalid, UploadService
 
 
 async def request_upload_url(filename: str, content_type: str, sha256: str) -> dict:
     user = await require_user()
-    ticket = await UploadService(get_runtime()).request_upload(
-        user.user_id, filename, content_type, sha256
-    )
+    try:
+        ticket = await UploadService(get_runtime()).request_upload(
+            user.user_id,
+            [PageSpec(filename=filename, content_type=content_type, sha256=sha256)],
+            loc_prefix=(),
+        )
+    except UploadInvalid as exc:
+        return {"error": exc.msg}
     return {"source_id": ticket.source_id, "upload_url": ticket.upload_url}
 
 
@@ -50,8 +55,17 @@ async def store_extraction(
     supersede: bool = False,
 ) -> dict:
     user = await require_user()
-    extraction = await SyncService(get_runtime()).store_extraction(
-        user.user_id, source_id, markdown, confidence, model_id, supersede=supersede
+    rt = get_runtime()
+    # The connected client's name for "Past reads" (the MCP token's label).
+    token = await rt.repos.tokens.get_token(user.user_id, user.token_id)
+    extraction = await SyncService(rt).store_extraction(
+        user.user_id,
+        source_id,
+        markdown,
+        confidence,
+        model_id,
+        supersede=supersede,
+        client_label=token.label if token else None,
     )
     return {"extraction_id": extraction.id, "status": extraction.status.value}
 

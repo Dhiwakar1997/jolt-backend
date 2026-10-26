@@ -1,4 +1,4 @@
-"""End-to-end smoke test against a running Jolt backend (BE-02, BE-03).
+"""End-to-end smoke test against a running Jolt backend (BE-02, BE-03, BE-05).
 
     python scripts/smoke.py --base-url https://<dev-host>
     python scripts/smoke.py --base-url http://localhost:8000      # local, see below
@@ -12,10 +12,14 @@ share it, with a fresh test user:
  3. POST /v1/mcp-tokens -> MCP token; /mcp refuses the app token
  4. MCP over SSE (/mcp/sse) with the MCP token: initialize handshake + tools/list
  5. POST /v1/tracks
- 6. POST /v1/uploads/request -> PUT a 1x1 PNG to the signed URL -> confirm
+ 6. POST /v1/uploads/request for a two-page note (one source, two files) ->
+    PUT each page to its signed URL -> confirm (size and hash per page) ->
+    GET /v1/sources shows it unprocessed
  7. The sync tool sequence over MCP with canned agent output: jolt_sync,
-    jolt_get_unprocessed_sources, jolt_get_source_content (and GET the signed read
-    URL back), jolt_store_extraction, jolt_log_session, jolt_create_questions
+    jolt_get_unprocessed_sources, jolt_get_source_content (and GET every page's
+    signed read URL back), jolt_store_extraction, jolt_log_session,
+    jolt_create_questions; then GET /v1/sources/{id} (originals, active read, past
+    reads), POST /v1/sources/{id}/reread and jolt_sync lists it, GET /v1/storage
  8. GET /v1/reviews/due, POST stage1, POST stage2 (inline FSRS)
  9. jolt_get_pending_gradings + jolt_submit_gradings, then jolt_get_coverage
 10. GET /v1/me shows the onboarding progress; revoke the MCP token (/mcp then
@@ -247,39 +251,65 @@ async def run(
                     track_id = track["id"]
 
                 sha = hashlib.sha256(PNG).hexdigest()
-                with rep.step("POST /v1/uploads/request"):
+                # A two-page note: one source, two files (decision A7).
+                pages = [
+                    {
+                        "filename": f"page-{i}.png",
+                        "content_type": "image/png",
+                        "size": len(PNG),
+                        "sha256": sha,
+                    }
+                    for i in (1, 2)
+                ]
+                with rep.step("POST /v1/uploads/request (two pages)"):
                     ticket = _json(
                         await http.post(
                             "/v1/uploads/request",
-                            json={
-                                "filename": "page-1.png",
-                                "content_type": "image/png",
-                                "sha256": sha,
-                            },
+                            json={"track_id": track_id, "title": "Smoke note", "pages": pages},
                         )
                     )
                     source_id, upload_url = ticket["source_id"], ticket["upload_url"]
                     out["source_id"] = source_id
+                    check(len(ticket["pages"]) == 2, f"page URLs: {ticket['pages']}")
                     check(
                         not upload_url.startswith("memory://"),
                         "upload URL is memory:// (nothing serves it): start the server with "
                         "PUBLIC_BASE_URL=<its base url> in memory mode",
                     )
 
-                with rep.step("PUT PNG to the signed upload URL"):
+                with rep.step("PUT each page to its signed upload URL"):
                     async with httpx.AsyncClient(timeout=timeout) as raw:
-                        put = await raw.put(
-                            upload_url,
-                            content=PNG,
-                            headers={"x-ms-blob-type": "BlockBlob", "Content-Type": "image/png"},
-                        )
-                    check(put.status_code == 201, f"PUT -> {put.status_code}: {put.text[:300]}")
+                        for target in ticket["pages"]:
+                            put = await raw.put(
+                                target["upload_url"],
+                                content=PNG,
+                                headers={
+                                    "x-ms-blob-type": "BlockBlob",
+                                    "Content-Type": "image/png",
+                                },
+                            )
+                            check(
+                                put.status_code == 201,
+                                f"PUT page {target['index']} -> {put.status_code}: "
+                                f"{put.text[:300]}",
+                            )
 
                 with rep.step("POST /v1/uploads/{id}/confirm"):
+                    checks = [{"index": i, "sha256": sha, "size": len(PNG)} for i in (0, 1)]
                     confirmed = _json(
-                        await http.post(f"/v1/uploads/{source_id}/confirm", json={"sha256": sha})
+                        await http.post(
+                            f"/v1/uploads/{source_id}/confirm",
+                            json={"sha256": sha, "pages": checks},
+                        )
                     )
                     check(confirmed == {"status": "ready"}, f"confirm: {confirmed}")
+
+                with rep.step("GET /v1/sources (unprocessed)"):
+                    listed = _json(await http.get("/v1/sources", params={"track_id": track_id}))
+                    row = next((s for s in listed if s["id"] == source_id), None)
+                    check(row is not None, f"source {source_id} not listed: {listed}")
+                    check(row["processing_status"] == "unprocessed", f"source: {row}")
+                    check(row["page_count"] == 2, f"source: {row}")
 
                 with rep.step("jolt_sync"):
                     plan = await _tool(mcp, "jolt_sync")
@@ -290,12 +320,14 @@ async def run(
                     ids = [s["source_id"] for s in claimed["sources"]]
                     check(source_id in ids, f"source {source_id} not claimed: {ids}")
 
-                with rep.step("jolt_get_source_content + GET signed read URL"):
+                with rep.step("jolt_get_source_content + GET every signed read URL"):
                     content = await _tool(mcp, "jolt_get_source_content", source_id=source_id)
+                    check(content["page_count"] == 2, f"content: {content}")
                     async with httpx.AsyncClient(timeout=timeout) as raw:
-                        got = await raw.get(content["read_url"])
-                    check(got.status_code == 200, f"read URL -> {got.status_code}")
-                    check(got.content == PNG, "read URL returned different bytes")
+                        for page in content["pages"]:
+                            got = await raw.get(page["read_url"])
+                            check(got.status_code == 200, f"read URL -> {got.status_code}")
+                            check(got.content == PNG, "read URL returned different bytes")
 
                 with rep.step("jolt_store_extraction (canned)"):
                     ext = await _tool(
@@ -335,6 +367,33 @@ async def run(
                     )
                     check(len(created["question_ids"]) == 1, f"create_questions: {created}")
                     question_id = created["question_ids"][0]
+
+                with rep.step("GET /v1/sources/{id} (originals, active read, past reads)"):
+                    detail = _json(await http.get(f"/v1/sources/{source_id}"))
+                    check(detail["processing_status"] == "processed", f"status: {detail}")
+                    check(len(detail["pages"]) == 2, f"pages: {detail['pages']}")
+                    active = detail["active_read"] or {}
+                    check(active.get("markdown") == CANNED_MARKDOWN, f"active read: {active}")
+                    check(
+                        (active.get("concepts_found"), active.get("questions_written")) == (1, 1),
+                        f"active read counts: {active}",
+                    )
+                    check(len(detail["reads"]) == 1, f"reads: {detail['reads']}")
+
+                with rep.step("POST /v1/sources/{id}/reread + jolt_sync lists it"):
+                    _json(
+                        await http.post(
+                            f"/v1/sources/{source_id}/reread", json={"preferred_model": "claude"}
+                        )
+                    )
+                    plan = await _tool(mcp, "jolt_sync")
+                    rereads = {r["source_id"]: r["preferred_model"] for r in plan["rereads"]}
+                    check(rereads.get(source_id) == "claude", f"plan: {plan}")
+
+                with rep.step("GET /v1/storage"):
+                    storage = _json(await http.get("/v1/storage"))
+                    check(storage["bytes_used"] == 2 * len(PNG), f"storage: {storage}")
+                    check(storage["page_count"] == 2, f"storage: {storage}")
 
                 with rep.step("GET /v1/reviews/due"):
                     due = _json(await http.get("/v1/reviews/due"))

@@ -18,6 +18,15 @@ async def sync(limit: int = 50) -> dict:
     return {
         "unprocessed_sources": plan.unprocessed_sources,
         "pending_gradings": plan.pending_gradings,
+        "rereads": [
+            {
+                "source_id": r.source_id,
+                "title": r.title,
+                "preferred_model": r.preferred_model,
+                "requested_at": r.requested_at.isoformat(),
+            }
+            for r in plan.rereads
+        ],
     }
 
 
@@ -31,6 +40,12 @@ async def get_unprocessed_sources(limit: int = 10) -> dict:
                 "filename": s.filename,
                 "content_type": s.content_type,
                 "lease_expires_at": s.lease_expires_at.isoformat() if s.lease_expires_at else None,
+                "title": s.title or s.filename,
+                "track_id": s.track_id,
+                "page_count": len(s.page_list()),
+                # Read again (BE-05): store this read with supersede=true.
+                "supersede": s.active_extraction_id is not None,
+                "preferred_model": s.reread_preferred_model,
             }
             for s in sources
         ]

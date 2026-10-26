@@ -92,6 +92,7 @@ def create_app(settings: Settings | None = None, runtime: Runtime | None = None)
     app.include_router(review.router)
     app.include_router(tracks.router)
     app.include_router(sources.router)
+    app.include_router(sources.storage_router)
     app.include_router(progress.router)
     app.include_router(settings_routes.router)
     if cfg.storage_mode == "memory":

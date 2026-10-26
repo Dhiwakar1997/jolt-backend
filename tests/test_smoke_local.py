@@ -64,7 +64,7 @@ def live_server():
 async def test_smoke_round_trip(live_server):
     smoke = _load_smoke()
     out = await smoke.run(live_server, wait_seconds=10, expect_version="smoke-test")
-    assert out["steps_passed"] == 25
+    assert out["steps_passed"] == 29
     assert out["version"] == "smoke-test"
     assert out["mcp_server_url"] == f"{live_server}/mcp/sse"
 
