@@ -1,0 +1,165 @@
+name: Deploy prod
+
+# Promotes an image that dev already built and smoke-tested to `prod` (BE-10):
+# no rebuild. The image `jolt-api:<git-sha>` is copied from the dev registry to
+# the prod registry (same digest), rolled out to the prod `jolt-api` Container
+# App and the `jolt-maintenance` job, then scripts/smoke.py --public checks prod
+# over its public URL (dev sign-in is off in prod, so no account is made).
+#
+# Triggers:
+#   * pushing a tag `v*` (e.g. `git tag v2.0.0 <sha> && git push origin v2.0.0`):
+#     promotes the image of the commit the tag points to;
+#   * Actions -> Deploy prod -> Run workflow, optionally with `image_tag` (a git
+#     SHA already deployed to dev): promotes that image, e.g. to roll back.
+#
+# Gate: the job runs in the GitHub environment `prod`, which must have required
+# reviewers (Settings -> Environments -> prod; docs/DEPLOY.md, "Production").
+# Nobody's approval, nothing deploys. The prod deploy identity's federated
+# credential trusts only `environment:prod`, so no other job can sign in as it.
+#
+# Repository variables (printed by `scripts/deploy-infra.sh --env prod`):
+#   AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID   shared with dev
+#   ACR_NAME                                 the dev registry (source)
+#   PROD_AZURE_CLIENT_ID                     client id of id-jolt-prod-github
+#   PROD_AZURE_RESOURCE_GROUP                jolt-prod
+#   PROD_ACR_NAME                            the prod registry (target)
+#   PROD_CONTAINER_APP_NAME                  jolt-api
+#   PROD_PUBLIC_URL                          https://<custom domain>
+#   PROD_APP_ORIGIN (optional)               the production front-end origin,
+#                                            checked by the CORS preflight
+# Until PROD_AZURE_CLIENT_ID is set the job is skipped, not failed.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Image tag (git SHA) already in the dev registry; empty = the selected ref's commit"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    name: Resolve the image tag
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Image tag
+        id: tag
+        env:
+          INPUT_TAG: ${{ inputs.image_tag }}
+        run: |
+          if [[ -n "$INPUT_TAG" ]]; then
+            tag="$INPUT_TAG"
+          else
+            # The commit a (possibly annotated) tag or branch points to.
+            tag="$(git rev-parse "${GITHUB_SHA}^{commit}")"
+          fi
+          if [[ ! "$tag" =~ ^[0-9a-f]{7,40}$ ]]; then
+            echo "::error::'$tag' is not a git SHA; prod only runs images deploy-dev built from main"
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+  promote:
+    name: Promote, roll out, smoke
+    needs: resolve
+    if: vars.PROD_AZURE_CLIENT_ID != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: prod
+      url: ${{ vars.PROD_PUBLIC_URL }}
+    permissions:
+      contents: read
+      id-token: write # OIDC token for azure/login
+    env:
+      TAG: ${{ needs.resolve.outputs.tag }}
+      SRC_ACR: ${{ vars.ACR_NAME }}
+      ACR: ${{ vars.PROD_ACR_NAME }}
+      RG: ${{ vars.PROD_AZURE_RESOURCE_GROUP }}
+      APP_NAME: ${{ vars.PROD_CONTAINER_APP_NAME }}
+      PUBLIC_URL: ${{ vars.PROD_PUBLIC_URL }}
+      APP_ORIGIN: ${{ vars.PROD_APP_ORIGIN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC, prod identity)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.PROD_AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: The image exists in dev
+        # Only images deploy-dev built (and smoke-tested) are promoted.
+        run: |
+          az acr repository show --name "$SRC_ACR" --image "jolt-api:${TAG}" --output none \
+            || { echo "::error::jolt-api:${TAG} is not in ${SRC_ACR}: deploy it to dev first"; exit 1; }
+
+      - name: Copy the image to the prod registry (no rebuild)
+        # id-jolt-prod-github has AcrPull + Reader on the dev registry
+        # (promoteFromEnvironment in infra/main.prod.bicepparam) and AcrPush on prod.
+        run: |
+          src="${SRC_ACR}.azurecr.io/jolt-api:${TAG}"
+          dst="${ACR}.azurecr.io/jolt-api:${TAG}"
+          az acr login --name "$SRC_ACR"
+          az acr login --name "$ACR"
+          docker pull "$src"
+          docker tag "$src" "$dst"
+          docker push "$dst"
+          echo "IMAGE=${dst}" >> "$GITHUB_ENV"
+
+      - name: Roll out to the Container App
+        run: |
+          az containerapp update \
+            --resource-group "$RG" \
+            --name "$APP_NAME" \
+            --image "$IMAGE" \
+            --revision-suffix "${TAG:0:7}-${GITHUB_RUN_ATTEMPT}" \
+            --output none
+
+      - name: Same image for the maintenance job
+        run: |
+          if az containerapp job show -g "$RG" -n jolt-maintenance --output none 2>/dev/null; then
+            az containerapp job update -g "$RG" -n jolt-maintenance --image "$IMAGE" --output none
+          else
+            echo "::warning::No jolt-maintenance job in ${RG} (run scripts/deploy-infra.sh --env prod)."
+          fi
+
+      - name: Public URL
+        id: url
+        run: |
+          url="$PUBLIC_URL"
+          if [[ -z "$url" ]]; then
+            fqdn=$(az containerapp show -g "$RG" -n "$APP_NAME" \
+              --query properties.configuration.ingress.fqdn -o tsv)
+            url="https://${fqdn}"
+            echo "::warning::PROD_PUBLIC_URL is not set; smoke-testing ${url}"
+          fi
+          echo "url=${url}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Smoke test (public checks)
+        run: |
+          pip install -r requirements.txt
+          python scripts/smoke.py --public --expect-dev-auth-off \
+            --base-url "${{ steps.url.outputs.url }}" \
+            --expect-version "$TAG" \
+            --wait 300 \
+            ${APP_ORIGIN:+--origin "$APP_ORIGIN"}

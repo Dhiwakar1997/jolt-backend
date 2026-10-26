@@ -108,6 +108,16 @@ jobs:
             --query properties.configuration.ingress.fqdn -o tsv)
           echo "url=https://${fqdn}" >> "$GITHUB_OUTPUT"
 
+      - name: Same image for the maintenance job
+        # BE-10: the scheduled `jolt-maintenance` job runs the app's image.
+        run: |
+          if az containerapp job show -g "$RG" -n jolt-maintenance --output none 2>/dev/null; then
+            az containerapp job update -g "$RG" -n jolt-maintenance \
+              --image "${{ steps.image.outputs.ref }}" --output none
+          else
+            echo "No jolt-maintenance job yet (run scripts/deploy-infra.sh once since BE-10)."
+          fi
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"

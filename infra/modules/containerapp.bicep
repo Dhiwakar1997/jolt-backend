@@ -2,6 +2,11 @@
 // /health probes, scale 0..N, pulling from ACR with the app's Managed Identity
 // and reading TOKEN_HASH_PEPPER (and DEV_AUTH_SECRET when dev sign-in is on) as
 // Key Vault secret references.
+//
+// BE-10: the Application Insights connection string (a Container Apps secret),
+// an optional custom domain with a managed certificate (two steps, see
+// customDomainCertificateReady), and the `jolt-maintenance` scheduled job
+// (python -m jolt.maintenance) on the same image, identity and settings.
 
 param location string
 param tags object
@@ -52,8 +57,29 @@ param maxReplicas int = 1
 param cpu string = '0.5'
 param memory string = '1Gi'
 
+@description('Application Insights resource (same resource group) whose connection string the app and job export to. Empty: telemetry off.')
+param appInsightsName string = ''
+
+@description('Custom domain for the API, e.g. api.jolt.example.com. Needs DNS first: CNAME <domain> -> the app FQDN, TXT asuid.<domain> -> output customDomainVerificationId. Empty: the default *.azurecontainerapps.io host only.')
+param customDomainName string = ''
+
+@description('false: the domain is added to the app unbound, so the managed certificate can be issued (certificate.bicep). true (later deploys): the certificate exists and is bound with SNI. scripts/deploy-infra.sh detects it.')
+param customDomainCertificateReady bool = false
+
+@description('Create the scheduled maintenance job (abandoned uploads, data retention).')
+param maintenanceEnabled bool = true
+
+@description('Cron (UTC) for the maintenance job.')
+param maintenanceSchedule string = '17 3 * * *'
+
+param maintenanceJobName string = 'jolt-maintenance'
+
 resource workspace 'Microsoft.OperationalInsights/workspaces@2023-09-01' existing = {
   name: logAnalyticsWorkspaceName
+}
+
+resource appInsights 'Microsoft.Insights/components@2020-02-02' existing = if (!empty(appInsightsName)) {
+  name: empty(appInsightsName) ? 'none' : appInsightsName
 }
 
 resource managedEnvironment 'Microsoft.App/managedEnvironments@2024-03-01' = {
@@ -74,7 +100,22 @@ resource managedEnvironment 'Microsoft.App/managedEnvironments@2024-03-01' = {
 
 // The app's FQDN is known before the app exists: <name>.<environment domain>.
 var appFqdn = '${containerAppName}.${managedEnvironment.properties.defaultDomain}'
-var effectiveMcpServerUrl = empty(mcpServerUrl) ? 'https://${appFqdn}/mcp/sse' : mcpServerUrl
+var hasCustomDomain = !empty(customDomainName)
+var bindCustomDomain = hasCustomDomain && customDomainCertificateReady
+// Users are shown the custom domain once it serves TLS.
+var publicHost = bindCustomDomain ? customDomainName : appFqdn
+var effectiveMcpServerUrl = empty(mcpServerUrl) ? 'https://${publicHost}/mcp/sse' : mcpServerUrl
+var certificateName = hasCustomDomain ? take('mc-${replace(customDomainName, '.', '-')}', 60) : ''
+var customDomains = hasCustomDomain
+  ? [
+      {
+        name: customDomainName
+        bindingType: bindCustomDomain ? 'SniEnabled' : 'Disabled'
+        certificateId: bindCustomDomain ? '${managedEnvironment.id}/managedCertificates/${certificateName}' : null
+      }
+    ]
+  : []
+var telemetryOn = !empty(appInsightsName)
 
 var pepperSecret = {
   name: 'token-hash-pepper'
@@ -86,8 +127,23 @@ var devAuthSecret = {
   keyVaultUrl: '${keyVaultUri}secrets/${devAuthSecretName}'
   identity: appIdentityId
 }
+// Ingestion-only, but still kept out of plain environment values.
+var telemetrySecrets = telemetryOn
+  ? [
+      {
+        name: 'appinsights-connection-string'
+        value: appInsights!.properties.ConnectionString
+      }
+    ]
+  : []
+var telemetryEnv = telemetryOn
+  ? [
+      { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', secretRef: 'appinsights-connection-string' }
+    ]
+  : []
 
-var baseEnv = [
+// What the app and the maintenance job both need to reach the stores.
+var storeEnv = [
   { name: 'JOLT_ENV', value: environmentName }
   { name: 'STORAGE_MODE', value: 'azure' }
   { name: 'AUTH_MODE', value: 'managed_identity' }
@@ -98,6 +154,8 @@ var baseEnv = [
   { name: 'BLOB_ACCOUNT_URL', value: blobEndpoint }
   { name: 'BLOB_CONTAINER', value: blobContainerName }
   { name: 'KEYVAULT_URL', value: keyVaultUri }
+]
+var baseEnv = [
   { name: 'CORS_ORIGINS', value: corsOrigins }
   { name: 'CORS_ORIGIN_REGEX', value: corsOriginRegex }
   { name: 'TOKEN_HASH_PEPPER', secretRef: 'token-hash-pepper' }
@@ -134,6 +192,7 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
         targetPort: 8000
         transport: 'auto'
         allowInsecure: false
+        customDomains: customDomains
         traffic: [
           {
             latestRevision: true
@@ -147,7 +206,7 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
           identity: appIdentityId
         }
       ]
-      secrets: devAuthEnabled ? [pepperSecret, devAuthSecret] : [pepperSecret]
+      secrets: concat(devAuthEnabled ? [pepperSecret, devAuthSecret] : [pepperSecret], telemetrySecrets)
     }
     template: {
       containers: [
@@ -158,7 +217,7 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
             cpu: json(cpu)
             memory: memory
           }
-          env: concat(baseEnv, devAuthEnv)
+          env: concat(storeEnv, baseEnv, devAuthEnv, telemetryEnv)
           probes: [
             {
               type: 'Startup'
@@ -203,7 +262,65 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
   }
 }
 
+// Daily sweep: uploads never confirmed after 24 h, sources past each user's
+// data retention (jolt/services/maintenance.py). Same image, identity and store
+// settings as the app; no ingress, no token pepper.
+resource maintenanceJob 'Microsoft.App/jobs@2024-03-01' = if (maintenanceEnabled) {
+  name: maintenanceJobName
+  location: location
+  tags: tags
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${appIdentityId}': {}
+    }
+  }
+  properties: {
+    environmentId: managedEnvironment.id
+    configuration: {
+      triggerType: 'Schedule'
+      replicaTimeout: 1800
+      replicaRetryLimit: 1
+      scheduleTriggerConfig: {
+        cronExpression: maintenanceSchedule
+        parallelism: 1
+        replicaCompletionCount: 1
+      }
+      registries: [
+        {
+          server: registryLoginServer
+          identity: appIdentityId
+        }
+      ]
+      secrets: telemetrySecrets
+    }
+    template: {
+      containers: [
+        {
+          name: 'jolt-maintenance'
+          image: containerImage
+          command: [
+            'python'
+            '-m'
+            'jolt.maintenance'
+          ]
+          resources: {
+            cpu: json('0.25')
+            memory: '0.5Gi'
+          }
+          env: concat(storeEnv, telemetryEnv)
+        }
+      ]
+    }
+  }
+}
+
 output name string = app.name
+output id string = app.id
 output fqdn string = app.properties.configuration.ingress.fqdn
 output mcpServerUrl string = effectiveMcpServerUrl
+output publicUrl string = 'https://${publicHost}'
 output environmentName string = managedEnvironment.name
+output certificateName string = certificateName
+output customDomainVerificationId string = managedEnvironment.properties.customDomainConfiguration.customDomainVerificationId
+output maintenanceJobName string = maintenanceEnabled ? maintenanceJob.name : ''

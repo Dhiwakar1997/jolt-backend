@@ -17,6 +17,14 @@ param developerPrincipalId string = ''
 @description('Keep account keys enabled (local dev with COSMOS_KEY). Off by default: Managed Identity only.')
 param allowKeyAuth bool = false
 
+@description('Periodic (every 24 h, kept 48 h; restore by support request) or continuous point-in-time restore (self-service, to any second in the last 7 or 30 days). Periodic -> Continuous is one-way.')
+@allowed([
+  'Periodic'
+  'Continuous7Days'
+  'Continuous30Days'
+])
+param backupPolicy string = 'Periodic'
+
 var containerDefs = loadJsonContent('../cosmos-containers.json').containers
 
 // Cosmos DB Built-in Data Contributor (data-plane role, not an ARM role).
@@ -49,14 +57,21 @@ resource account 'Microsoft.DocumentDB/databaseAccounts@2024-05-15' = {
     disableLocalAuth: !allowKeyAuth
     minimalTlsVersion: 'Tls12'
     publicNetworkAccess: 'Enabled'
-    backupPolicy: {
-      type: 'Periodic'
-      periodicModeProperties: {
-        backupIntervalInMinutes: 1440
-        backupRetentionIntervalInHours: 48
-        backupStorageRedundancy: 'Local'
-      }
-    }
+    backupPolicy: backupPolicy == 'Periodic'
+      ? {
+          type: 'Periodic'
+          periodicModeProperties: {
+            backupIntervalInMinutes: 1440
+            backupRetentionIntervalInHours: 48
+            backupStorageRedundancy: 'Local'
+          }
+        }
+      : {
+          type: 'Continuous'
+          continuousModeProperties: {
+            tier: backupPolicy
+          }
+        }
   }
 }
 
@@ -132,5 +147,6 @@ resource developerData 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments
 
 output endpoint string = account.properties.documentEndpoint
 output name string = account.name
+output id string = account.id
 output databaseName string = database.name
 output containerNames array = [for (c, i) in containerDefs: containers[i].name]

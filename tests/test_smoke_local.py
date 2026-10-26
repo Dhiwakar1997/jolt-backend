@@ -75,3 +75,48 @@ def test_smoke_cli_reports_failure_for_an_unreachable_server(capsys):
     code = smoke.main(["--base-url", f"http://127.0.0.1:{_free_port()}", "--wait", "0"])
     assert code == 1
     assert "SMOKE FAILED" in capsys.readouterr().out
+
+
+@pytest.fixture
+def prod_like_server():
+    """A server configured like prod: no dev sign-in, Google configured."""
+    port = _free_port()
+    base_url = f"http://127.0.0.1:{port}"
+    settings = Settings(
+        _env_file=None,
+        storage_mode="memory",
+        app_version="prod-smoke",
+        google_oauth_client_id="prod-client.apps.googleusercontent.com",
+        cors_origins="https://jolt.example.com",
+    )
+    server = uvicorn.Server(
+        uvicorn.Config(create_app(settings=settings), port=port, log_level="warning")
+    )
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    deadline = time.monotonic() + 15
+    while not server.started:
+        assert time.monotonic() < deadline, "uvicorn did not start"
+        time.sleep(0.05)
+    yield base_url
+    server.should_exit = True
+    server.force_exit = True
+    thread.join(timeout=10)
+
+
+async def test_public_smoke_passes_against_a_prod_like_server(prod_like_server):
+    smoke = _load_smoke()
+    out = await smoke.run_public(
+        prod_like_server,
+        wait_seconds=10,
+        expect_version="prod-smoke",
+        origin="https://jolt.example.com",
+        expect_dev_auth_off=True,
+    )
+    assert out["steps_passed"] == 8 and out["mode"] == "public"
+
+
+async def test_public_smoke_fails_when_dev_auth_is_on(live_server):
+    smoke = _load_smoke()
+    with pytest.raises(smoke.SmokeFailure, match="(dev sign-in is reachable|not configured)"):
+        await smoke.run_public(live_server, wait_seconds=10, expect_dev_auth_off=True)

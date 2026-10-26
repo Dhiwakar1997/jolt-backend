@@ -65,3 +65,21 @@ param developerPrincipalId = ''
 // GitHub Actions deploy identity (OIDC federated credential, no secrets).
 param githubRepository = 'Dhiwakar1997/jolt-backend'
 param githubEnvironment = 'dev'
+
+// ---- BE-10 ------------------------------------------------------------------
+// Dev keeps the cheap defaults: periodic Cosmos backup, Blob soft delete 7 days
+// without versioning, 30-day logs capped at 1 GB/day, the default host only.
+param cosmosBackupPolicy = 'Periodic'
+param blobSoftDeleteDays = 7
+param blobVersioning = false
+param logRetentionDays = 30
+param logDailyQuotaGb = 1
+
+// Daily maintenance job (abandoned uploads, data retention), 03:17 UTC.
+param maintenanceEnabled = true
+param maintenanceSchedule = '17 3 * * *'
+
+// OWNER (optional): e-mails for dev alerts and a dev budget. Empty = no action
+// group, alerts or budget in dev (prod has them).
+param alertEmails = []
+param budgetAmount = 0

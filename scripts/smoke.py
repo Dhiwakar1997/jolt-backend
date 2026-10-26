@@ -56,6 +56,18 @@ PUBLIC_BASE_URL is set):
         uvicorn jolt.main:app --port 8000
     python scripts/smoke.py --base-url http://localhost:8000
 
+**Public mode** (`--public`, BE-10) is for production, where dev sign-in is off
+and no throwaway account can be made: it checks only what needs no account.
+`/health` (and `--expect-version`), `/v1/me` and `/mcp/sse` refuse a missing or
+bogus token (401), Google sign-in is configured (a garbage ID token gets 401, not
+503), an oversized body gets 413, and with `--origin` the CORS preflight allows
+that origin. `--expect-dev-auth-off` also checks `POST /v1/auth/dev` is 404.
+Over HTTPS, httpx verifies the certificate, so a custom domain whose managed
+certificate is not bound fails here.
+
+    python scripts/smoke.py --public --expect-dev-auth-off \
+        --base-url https://api.jolt.example.com --origin https://jolt.example.com
+
 Needs only `httpx` and `mcp` (both in requirements.txt).
 """
 
@@ -681,6 +693,76 @@ async def run(
     return out
 
 
+async def run_public(
+    base_url: str,
+    *,
+    wait_seconds: float = 120,
+    expect_version: str | None = None,
+    timeout: float = 30,
+    origin: str | None = None,
+    expect_dev_auth_off: bool = False,
+    body_limit: int = 1024 * 1024,
+) -> dict:
+    """Production smoke: checks that need no account (see the module docstring)."""
+    base_url = base_url.rstrip("/")
+    rep = Reporter()
+    out: dict[str, Any] = {"base_url": base_url, "mode": "public"}
+
+    async with httpx.AsyncClient(base_url=base_url, timeout=timeout) as http:
+        with rep.step("GET /health"):
+            health = await wait_for_health(http, wait_seconds, expect_version)
+            out["version"] = health.get("version")
+
+        with rep.step("GET /v1/me without a token -> 401"):
+            resp = await http.get("/v1/me")
+            check(resp.status_code == 401, f"GET /v1/me -> {resp.status_code}")
+            check("bearer" in resp.headers.get("www-authenticate", "").lower(), "no challenge")
+
+        with rep.step("GET /v1/me with a bogus token -> 401"):
+            resp = await http.get("/v1/me", headers={"Authorization": "Bearer jolt_app_bogus"})
+            check(resp.status_code == 401, f"GET /v1/me -> {resp.status_code}")
+
+        with rep.step("GET /mcp/sse without / with a bogus token -> 401"):
+            async with http.stream("GET", "/mcp/sse") as resp:
+                check(resp.status_code == 401, f"no token -> {resp.status_code}")
+            status = await _sse_status(base_url, "jolt_live_bogus", timeout)
+            check(status == 401, f"bogus token -> {status}")
+
+        with rep.step("POST /v1/auth/google with a garbage ID token -> 401 (configured)"):
+            resp = await http.post("/v1/auth/google", json={"id_token": "not-a-jwt"})
+            check(resp.status_code != 503, "Google sign-in is not configured (503)")
+            check(resp.status_code == 401, f"-> {resp.status_code}: {resp.text[:200]}")
+
+        with rep.step("Oversized body -> 413"):
+            resp = await http.post(
+                "/v1/auth/google",
+                content=b"x" * (body_limit + 1),
+                headers={"Content-Type": "application/json"},
+            )
+            check(resp.status_code == 413, f"-> {resp.status_code}")
+
+        if expect_dev_auth_off:
+            with rep.step("POST /v1/auth/dev -> 404 (dev sign-in off)"):
+                resp = await http.post("/v1/auth/dev", json={"email": "smoke@smoke.jolt.test"})
+                check(resp.status_code == 404, f"dev sign-in is reachable: {resp.status_code}")
+
+        if origin:
+            with rep.step(f"CORS preflight from {origin}"):
+                resp = await http.options(
+                    "/v1/me",
+                    headers={
+                        "Origin": origin,
+                        "Access-Control-Request-Method": "GET",
+                        "Access-Control-Request-Headers": "authorization",
+                    },
+                )
+                allowed = resp.headers.get("access-control-allow-origin")
+                check(resp.status_code == 200 and allowed in (origin, "*"), f"-> {allowed}")
+
+    out["steps_passed"] = rep.passed
+    return out
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument(
@@ -702,19 +784,39 @@ def main(argv: list[str] | None = None) -> int:
         help="the server's DEV_AUTH_SECRET (default: $JOLT_DEV_AUTH_SECRET); "
         "not needed for a memory-mode server without one",
     )
+    parser.add_argument(
+        "--public",
+        action="store_true",
+        help="production checks that need no account (no dev sign-in)",
+    )
+    parser.add_argument("--origin", help="--public: browser origin the CORS preflight must allow")
+    parser.add_argument(
+        "--expect-dev-auth-off",
+        action="store_true",
+        help="--public: POST /v1/auth/dev must answer 404",
+    )
     args = parser.parse_args(argv)
 
     print(f"Jolt smoke test against {args.base_url}", flush=True)
     try:
-        out = asyncio.run(
-            run(
+        if args.public:
+            coro = run_public(
+                args.base_url,
+                wait_seconds=args.wait,
+                expect_version=args.expect_version,
+                timeout=args.timeout,
+                origin=args.origin,
+                expect_dev_auth_off=args.expect_dev_auth_off,
+            )
+        else:
+            coro = run(
                 args.base_url,
                 wait_seconds=args.wait,
                 expect_version=args.expect_version,
                 timeout=args.timeout,
                 dev_auth_secret=args.dev_auth_secret,
             )
-        )
+        out = asyncio.run(coro)
     except SmokeFailure as exc:
         print(f"SMOKE FAILED: {exc}", flush=True)
         return 1

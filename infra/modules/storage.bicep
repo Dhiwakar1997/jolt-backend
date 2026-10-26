@@ -19,6 +19,14 @@ param developerPrincipalId string = ''
 @description('Keep shared-key access (account keys, account-key SAS). Off by default: user-delegation SAS only.')
 param allowKeyAuth bool = false
 
+@description('Days deleted blobs and containers stay recoverable (soft delete).')
+@minValue(1)
+@maxValue(365)
+param softDeleteDays int = 7
+
+@description('Blob versioning: an overwritten or deleted blob keeps its previous version, removed by a lifecycle rule after softDeleteDays.')
+param versioning bool = false
+
 // Storage Blob Data Contributor also carries
 // `blobServices/generateUserDelegationKey/action`, which the user-delegation SAS
 // in jolt/data/blob.py needs, so Storage Blob Delegator is not assigned on top.
@@ -71,12 +79,13 @@ resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01'
     }
     deleteRetentionPolicy: {
       enabled: true
-      days: 7
+      days: softDeleteDays
     }
     containerDeleteRetentionPolicy: {
       enabled: true
-      days: 7
+      days: softDeleteDays
     }
+    isVersioningEnabled: versioning
   }
 }
 
@@ -91,35 +100,57 @@ resource sources 'Microsoft.Storage/storageAccounts/blobServices/containers@2023
 // Data exports (POST /v1/export, BE-08) are written under `exports/` in the
 // container and handed out as a short-lived signed URL. The next export and
 // account delete remove them; this rule removes any left after a day.
+var expireExports = {
+  name: 'expire-exports'
+  enabled: true
+  type: 'Lifecycle'
+  definition: {
+    filters: {
+      blobTypes: [
+        'blockBlob'
+      ]
+      prefixMatch: [
+        '${containerName}/exports/'
+      ]
+    }
+    actions: {
+      baseBlob: {
+        delete: {
+          daysAfterModificationGreaterThan: 1
+        }
+      }
+    }
+  }
+}
+
+// With versioning, previous versions (overwritten or deleted blobs) go after
+// the same window soft delete gives, so deleted data does not linger.
+var expireVersions = {
+  name: 'expire-previous-versions'
+  enabled: true
+  type: 'Lifecycle'
+  definition: {
+    filters: {
+      blobTypes: [
+        'blockBlob'
+      ]
+    }
+    actions: {
+      version: {
+        delete: {
+          daysAfterCreationGreaterThan: softDeleteDays
+        }
+      }
+    }
+  }
+}
+
 resource lifecycle 'Microsoft.Storage/storageAccounts/managementPolicies@2023-05-01' = {
   parent: account
   name: 'default'
   properties: {
     policy: {
-      rules: [
-        {
-          name: 'expire-exports'
-          enabled: true
-          type: 'Lifecycle'
-          definition: {
-            filters: {
-              blobTypes: [
-                'blockBlob'
-              ]
-              prefixMatch: [
-                '${containerName}/exports/'
-              ]
-            }
-            actions: {
-              baseBlob: {
-                delete: {
-                  daysAfterModificationGreaterThan: 1
-                }
-              }
-            }
-          }
-        }
-      ]
+      rules: versioning ? [expireExports, expireVersions] : [expireExports]
     }
   }
 }
@@ -151,5 +182,6 @@ resource developerBlobData 'Microsoft.Authorization/roleAssignments@2022-04-01' 
 }
 
 output name string = account.name
+output id string = account.id
 output blobEndpoint string = account.properties.primaryEndpoints.blob
 output containerName string = sources.name

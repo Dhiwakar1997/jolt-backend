@@ -56,3 +56,56 @@ def test_env_example_documents_every_setting():
     documented = set(re.findall(r"^#?\s*([A-Z0-9_]+)=", text, flags=re.M))
     missing = {f.upper() for f in Settings.model_fields} - documented
     assert not missing, f".env.example is missing {sorted(missing)}"
+
+
+# --------------------------------------------------------------------------- #
+# BE-10: prod parameters, workbook, maintenance job
+# --------------------------------------------------------------------------- #
+def _param(text: str, name: str) -> str:
+    match = re.search(rf"^param {name} = (.+?)$", text, flags=re.M)
+    assert match, f"param {name} missing"
+    return match.group(1).strip()
+
+
+def _array(text: str, name: str) -> list[str]:
+    match = re.search(rf"^param {name} = \[(.*?)\]", text, flags=re.M | re.S)
+    assert match, f"param {name} missing"
+    return re.findall(r"'([^']*)'", match.group(1))
+
+
+def test_prod_parameters_are_strict():
+    prod = (INFRA / "main.prod.bicepparam").read_text()
+    assert _param(prod, "environmentName") == "'prod'"
+    assert _param(prod, "resourceGroupName") == "'jolt-prod'"
+    assert _param(prod, "devAuthEnabled") == "false"  # Settings refuses it in prod too
+    origins = _array(prod, "appOrigins") + _array(prod, "netlifyOrigins")
+    assert origins and all(o.startswith("https://") for o in origins)
+    assert not any("localhost" in o for o in origins)
+    assert _param(prod, "corsOriginRegex") == "''"
+    assert int(_param(prod, "minReplicas")) >= 1  # no cold starts
+    assert _param(prod, "cosmosBackupPolicy").startswith("'Continuous")
+    assert _param(prod, "blobVersioning") == "true"
+    assert re.search(r"^var customDomain = '[a-z0-9.-]+\.[a-z]+'$", prod, flags=re.M)
+    assert "customDomain" in _param(prod, "customDomainName")
+    assert _param(prod, "githubEnvironment") == "'prod'"
+    assert _array(prod, "alertEmails")
+    assert int(_param(prod, "budgetAmount")) > 0
+
+
+def test_workbook_charts_every_custom_metric():
+    workbook = json.loads((INFRA / "workbook.json").read_text())
+    queries = "\n".join(
+        item["content"].get("query", "") for item in workbook["items"] if item["type"] == 3
+    )
+    source = (ROOT / "jolt" / "telemetry.py").read_text()
+    metrics = set(re.findall(r'create_(?:counter|histogram)\(\s*"(jolt\.[a-z_.]+)"', source))
+    assert len(metrics) >= 8
+    missing = {m for m in metrics if f'"{m}"' not in queries}
+    assert not missing, f"workbook does not chart {sorted(missing)}"
+
+
+def test_maintenance_job_runs_the_maintenance_module():
+    bicep = (INFRA / "modules" / "containerapp.bicep").read_text()
+    assert "Microsoft.App/jobs@" in bicep
+    assert "'jolt.maintenance'" in bicep
+    assert (ROOT / "jolt" / "maintenance.py").exists()
