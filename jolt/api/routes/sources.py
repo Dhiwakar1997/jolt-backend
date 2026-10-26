@@ -50,6 +50,7 @@ class SourceResponse(_FromAttrs):
     reread_requested: Optional[RereadState] = Field(
         description="Read again requested and not yet done"
     )
+    read_count: int = Field(description="Reads (extractions) stored for this source")
 
 
 class SourcePageResponse(_FromAttrs):
@@ -94,7 +95,8 @@ class RereadRequest(BaseModel):
     preferred_model: Optional[str] = Field(
         default=None,
         max_length=64,
-        description="e.g. 'claude' or 'codex'; null lets the next client decide",
+        description="'claude' or 'codex' (free text, kept as given); null lets the next "
+        "client decide",
     )
 
 

@@ -105,7 +105,8 @@ supersede reconciles concepts (GAPS).
 `Source = {id, filename, content_type (page 0's), processing_status, active_extraction_id,
 created_at, title, track_id, track_name, kind: photos|pdf|file, page_count,
 uploaded_at (confirm time), concepts_found, questions_written (of the active
-read), low_confidence, reread_requested: {requested_at, preferred_model} | null}`.
+read), low_confidence, reread_requested: {requested_at, preferred_model} | null,
+read_count (reads stored, for the "Reads" column)}`.
 
 | Method | Path | Auth | Request | Response | Errors |
 |---|---|---|---|---|---|

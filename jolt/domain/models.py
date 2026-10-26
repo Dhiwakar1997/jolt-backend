@@ -234,6 +234,8 @@ class Source(DocBase):
     # Claims by a sync, and when the latest one was taken (failure detection and
     # read-again bookkeeping).
     claim_count: int = 0
+    # Reads stored for this source (the Sources table's "Reads" column).
+    read_count: int = 0
     claimed_at: Optional[datetime] = None
     failed_reason: Optional[str] = None
     # Read again (BE-05 §4): set by the app, cleared by the extraction that

@@ -234,6 +234,7 @@ async def test_upload_sync_detail_and_read_again(api, runtime, mcp_user):
     assert row["kind"] == "photos" and row["page_count"] == 2
     assert (row["concepts_found"], row["questions_written"], row["low_confidence"]) == (0, 0, False)
     assert row["reread_requested"] is None
+    assert row["read_count"] == 0
     assert (await api.get("/v1/storage")).json() == {
         "bytes_used": len(PAGES[0]) + len(PAGES[1]),
         "source_count": 1,
@@ -284,6 +285,7 @@ async def test_upload_sync_detail_and_read_again(api, runtime, mcp_user):
     assert row["active_extraction_id"] == first["extraction_id"]
     assert (row["concepts_found"], row["questions_written"]) == (2, 2)
     assert row["low_confidence"] is True  # 0.4 < 0.6: "Unsure about the handwriting"
+    assert row["read_count"] == 1
 
     detail = (await api.get(f"/v1/sources/{sid}")).json()
     assert [(p["index"], p["content_type"], p["size"]) for p in detail["pages"]] == [
@@ -335,6 +337,8 @@ async def test_upload_sync_detail_and_read_again(api, runtime, mcp_user):
     assert detail["processing_status"] == "processed"
     assert detail["reread_requested"] is None
     assert detail["low_confidence"] is False
+    assert detail["read_count"] == 2
+    assert (await api.get("/v1/sources")).json()[0]["read_count"] == 2
     assert detail["active_read"]["id"] == second["extraction_id"]
     assert detail["active_read"]["markdown"] == "# Hashing, better read"
     assert [

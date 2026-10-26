@@ -79,6 +79,7 @@ class SourceLeases:
         source.claim_count = 0
         source.failed_reason = None
         source.active_extraction_id = active_extraction_id
+        source.read_count += 1
         return await self._repo.replace(source, etag=source.etag)
 
 

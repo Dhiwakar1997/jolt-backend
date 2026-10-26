@@ -49,6 +49,7 @@ class SourceSummary:
     questions_written: int
     low_confidence: bool
     reread_requested: Optional[RereadState]
+    read_count: int
 
 
 @dataclass
@@ -145,6 +146,8 @@ class SourceService:
             questions_written=active.questions_written if active else 0,
             low_confidence=bool(active) and active.confidence < self._threshold,
             reread_requested=reread,
+            # Counted on the source; a document from before BE-05 with a read has 0.
+            read_count=max(source.read_count, 1 if source.active_extraction_id else 0),
         )
 
     async def list_sources(
@@ -208,6 +211,7 @@ class SourceService:
             for p in source.page_list()
         ]
         summary = self._summary(source, active_ext, await self._track_names(user_id))
+        summary.read_count = len(history)  # exact here: the history is already loaded
         return SourceDetail(
             **summary.__dict__,
             pages=pages,

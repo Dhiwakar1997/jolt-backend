@@ -2501,7 +2501,7 @@
               }
             ],
             "title": "Preferred Model",
-            "description": "e.g. 'claude' or 'codex'; null lets the next client decide"
+            "description": "'claude' or 'codex' (free text, kept as given); null lets the next client decide"
           }
         },
         "type": "object",
@@ -2732,6 +2732,11 @@
             ],
             "description": "Read again requested and not yet done"
           },
+          "read_count": {
+            "type": "integer",
+            "title": "Read Count",
+            "description": "Reads (extractions) stored for this source"
+          },
           "pages": {
             "items": {
               "$ref": "#/components/schemas/SourcePageResponse"
@@ -2776,6 +2781,7 @@
           "questions_written",
           "low_confidence",
           "reread_requested",
+          "read_count",
           "pages",
           "active_read",
           "reads"
@@ -2923,6 +2929,11 @@
               }
             ],
             "description": "Read again requested and not yet done"
+          },
+          "read_count": {
+            "type": "integer",
+            "title": "Read Count",
+            "description": "Reads (extractions) stored for this source"
           }
         },
         "type": "object",
@@ -2942,7 +2953,8 @@
           "concepts_found",
           "questions_written",
           "low_confidence",
-          "reread_requested"
+          "reread_requested",
+          "read_count"
         ],
         "title": "SourceResponse"
       },
