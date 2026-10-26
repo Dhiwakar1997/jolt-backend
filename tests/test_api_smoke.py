@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from jolt.credentials import providers
 from jolt.credentials.providers import ValidationResult
+from tests.conftest import dev_sign_in
 
 
 def test_health(client):
@@ -17,13 +18,13 @@ def test_health(client):
 
 def test_v1_requires_a_valid_bearer_token(client, account):
     assert client.get("/v1/tracks").status_code == 401
-    bad = client.get("/v1/tracks", headers={"Authorization": "Bearer jolt_live_nope"})
+    bad = client.get("/v1/tracks", headers={"Authorization": "Bearer jolt_app_nope"})
     assert bad.status_code == 401
     assert bad.headers["www-authenticate"] == "Bearer"
 
 
-def test_account_token_is_opaque_and_prefixed(account):
-    assert account["token"].startswith("jolt_live_")
+def test_app_token_is_opaque_and_prefixed(account):
+    assert account["token"].startswith("jolt_app_")
     assert account["user_id"] not in account["token"]
 
 
@@ -52,7 +53,7 @@ def test_create_and_list_tracks_with_agenda(client, auth):
 
 def test_tracks_are_scoped_to_their_owner(client, auth):
     track = client.post("/v1/tracks", json={"name": "Mine"}, headers=auth).json()
-    other = client.post("/v1/accounts", json={}).json()
+    other = dev_sign_in(client)
     other_auth = {"Authorization": f"Bearer {other['token']}"}
     assert client.get("/v1/tracks", headers=other_auth).json() == []
     resp = client.post(f"/v1/tracks/{track['id']}/agenda/lock", headers=other_auth)

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from jolt.auth.google import GoogleIdTokenVerifier
 from jolt.config import Settings, get_settings
 from jolt.credentials.vault import VaultClient
 from jolt.data.blob import BlobGateway, init_blob
@@ -29,6 +30,7 @@ from jolt.data.repositories.reviews import (
     SessionsRepository,
 )
 from jolt.data.repositories.sources import ExtractionsRepository, SourcesRepository
+from jolt.data.repositories.tokens import TokensRepository
 from jolt.data.repositories.tracks import TracksRepository
 from jolt.data.repositories.users import UsersRepository
 
@@ -46,6 +48,7 @@ class Repositories:
     answer_feedback: AnswerFeedbackRepository
     sessions: SessionsRepository
     api_keys: ApiKeyRefRepository
+    tokens: TokensRepository
 
 
 class Runtime:
@@ -72,7 +75,11 @@ class Runtime:
             answer_feedback=AnswerFeedbackRepository(cosmos),
             sessions=SessionsRepository(cosmos),
             api_keys=ApiKeyRefRepository(cosmos),
+            tokens=TokensRepository(cosmos),
         )
+        # Google ID token verifier for sign-in (BE-03). Fetches Google's keys
+        # lazily, so building it does no I/O; tests swap in one with their own key.
+        self.google = GoogleIdTokenVerifier(settings.google_client_ids)
 
     @classmethod
     async def create(cls, settings: Settings | None = None) -> "Runtime":

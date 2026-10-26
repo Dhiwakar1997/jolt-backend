@@ -5,18 +5,18 @@
     "version": "0.2.0"
   },
   "paths": {
-    "/v1/accounts": {
+    "/v1/auth/google": {
       "post": {
         "tags": [
-          "accounts"
+          "auth"
         ],
-        "summary": "Create Account",
-        "operationId": "create_account",
+        "summary": "Sign In Google",
+        "operationId": "sign_in_google",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/CreateAccountRequest"
+                "$ref": "#/components/schemas/GoogleSignInRequest"
               }
             }
           },
@@ -28,7 +28,317 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CreateAccountResponse"
+                  "$ref": "#/components/schemas/SignInResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The Google ID token was rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Google sign-in is not configured, or Google's keys are unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/auth/sign-out": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Sign Out",
+        "operationId": "sign_out",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/v1/auth/dev": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Sign In Dev",
+        "description": "Dev only: sign in by email without Google (mounted when DEV_AUTH_ENABLED).\n\nThe same email always gets the same user. When the server has a\nDEV_AUTH_SECRET (required with real storage), send it as\n`X-Jolt-Dev-Auth-Secret`.",
+        "operationId": "sign_in_dev",
+        "parameters": [
+          {
+            "name": "x-jolt-dev-auth-secret",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Jolt-Dev-Auth-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DevSignInRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignInResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing or wrong dev auth secret",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/me": {
+      "get": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Get Me",
+        "operationId": "get_me",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/v1/mcp-tokens": {
+      "get": {
+        "tags": [
+          "mcp-tokens"
+        ],
+        "summary": "List Mcp Tokens",
+        "description": "The caller's MCP tokens, newest first. Never includes the token itself.",
+        "operationId": "list_mcp_tokens",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/McpTokenResponse"
+                  },
+                  "type": "array",
+                  "title": "Response List Mcp Tokens"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "mcp-tokens"
+        ],
+        "summary": "Create Mcp Token",
+        "operationId": "create_mcp_token",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateMcpTokenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedMcpTokenResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/v1/mcp-tokens/{token_id}": {
+      "delete": {
+        "tags": [
+          "mcp-tokens"
+        ],
+        "summary": "Revoke Mcp Token",
+        "operationId": "revoke_mcp_token",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "token_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Token Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, or not owned by the caller",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -1355,40 +1665,21 @@
         ],
         "title": "CoverageResponse"
       },
-      "CreateAccountRequest": {
+      "CreateMcpTokenRequest": {
         "properties": {
-          "display_name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Display Name"
-          }
-        },
-        "type": "object",
-        "title": "CreateAccountRequest"
-      },
-      "CreateAccountResponse": {
-        "properties": {
-          "user_id": {
+          "label": {
             "type": "string",
-            "title": "User Id"
-          },
-          "token": {
-            "type": "string",
-            "title": "Token"
+            "maxLength": 60,
+            "minLength": 1,
+            "title": "Label",
+            "description": "Which client it is for, e.g. \"Claude Desktop\""
           }
         },
         "type": "object",
         "required": [
-          "user_id",
-          "token"
+          "label"
         ],
-        "title": "CreateAccountResponse"
+        "title": "CreateMcpTokenRequest"
       },
       "CreateTrackRequest": {
         "properties": {
@@ -1410,6 +1701,81 @@
           "name"
         ],
         "title": "CreateTrackRequest"
+      },
+      "CreatedMcpTokenResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "last4": {
+            "type": "string",
+            "title": "Last4"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "last_used_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Used At"
+          },
+          "token": {
+            "type": "string",
+            "title": "Token",
+            "description": "The plaintext token. Shown only in this response."
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "label",
+          "last4",
+          "created_at",
+          "last_used_at",
+          "token"
+        ],
+        "title": "CreatedMcpTokenResponse"
+      },
+      "DevSignInRequest": {
+        "properties": {
+          "email": {
+            "type": "string",
+            "maxLength": 254,
+            "pattern": "^[^@\\s]+@[^@\\s]+$",
+            "title": "Email"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "email"
+        ],
+        "title": "DevSignInRequest"
       },
       "DueItemResponse": {
         "properties": {
@@ -1514,6 +1880,21 @@
         ],
         "title": "ExtractionResponse"
       },
+      "GoogleSignInRequest": {
+        "properties": {
+          "id_token": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Id Token",
+            "description": "Google ID token (a JWT) from Google sign-in"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id_token"
+        ],
+        "title": "GoogleSignInRequest"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -1526,6 +1907,108 @@
         },
         "type": "object",
         "title": "HTTPValidationError"
+      },
+      "McpTokenResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "last4": {
+            "type": "string",
+            "title": "Last4"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "last_used_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Used At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "label",
+          "last4",
+          "created_at",
+          "last_used_at"
+        ],
+        "title": "McpTokenResponse"
+      },
+      "MeResponse": {
+        "properties": {
+          "user": {
+            "$ref": "#/components/schemas/UserResponse"
+          },
+          "onboarding": {
+            "$ref": "#/components/schemas/OnboardingResponse"
+          },
+          "mcp_server_url": {
+            "type": "string",
+            "title": "Mcp Server Url",
+            "description": "The address to paste into Claude / Codex"
+          },
+          "has_api_key": {
+            "type": "boolean",
+            "title": "Has Api Key",
+            "description": "True when the user stored a provider API key"
+          }
+        },
+        "type": "object",
+        "required": [
+          "user",
+          "onboarding",
+          "mcp_server_url",
+          "has_api_key"
+        ],
+        "title": "MeResponse"
+      },
+      "OnboardingResponse": {
+        "properties": {
+          "has_track": {
+            "type": "boolean",
+            "title": "Has Track"
+          },
+          "has_mcp_token": {
+            "type": "boolean",
+            "title": "Has Mcp Token"
+          },
+          "first_sync_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Sync At",
+            "description": "When the first nightly sync succeeded; null until then (set by BE-04)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "has_track",
+          "has_mcp_token",
+          "first_sync_at"
+        ],
+        "title": "OnboardingResponse"
       },
       "RetentionRequest": {
         "properties": {
@@ -1563,6 +2046,24 @@
           "retention_days"
         ],
         "title": "RetentionResponse"
+      },
+      "SignInResponse": {
+        "properties": {
+          "app_token": {
+            "type": "string",
+            "title": "App Token",
+            "description": "Shown once. Send as `Authorization: Bearer` on /v1."
+          },
+          "user": {
+            "$ref": "#/components/schemas/UserResponse"
+          }
+        },
+        "type": "object",
+        "required": [
+          "app_token",
+          "user"
+        ],
+        "title": "SignInResponse"
       },
       "SourceResponse": {
         "properties": {
@@ -1854,6 +2355,47 @@
         ],
         "title": "UploadResponse"
       },
+      "UserResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "email": {
+            "type": "string",
+            "title": "Email"
+          },
+          "display_name": {
+            "type": "string",
+            "title": "Display Name"
+          },
+          "picture_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Picture Url"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "email",
+          "display_name",
+          "picture_url",
+          "created_at"
+        ],
+        "title": "UserResponse"
+      },
       "ValidationError": {
         "properties": {
           "loc": {
@@ -1891,7 +2433,7 @@
     "securitySchemes": {
       "HTTPBearer": {
         "type": "http",
-        "description": "App token: `Bearer <token>`",
+        "description": "App token (`jolt_app_…`) from sign-in: `Bearer <token>`",
         "scheme": "bearer"
       }
     }

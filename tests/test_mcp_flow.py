@@ -32,7 +32,7 @@ async def api(settings, runtime, mcp_user):
     """Async REST client for the same user/runtime the MCP tools see."""
     app = create_app(settings=settings, runtime=runtime)
     transport = httpx.ASGITransport(app=app)
-    headers = {"Authorization": f"Bearer {mcp_user.token}"}
+    headers = {"Authorization": f"Bearer {mcp_user.app_token}"}
     async with httpx.AsyncClient(transport=transport, base_url="http://t", headers=headers) as c:
         yield c
 

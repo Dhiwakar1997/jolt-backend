@@ -12,7 +12,7 @@ Fidelity goals, in order:
 1. Same partition discipline as Cosmos: every document lives in exactly one
    partition (read from the container's partition-key path), point reads and
    deletes need the partition value, and a query without one fans out over all
-   partitions (only `users.find_by_token_hash_candidates` does that).
+   partitions (only `tokens.find_by_lookup`, the pre-auth path, does that).
 2. Same optimistic concurrency: every write mints a new `_etag`; a replace with
    `match_condition=MatchConditions.IfNotModified` and a stale etag raises
    `CosmosAccessConditionFailedError`. A match condition that is not a

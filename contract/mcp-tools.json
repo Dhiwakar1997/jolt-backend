@@ -2,7 +2,7 @@
   "server": "jolt",
   "transport": "sse",
   "endpoint": "/mcp/sse",
-  "auth": "Authorization: Bearer <MCP token>",
+  "auth": "Authorization: Bearer <MCP token> (jolt_live_..., from POST /v1/mcp-tokens). App tokens are refused: opening /mcp/sse answers 401, tool calls fail.",
   "errors": "Tools whose output_schema is a union with {error} return that object for recoverable problems. Any other failure (missing/invalid token, unknown source, invalid grade) is raised and arrives as an MCP tool error (isError: true) with the message as text.",
   "tools": [
     {

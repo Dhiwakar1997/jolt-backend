@@ -14,8 +14,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from jolt.api.routes import (
-    accounts,
+    auth,
     dev_blob,
+    mcp_tokens,
+    me,
     progress,
     review,
     sources,
@@ -80,7 +82,12 @@ def create_app(settings: Settings | None = None, runtime: Runtime | None = None)
     )
 
     # REST (LLD §4 api/routes)
-    app.include_router(accounts.router)
+    app.include_router(auth.router)
+    if cfg.dev_auth_enabled:
+        # Dev-only sign-in by email (BE-03); Settings refuses it in prod.
+        app.include_router(auth.dev_router)
+    app.include_router(me.router)
+    app.include_router(mcp_tokens.router)
     app.include_router(upload.router)
     app.include_router(review.router)
     app.include_router(tracks.router)

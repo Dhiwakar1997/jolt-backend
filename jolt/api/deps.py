@@ -1,7 +1,8 @@
 """FastAPI dependencies — runtime access and auth/user context (LLD §4, §5).
 
-Every REST request resolves the bearer token → user_id here before any handler
-runs. The resolved `UserContext` is what handlers pass into services, which pass
+Every authenticated REST request resolves its bearer token → user_id here before
+any handler runs. `/v1` accepts **app tokens** only (BE-03); an MCP token gets a
+401. The resolved `UserContext` is what handlers pass into services, which pass
 `user_id` into every repository call.
 """
 
@@ -12,7 +13,8 @@ from typing import Annotated
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from jolt.auth.context import UserContext, bearer_from_header, resolve_token
+from jolt.auth.context import AuthError, UserContext, authenticate, bearer_from_header
+from jolt.domain.models import TokenKind
 from jolt.runtime import Runtime
 
 
@@ -26,7 +28,10 @@ def get_runtime(request: Request) -> Runtime:
 # Declares the `HTTPBearer` security scheme in the OpenAPI contract. It never
 # rejects on its own (auto_error=False): the raw header is still parsed by
 # `bearer_from_header`, which also tolerates a bare token.
-_bearer_scheme = HTTPBearer(auto_error=False, description="App token: `Bearer <token>`")
+_bearer_scheme = HTTPBearer(
+    auto_error=False,
+    description="App token (`jolt_app_…`) from sign-in: `Bearer <token>`",
+)
 
 
 async def get_user_context(
@@ -34,21 +39,20 @@ async def get_user_context(
     _credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer_scheme)] = None,
 ) -> UserContext:
     rt = get_runtime(request)
-    token = bearer_from_header(request.headers.get("authorization"))
-    if not token:
+    try:
+        return await authenticate(
+            bearer_from_header(request.headers.get("authorization")),
+            kind=TokenKind.APP,
+            tokens=rt.repos.tokens,
+            users=rt.repos.users,
+            pepper=rt.settings.token_hash_pepper,
+        )
+    except AuthError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="missing bearer token",
+            detail=str(exc),
             headers={"WWW-Authenticate": "Bearer"},
-        )
-    ctx = await resolve_token(token, rt.repos.users)
-    if ctx is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="invalid token",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    return ctx
+        ) from exc
 
 
 RuntimeDep = Annotated[Runtime, Depends(get_runtime)]

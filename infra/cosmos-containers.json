@@ -87,6 +87,11 @@
       "name": "api_keys",
       "partitionKey": "/user_id",
       "compositeIndexes": []
+    },
+    {
+      "name": "tokens",
+      "partitionKey": "/user_id",
+      "compositeIndexes": []
     }
   ]
 }

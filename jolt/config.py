@@ -10,7 +10,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -44,9 +44,26 @@ class Settings(BaseSettings):
     # everything is lost on restart).
     storage_mode: Literal["azure", "memory"] = "azure"
 
-    # ---- Auth ----
-    token_prefix: str = "jolt_live_"
+    # ---- Auth (BE-03) ----
+    # Two opaque token kinds on one hashing scheme (Argon2 + pepper, plus an
+    # HMAC lookup index keyed by the pepper): app tokens for /v1, MCP tokens for
+    # /mcp. Keep the prefixes stable once tokens exist.
+    app_token_prefix: str = "jolt_app_"
+    mcp_token_prefix: str = "jolt_live_"
     token_hash_pepper: str = "change-me-to-a-long-random-string"
+    # Google sign-in: the OAuth client id(s) an ID token must be issued to (its
+    # `aud`). Comma-separated, so a web and a mobile client can both sign in.
+    # Empty -> POST /v1/auth/google answers 503 (not configured).
+    google_oauth_client_id: str = ""
+    # The MCP address the app shows on "Connect your model", e.g.
+    # https://<api-host>/mcp/sse. Empty -> derived from PUBLIC_BASE_URL, else
+    # from the request's own base URL.
+    mcp_server_url: str = ""
+    # Dev-only sign-in without Google: POST /v1/auth/dev {email}. Never in prod.
+    # With STORAGE_MODE=azure it also needs DEV_AUTH_SECRET, sent by the caller
+    # as the `X-Jolt-Dev-Auth-Secret` header (the deployed smoke test).
+    dev_auth_enabled: bool = False
+    dev_auth_secret: str = ""
 
     # ---- Cosmos ----
     cosmos_endpoint: str = ""
@@ -72,6 +89,23 @@ class Settings(BaseSettings):
     # ---- Key-backed providers (dormant) ----
     anthropic_api_base: str = "https://api.anthropic.com"
     openai_api_base: str = "https://api.openai.com"
+
+    @model_validator(mode="after")
+    def _dev_auth_is_safe(self) -> "Settings":
+        if not self.dev_auth_enabled:
+            return self
+        if self.jolt_env == "prod":
+            raise ValueError("DEV_AUTH_ENABLED must not be set when JOLT_ENV=prod")
+        if self.storage_mode == "azure" and not self.dev_auth_secret:
+            raise ValueError(
+                "DEV_AUTH_ENABLED with STORAGE_MODE=azure needs DEV_AUTH_SECRET "
+                "(a public dev server must not mint accounts for anyone)"
+            )
+        return self
+
+    @property
+    def google_client_ids(self) -> list[str]:
+        return [c.strip() for c in self.google_oauth_client_id.split(",") if c.strip()]
 
     @property
     def cors_origin_list(self) -> list[str]:

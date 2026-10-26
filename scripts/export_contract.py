@@ -37,7 +37,9 @@ def _settings():
     from jolt.config import Settings
 
     # Ignore any local .env so the export never depends on a developer's config.
-    return Settings(_env_file=None, storage_mode="memory")
+    # Dev sign-in is on so `POST /v1/auth/dev` is in the contract (the front
+    # end's dev mode uses it); servers mount it only when DEV_AUTH_ENABLED.
+    return Settings(_env_file=None, storage_mode="memory", dev_auth_enabled=True)
 
 
 def build_openapi() -> dict:
@@ -72,7 +74,10 @@ def build_mcp_tools() -> dict:
         "server": "jolt",
         "transport": "sse",
         "endpoint": "/mcp/sse",
-        "auth": "Authorization: Bearer <MCP token>",
+        "auth": (
+            "Authorization: Bearer <MCP token> (jolt_live_..., from POST /v1/mcp-tokens). "
+            "App tokens are refused: opening /mcp/sse answers 401, tool calls fail."
+        ),
         "errors": (
             "Tools whose output_schema is a union with {error} return that object for "
             "recoverable problems. Any other failure (missing/invalid token, unknown "

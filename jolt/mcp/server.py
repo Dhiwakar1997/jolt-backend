@@ -11,10 +11,12 @@ read via `require_user()`.
 
 from __future__ import annotations
 
+import json
+
 from mcp.server.fastmcp import FastMCP
 
 from jolt.auth.context import bearer_from_header
-from jolt.mcp.context import set_current_token
+from jolt.mcp.context import MCPAuthError, authenticate_mcp, set_current_token
 from jolt.mcp.descriptions.tools import TOOL_DESCRIPTIONS
 from jolt.mcp.tools import extract as t_extract
 from jolt.mcp.tools import read as t_read
@@ -51,7 +53,13 @@ def build_mcp() -> FastMCP:
 
 
 class _TokenCaptureMiddleware:
-    """ASGI middleware: lift the Authorization header into the MCP contextvar."""
+    """ASGI middleware: lift the Authorization header into the MCP contextvar.
+
+    Opening the event stream (`GET /sse`) also checks the token up front, so a
+    missing, revoked or wrong-kind token (an app token) fails the connection with
+    a 401 instead of failing every tool call later. Tools still re-check on each
+    call, so revoking a token cuts off an open connection at its next call.
+    """
 
     def __init__(self, app) -> None:
         self._app = app
@@ -59,8 +67,31 @@ class _TokenCaptureMiddleware:
     async def __call__(self, scope, receive, send):
         if scope["type"] in ("http", "websocket"):
             headers = {k.decode().lower(): v.decode() for k, v in scope.get("headers", [])}
-            set_current_token(bearer_from_header(headers.get("authorization")))
+            token = bearer_from_header(headers.get("authorization"))
+            set_current_token(token)
+            if scope["type"] == "http" and scope.get("path", "").rstrip("/").endswith("/sse"):
+                try:
+                    await authenticate_mcp(token)
+                except MCPAuthError as exc:
+                    await _unauthorized(send, str(exc))
+                    return
         await self._app(scope, receive, send)
+
+
+async def _unauthorized(send, message: str) -> None:
+    body = json.dumps({"detail": message}).encode()
+    await send(
+        {
+            "type": "http.response.start",
+            "status": 401,
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"content-length", str(len(body)).encode()),
+                (b"www-authenticate", b"Bearer"),
+            ],
+        }
+    )
+    await send({"type": "http.response.body", "body": body})
 
 
 def build_mcp_app():

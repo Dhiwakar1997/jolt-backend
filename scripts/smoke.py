@@ -1,4 +1,4 @@
-"""End-to-end smoke test against a running Jolt backend (BE-02).
+"""End-to-end smoke test against a running Jolt backend (BE-02, BE-03).
 
     python scripts/smoke.py --base-url https://<dev-host>
     python scripts/smoke.py --base-url http://localhost:8000      # local, see below
@@ -7,23 +7,31 @@ Walks the whole product loop over the network, the way the app and an agent
 share it, with a fresh test user:
 
  1. GET /health (waits for a cold start; --expect-version waits for a new revision)
- 2. POST /v1/accounts -> test user token
- 3. MCP over SSE (/mcp/sse): initialize handshake + tools/list
- 4. POST /v1/tracks
- 5. POST /v1/uploads/request -> PUT a 1x1 PNG to the signed URL -> confirm
- 6. The sync tool sequence over MCP with canned agent output: jolt_sync,
+ 2. POST /v1/auth/dev -> test user + app token (the dev sign-in; Google sign-in
+    needs a real Google account, so the smoke test cannot use it), GET /v1/me
+ 3. POST /v1/mcp-tokens -> MCP token; /mcp refuses the app token
+ 4. MCP over SSE (/mcp/sse) with the MCP token: initialize handshake + tools/list
+ 5. POST /v1/tracks
+ 6. POST /v1/uploads/request -> PUT a 1x1 PNG to the signed URL -> confirm
+ 7. The sync tool sequence over MCP with canned agent output: jolt_sync,
     jolt_get_unprocessed_sources, jolt_get_source_content (and GET the signed read
     URL back), jolt_store_extraction, jolt_log_session, jolt_create_questions
- 7. GET /v1/reviews/due, POST stage1, POST stage2 (inline FSRS)
- 8. jolt_get_pending_gradings + jolt_submit_gradings, then jolt_get_coverage
+ 8. GET /v1/reviews/due, POST stage1, POST stage2 (inline FSRS)
+ 9. jolt_get_pending_gradings + jolt_submit_gradings, then jolt_get_coverage
+10. GET /v1/me shows the onboarding progress; revoke the MCP token (/mcp then
+    refuses it); sign out (/v1 then refuses the app token)
 
 Exit code 0 when every step passes, 1 otherwise. It leaves the test user and its
 data behind (there is no account delete yet); each run uses a new user.
 
+The server must have DEV_AUTH_ENABLED=true. A server with real storage also has a
+DEV_AUTH_SECRET: pass it with --dev-auth-secret or the JOLT_DEV_AUTH_SECRET
+environment variable (the deploy workflow reads it from Key Vault).
+
 Local run with no Azure (the in-memory blob fake serves the upload URL when
 PUBLIC_BASE_URL is set):
 
-    STORAGE_MODE=memory PUBLIC_BASE_URL=http://localhost:8000 \\
+    STORAGE_MODE=memory DEV_AUTH_ENABLED=true PUBLIC_BASE_URL=http://localhost:8000 \\
         uvicorn jolt.main:app --port 8000
     python scripts/smoke.py --base-url http://localhost:8000
 
@@ -37,6 +45,8 @@ import asyncio
 import base64
 import hashlib
 import json
+import os
+import secrets
 import sys
 import time
 from contextlib import contextmanager
@@ -159,12 +169,21 @@ async def wait_for_health(
         await asyncio.sleep(3)
 
 
+async def _sse_status(base_url: str, token: str, timeout: float) -> int:
+    """Status of opening the MCP event stream with `token` (closes at once)."""
+    async with httpx.AsyncClient(timeout=timeout) as raw:
+        headers = {"Authorization": f"Bearer {token}"}
+        async with raw.stream("GET", f"{base_url}/mcp/sse", headers=headers) as resp:
+            return resp.status_code
+
+
 async def run(
     base_url: str,
     *,
     wait_seconds: float = 120,
     expect_version: str | None = None,
     timeout: float = 30,
+    dev_auth_secret: str | None = None,
 ) -> dict:
     """Run every step; raise on the first failure. Returns ids for the record."""
     base_url = base_url.rstrip("/")
@@ -176,16 +195,41 @@ async def run(
             health = await wait_for_health(http, wait_seconds, expect_version)
             out["version"] = health.get("version")
 
-        with rep.step("POST /v1/accounts (test user)"):
-            stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-            account = _json(
-                await http.post("/v1/accounts", json={"display_name": f"smoke {stamp}"})
+        with rep.step("POST /v1/auth/dev (test user)"):
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            email = f"smoke-{stamp.lower()}-{secrets.token_hex(3)}@smoke.jolt.test"
+            headers = {"X-Jolt-Dev-Auth-Secret": dev_auth_secret} if dev_auth_secret else {}
+            signed_in = _json(
+                await http.post(
+                    "/v1/auth/dev",
+                    json={"email": email, "display_name": f"smoke {stamp}"},
+                    headers=headers,
+                )
             )
-            token = account["token"]
-            out["user_id"] = account["user_id"]
-            http.headers["Authorization"] = f"Bearer {token}"
+            app_token = signed_in["app_token"]
+            check(app_token.startswith("jolt_app_"), "app token has the wrong prefix")
+            out["user_id"] = signed_in["user"]["id"]
+            http.headers["Authorization"] = f"Bearer {app_token}"
 
-        auth = {"Authorization": f"Bearer {token}"}
+        with rep.step("GET /v1/me (new user)"):
+            me = _json(await http.get("/v1/me"))
+            check(me["user"]["email"] == email, f"me: {me}")
+            check(not me["onboarding"]["has_mcp_token"], f"onboarding: {me['onboarding']}")
+            check(me["mcp_server_url"].endswith("/mcp/sse"), f"mcp_server_url: {me}")
+            out["mcp_server_url"] = me["mcp_server_url"]
+
+        with rep.step("POST /v1/mcp-tokens"):
+            created = _json(
+                await http.post("/v1/mcp-tokens", json={"label": "smoke test"}), expected=201
+            )
+            mcp_token, mcp_token_id = created["token"], created["id"]
+            check(mcp_token.startswith("jolt_live_"), "MCP token has the wrong prefix")
+
+        with rep.step("/mcp refuses the app token"):
+            status = await _sse_status(base_url, app_token, timeout)
+            check(status == 401, f"GET /mcp/sse with the app token -> {status}")
+
+        auth = {"Authorization": f"Bearer {mcp_token}"}
         async with sse_client(f"{base_url}/mcp/sse", headers=auth, timeout=timeout) as streams:
             async with ClientSession(*streams) as mcp:
                 with rep.step("MCP initialize"):
@@ -337,6 +381,25 @@ async def run(
                     cov = await _tool(mcp, "jolt_get_coverage", track_id=track_id)
                     check(cov["studied_concepts"] == 1, f"coverage: {cov}")
 
+        with rep.step("GET /v1/me (onboarding progress)"):
+            onboarding = _json(await http.get("/v1/me"))["onboarding"]
+            check(onboarding["has_track"] and onboarding["has_mcp_token"], f"{onboarding}")
+            listed = _json(await http.get("/v1/mcp-tokens"))
+            check([t["id"] for t in listed] == [mcp_token_id], f"mcp tokens: {listed}")
+            check(listed[0]["last_used_at"], "MCP token has no last_used_at after use")
+
+        with rep.step("DELETE /v1/mcp-tokens/{id} (revoked at once)"):
+            resp = await http.delete(f"/v1/mcp-tokens/{mcp_token_id}")
+            check(resp.status_code == 204, f"revoke -> {resp.status_code}: {resp.text[:200]}")
+            status = await _sse_status(base_url, mcp_token, timeout)
+            check(status == 401, f"GET /mcp/sse with the revoked token -> {status}")
+
+        with rep.step("POST /v1/auth/sign-out"):
+            resp = await http.post("/v1/auth/sign-out")
+            check(resp.status_code == 204, f"sign-out -> {resp.status_code}: {resp.text[:200]}")
+            after = await http.get("/v1/me")
+            check(after.status_code == 401, f"GET /v1/me after sign-out -> {after.status_code}")
+
     out["steps_passed"] = rep.passed
     return out
 
@@ -356,6 +419,12 @@ def main(argv: list[str] | None = None) -> int:
         "--expect-version", help="wait until /health reports this version (e.g. the git SHA)"
     )
     parser.add_argument("--timeout", type=float, default=30, help="per-request timeout in seconds")
+    parser.add_argument(
+        "--dev-auth-secret",
+        default=os.environ.get("JOLT_DEV_AUTH_SECRET") or None,
+        help="the server's DEV_AUTH_SECRET (default: $JOLT_DEV_AUTH_SECRET); "
+        "not needed for a memory-mode server without one",
+    )
     args = parser.parse_args(argv)
 
     print(f"Jolt smoke test against {args.base_url}", flush=True)
@@ -366,6 +435,7 @@ def main(argv: list[str] | None = None) -> int:
                 wait_seconds=args.wait,
                 expect_version=args.expect_version,
                 timeout=args.timeout,
+                dev_auth_secret=args.dev_auth_secret,
             )
         )
     except SmokeFailure as exc:

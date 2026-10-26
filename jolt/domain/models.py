@@ -10,6 +10,7 @@ be read-time upgraded (LLD §10, migrations are code-level not DDL).
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
@@ -92,6 +93,13 @@ class AgendaSource(str, Enum):
     EMERGENT = "emergent"  # grew from logged concepts (auto-add)
 
 
+class TokenKind(str, Enum):
+    """Which surface an opaque token opens (BE-03)."""
+
+    APP = "app"  # jolt_app_…: the app, on /v1
+    MCP = "mcp"  # jolt_live_…: a connected Claude / Codex client, on /mcp
+
+
 class FSRSGrade(int, Enum):
     """FSRS ratings — the four-button scale."""
 
@@ -105,10 +113,44 @@ class FSRSGrade(int, Enum):
 # Aggregates
 # --------------------------------------------------------------------------- #
 class User(DocBase):
-    # Only the Argon2 hash of the opaque token is stored; plaintext shown once.
-    token_hash: str
+    """A Jolt account (BE-03).
+
+    The id is derived from the sign-in identity (see `user_id_for`), so the same
+    Google account always maps to the same user without a cross-partition query.
+    Tokens live in their own container (`AuthToken`).
+    """
+
+    email: Optional[str] = None
     display_name: Optional[str] = None
+    picture_url: Optional[str] = None
+    auth_provider: Optional[str] = None  # "google" | "dev"
+    auth_subject: Optional[str] = None  # Google `sub`, or the dev email
+    last_sign_in_at: Optional[datetime] = None
+    # Set by the first successful nightly sync (BE-04); drives onboarding.
+    first_sync_at: Optional[datetime] = None
     retention_days: Optional[int] = None  # data-retention preference
+
+
+def user_id_for(provider: str, subject: str) -> str:
+    """Stable, opaque user id for a sign-in identity (32 hex chars)."""
+    return hashlib.sha256(f"{provider}:{subject}".encode()).hexdigest()[:32]
+
+
+class AuthToken(DocBase):
+    """One opaque token: an app token (a signed-in device) or an MCP token (BE-03).
+
+    Partitioned by user so listing and revoking are single-partition. Resolution
+    (the pre-auth path) finds the document by `lookup`, an HMAC of the token, and
+    verifies `token_hash` (Argon2). Revoking deletes the document.
+    """
+
+    user_id: str
+    kind: TokenKind
+    lookup: str
+    token_hash: str
+    label: Optional[str] = None
+    last4: str
+    last_used_at: Optional[datetime] = None
 
 
 class SyllabusItem(BaseModel):

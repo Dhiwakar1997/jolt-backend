@@ -17,6 +17,9 @@ azure-identity==1.19.0
 
 # --- Auth ---
 argon2-cffi==23.1.0
+# Google ID token verification (RS256 against Google's JWKS). Already pulled in
+# by msal (azure-identity); pinned here because Jolt imports it directly.
+PyJWT[crypto]==2.15.1
 
 # --- Scheduling ---
 fsrs==4.1.1

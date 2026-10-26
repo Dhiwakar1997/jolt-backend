@@ -63,9 +63,9 @@ def test_default_cors_origin_is_the_vite_dev_server():
 @pytest.fixture
 def served():
     """Memory mode with PUBLIC_BASE_URL: upload URLs are served by /_dev/blob."""
-    with _client(public_base_url="http://testserver") as c:
-        account = c.post("/v1/accounts", json={}).json()
-        c.headers["Authorization"] = f"Bearer {account['token']}"
+    with _client(public_base_url="http://testserver", dev_auth_enabled=True) as c:
+        signed_in = c.post("/v1/auth/dev", json={"email": "blob@example.com"}).json()
+        c.headers["Authorization"] = f"Bearer {signed_in['app_token']}"
         yield c
 
 
