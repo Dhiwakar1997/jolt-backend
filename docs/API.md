@@ -51,10 +51,10 @@ background job).
 
 | Tool | Arguments | Returns | Notes / errors |
 |---|---|---|---|
-| `jolt_sync` | `limit?=50` | `{unprocessed_sources, pending_gradings}` (counts) | Read-only. Counts only claimable sources. |
-| `jolt_get_unprocessed_sources` | `limit?=10` | `{sources: [{source_id, filename, content_type, lease_expires_at}]}` | Claims each source (`in_flight`, lease of `LEASE_TTL_SECONDS`, 900 s by default). Etag-guarded: a concurrent claimer gets fewer rows. |
-| `jolt_get_source_content` | `source_id` | `{source_id, filename, content_type, read_url}` | `read_url` is a signed GET for `BLOB_SAS_TTL_SECONDS`. Raises if the source is not the caller's. |
-| `jolt_store_extraction` | `source_id, markdown, confidence?=0, model_id?, supersede?=false` | `{extraction_id, status: "active"}` | Marks the source `processed` and points it at the new extraction. With `supersede`, the previous active extraction becomes `superseded`. Concept reconciliation on supersede is **not implemented yet** (see GAPS). Raises if the source is not the caller's. |
+| `jolt_sync` | `limit?=50` | `{unprocessed_sources, pending_gradings, rereads: [{source_id, title, preferred_model, requested_at}]}` | Read-only. Counts only claimable, confirmed sources. `rereads` are the sources the user asked to read again (also in the count); re-extract each with `supersede: true`. `preferred_model` (e.g. `claude`, `codex`, or `null`) is a hint, not a lock. |
+| `jolt_get_unprocessed_sources` | `limit?=10` | `{sources: [{source_id, filename, content_type, lease_expires_at, title, track_id, page_count, supersede, preferred_model}]}` | Claims each source (`in_flight`, lease of `LEASE_TTL_SECONDS`, 900 s by default). Etag-guarded: a concurrent claimer gets fewer rows. Only confirmed uploads. `supersede: true` = a read-again request on a source that already has a read. A source whose lease lapses `SOURCE_MAX_ATTEMPTS` (3) times is marked `failed` instead of claimed. |
+| `jolt_get_source_content` | `source_id` | `{source_id, filename, content_type, read_url, page_count, pages: [{index, filename, content_type, read_url}]}` | One signed GET per page, valid `BLOB_SAS_TTL_SECONDS`; the top-level fields are page 0's. Raises if the source is not the caller's. |
+| `jolt_store_extraction` | `source_id, markdown, confidence?=0, model_id?, supersede?=false` | `{extraction_id, status: "active"}` | Marks the source `processed` (or back to `unprocessed` if a read-again request arrived while the sync held it) and points it at the new extraction. The previous active extraction always becomes `superseded` (one active read per source). Records the MCP token's label as the read's `client_label`. Concept reconciliation on supersede is **not implemented yet** (see GAPS). Raises if the source is not the caller's. |
 | `jolt_log_session` | `source_ids: [str]`, `concepts: [{text, track_id, title?, concept_key?, syllabus_ref?, parent?, source_id?}]` | `{session_id, concept_ids}` (input order) | Creates concepts plus an FSRS card due now, and auto-adds unknown `concept_key`s to each track's agenda (skipped on locked agendas). Not idempotent. |
 | `jolt_create_questions` | `concept_id`, `questions: [{stem, options: [str], correct_index, expected_answer}]` | `{question_ids}` (input order) | Not idempotent. |
 | `jolt_get_pending_gradings` | `limit?=10` | `{gradings: [{review_id, concept_id, question_id, free_text, expected_answer}]}` | Reviews with stage 1 submitted and no final grade. |
@@ -64,26 +64,67 @@ background job).
 
 ## 3. Sources and uploads
 
-The app (REST) or an agent (MCP) asks for a signed PUT URL, the client uploads the
-bytes straight to Blob, then the app confirms. The source stays `unprocessed` until
-a sync claims it.
+The app (REST) or an agent (MCP) asks for signed PUT URLs, the client uploads the
+bytes straight to Blob, then the app confirms. A note of several pages is **one
+source with N pages** (decision A7). The source stays `unprocessed` until a sync
+claims it; unconfirmed uploads are invisible to the app and never offered to a
+sync.
 
-The PUT to `upload_url` is a plain Azure Blob "Put Blob" with a SAS: send the raw
-bytes with headers `x-ms-blob-type: BlockBlob` and `Content-Type: <content_type>`;
-success is `201`. Browsers can do this from the origins in Blob CORS (see
-`docs/DEPLOY.md`).
+Each PUT to an `upload_url` is a plain Azure Blob "Put Blob" with a SAS: send the
+raw bytes with headers `x-ms-blob-type: BlockBlob` and `Content-Type:
+<content_type>`; success is `201`. Browsers can do this from the origins in Blob
+CORS (see `docs/DEPLOY.md`).
+
+**Limits.** Accepted types: `image/jpeg`, `image/png`, `image/heic`, `image/webp`,
+`application/pdf` (case and `;` parameters ignored). At most `UPLOAD_MAX_BYTES` per
+file (25 MiB) and `UPLOAD_MAX_PAGES` files per upload (30). Both are returned by
+the request call.
+
+**Confirm checks**, per page: the blob exists; its size is within the cap (an
+oversize file is deleted) and equals the declared `size`; the SHA-256 of the
+stored bytes equals the declared `sha256` (the server streams each file once to
+hash it). If the body carries `pages`, each entry must match the request.
+Confirming twice is fine.
+
+**Status**: `unprocessed` → `in_flight` (claimed by a sync, under a lease) →
+`processed`; `failed` when the lease lapsed `SOURCE_MAX_ATTEMPTS` (3) times without
+an extraction. Read again puts a source back to `unprocessed` (a failed one gets
+fresh attempts).
+
+**Low confidence**: a read whose `confidence` is under `LOW_CONFIDENCE_THRESHOLD`
+(0.6) has `low_confidence: true`; a source has it when its active read does.
+
+`Read = {id, source_id, number (1-based, oldest first), model_id, client_label
+(the MCP token's label), confidence, low_confidence, status: active|superseded,
+created_at, concepts_found, questions_written, concepts: [{concept_id, title,
+is_new}]}`. Concepts are credited to the source's active read when
+`jolt_log_session` names their `source_id`; `questions_written` counts questions
+`jolt_create_questions` wrote for those concepts. `is_new` is always `true` until
+supersede reconciles concepts (GAPS).
+
+`Source = {id, filename, content_type (page 0's), processing_status, active_extraction_id,
+created_at, title, track_id, track_name, kind: photos|pdf|file, page_count,
+uploaded_at (confirm time), concepts_found, questions_written (of the active
+read), low_confidence, reread_requested: {requested_at, preferred_model} | null}`.
 
 | Method | Path | Auth | Request | Response | Errors |
 |---|---|---|---|---|---|
-| POST | `/v1/uploads/request` | token | `{filename, content_type, sha256}` | `{source_id, upload_url}`; PUT the bytes to `upload_url` (expires after `BLOB_SAS_TTL_SECONDS`) | 401, 422 |
-| POST | `/v1/uploads/{source_id}/confirm` | token | `{sha256?}` | `{status: "ready"}` | 400 `source not found` / `blob not found — upload did not complete` / `sha256 mismatch…`; 401; 422 |
-| GET | `/v1/sources` | token | — | `[{id, filename, content_type, processing_status: unprocessed\|in_flight\|processed, active_extraction_id, created_at}]`, newest first | 401 |
-| GET | `/v1/sources/{source_id}/extractions` | token | — | `[{id, source_id, confidence, model_id, status: active\|superseded, created_at}]`, newest first. No markdown. | 401, 404 `source not found` |
+| POST | `/v1/uploads/request` | token | `{track_id?, title?, pages: [{filename, content_type, size, sha256}]}`, or for one file `{track_id?, title?, filename, content_type, sha256, size?}`. `title` defaults to the first filename. | `{source_id, upload_url (page 0), pages: [{index, upload_url}], max_bytes_per_file, accepted_types}`; URLs expire after `BLOB_SAS_TTL_SECONDS` | 401; 404 `track not found` (not the caller's track); 422 field errors (type, size, hash format, too many files, neither shape) |
+| POST | `/v1/uploads/{source_id}/confirm` | token | `{sha256?, pages?: [{index, sha256, size}]}` | `{status: "ready"}` | 400 `source not found` / `blob not found — upload did not complete on page N` / `size mismatch on page N…` / `sha256 mismatch on page N…` / `file on page N is larger than … bytes` / `…between request and confirm`; 401; 422 |
+| GET | `/v1/sources` | token | query `track_id?`, `status?` (`unprocessed\|in_flight\|processed\|failed`) | `[Source]`, newest first; confirmed uploads only | 401, 422 |
+| GET | `/v1/sources/{source_id}` | token | — | `Source` + `{pages: [{index, url, content_type, size}], active_read: Read + {markdown} \| null, reads: [Read]}`. `url` is a signed GET of the original file (`BLOB_SAS_TTL_SECONDS`); `reads` newest first | 401, 404 `source not found` |
+| POST | `/v1/sources/{source_id}/reread` | token | `{preferred_model?: string\|null}` (≤ 64 chars, e.g. `claude`, `codex`) | `{source_id, requested_at, preferred_model}`. The next `jolt_sync` lists it in `rereads`; a request made while a sync holds the source survives that sync | 401, 404 |
+| GET | `/v1/sources/{source_id}/extractions` | token | — | `[{id, source_id, confidence, model_id, status: active\|superseded, created_at}]`, newest first. No markdown (use the detail route). | 401, 404 `source not found` |
+| GET | `/v1/storage` | token | — | `{bytes_used, source_count, page_count}` over the caller's confirmed uploads | 401 |
+
+The Reader gets **originals only**: `pages[].url` points at the uploaded file
+(JPEG, PNG, HEIC, WebP or PDF). There are no resized renditions or thumbnails
+(see GAPS, Reader).
 
 | Tool | Arguments | Returns | Notes / errors |
 |---|---|---|---|
-| `jolt_request_upload_url` | `filename, content_type, sha256` | `{source_id, upload_url}` | Same as `POST /v1/uploads/request`; confirm is REST-only. |
-| `jolt_list_sources` | — | `{sources: [{source_id, filename, processing_status, active_extraction_id}]}` | Read-only. |
+| `jolt_request_upload_url` | `filename, content_type, sha256` | `{source_id, upload_url}` or `{error}` | One page. Same limits as `POST /v1/uploads/request`; `{error}` on an unsupported type or a malformed hash. Confirm is REST-only. |
+| `jolt_list_sources` | — | `{sources: [{source_id, filename, processing_status, active_extraction_id, page_count, reread_requested}]}` | Read-only. Confirmed uploads only. |
 | `jolt_diff_extractions` | `track_id`, `proposed_concepts: [{text, title?, syllabus_ref?}]` | `{deltas: [{change: unchanged\|refined\|changed\|removed\|new, existing_concept_id, proposed_text, similarity}]}` | Read-only preview against the track's active concepts. |
 
 ---
