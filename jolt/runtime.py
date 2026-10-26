@@ -77,10 +77,21 @@ class Runtime:
     @classmethod
     async def create(cls, settings: Settings | None = None) -> "Runtime":
         settings = settings or get_settings()
+        if settings.storage_mode == "memory":
+            return cls.in_memory(settings)
         cosmos = await init_cosmos(settings)
         blob = await init_blob(settings)
         vault = VaultClient(settings)
         return cls(settings, cosmos, blob, vault)
+
+    @classmethod
+    def in_memory(cls, settings: Settings | None = None) -> "Runtime":
+        """A runtime over the in-memory fakes (decision A8): no Azure needed."""
+        from jolt.data.memory import build_memory_gateways
+
+        settings = settings or get_settings()
+        cosmos, blob, vault = build_memory_gateways(settings)
+        return cls(settings, cosmos, blob, vault)  # type: ignore[arg-type]
 
     async def close(self) -> None:
         await self.cosmos.close()

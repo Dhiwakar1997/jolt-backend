@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import Generic, Optional, Type, TypeVar
 
+from azure.core import MatchConditions
 from azure.cosmos import exceptions as cosmos_exc
 
 from jolt.data.cosmos import CosmosGateway
@@ -60,7 +61,8 @@ class Repository(Generic[T]):
         kwargs: dict = {}
         etag = etag or model.etag
         if etag:
-            kwargs["match_condition"] = "IfMatch"
+            # The SDK wants the enum; a plain "IfMatch" string raises TypeError.
+            kwargs["match_condition"] = MatchConditions.IfNotModified
             kwargs["etag"] = etag
         try:
             doc = await self._c.replace_item(item=model.id, body=self._to_doc(model), **kwargs)

@@ -26,6 +26,10 @@ class Settings(BaseSettings):
     jolt_env: Literal["dev", "prod"] = "dev"
     auth_mode: Literal["managed_identity", "key"] = "key"
     cors_origins: str = "*"
+    # Where state lives: `azure` (Cosmos/Blob/Key Vault) or `memory` (in-process
+    # fakes from jolt/data/memory.py — tests and cloud-free local runs only;
+    # everything is lost on restart).
+    storage_mode: Literal["azure", "memory"] = "azure"
 
     # ---- Auth ----
     token_prefix: str = "jolt_live_"

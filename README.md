@@ -79,6 +79,13 @@ uvicorn jolt.main:app --reload  # needs a reachable Cosmos/Blob/Key Vault (or em
 Startup fails fast with a clear message if a required endpoint is unset — that is
 expected until the resources exist and `.env` is filled in.
 
+To run with **no Azure at all**, use the in-memory fakes (state is lost on restart;
+blob URLs are opaque `memory://` strings that nothing serves):
+
+```bash
+STORAGE_MODE=memory uvicorn jolt.main:app --reload
+```
+
 ### Bootstrapping a user
 
 ```
@@ -88,16 +95,35 @@ POST /v1/accounts            -> { user_id, token }   # token shown ONCE
 Put the token in the MCP client config (connection `Authorization` header) and in the
 app's secure storage (`Authorization: Bearer <token>`).
 
-## Tests
+## Tests and checks
 
-Domain and repository-discipline tests need no Azure:
+No Azure is needed. Domain tests are pure; API-level tests run the real FastAPI
+app and MCP tools over in-memory fakes for Cosmos, Blob and Key Vault
+(`jolt/data/memory.py`, fixtures in `tests/conftest.py`).
 
 ```bash
+ruff check . && ruff format --check .
 python -m pytest -q
+python scripts/export_contract.py --check   # contract/ is up to date
 ```
+
+CI (`.github/workflows/ci.yml`) runs exactly these on every push and pull request.
 
 The scope-enforcement test (`tests/test_partition_discipline.py`) asserts that a
 repository refuses to query without a partition value — the LLD §5 guarantee.
+
+## API contract
+
+`contract/openapi.json` (REST `/v1`) and `contract/mcp-tools.json` (every MCP tool:
+name, description, input schema, output schema) are generated — never edit them by
+hand. After changing a route, a tool, its description or `jolt/mcp/schemas.py`:
+
+```bash
+python scripts/export_contract.py
+```
+
+Human-readable reference: [`docs/API.md`](./docs/API.md). Screens without an
+endpoint yet: [`docs/GAPS.md`](./docs/GAPS.md).
 
 ## Container / deploy
 

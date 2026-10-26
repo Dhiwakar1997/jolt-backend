@@ -17,12 +17,12 @@ from jolt.api.routes import (
     accounts,
     progress,
     review,
-    settings,
     sources,
     tracks,
     upload,
 )
-from jolt.config import get_settings
+from jolt.api.routes import settings as settings_routes
+from jolt.config import Settings, get_settings
 from jolt.mcp.context import set_runtime as set_mcp_runtime
 from jolt.mcp.server import build_mcp_app
 from jolt.runtime import Runtime
@@ -32,9 +32,15 @@ logger = logging.getLogger("jolt")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    cfg = get_settings()
-    logger.info("Starting jolt-api (env=%s, auth=%s)", cfg.jolt_env, cfg.auth_mode)
-    runtime = await Runtime.create(cfg)
+    cfg: Settings = app.state.settings
+    logger.info(
+        "Starting jolt-api (env=%s, auth=%s, storage=%s)",
+        cfg.jolt_env,
+        cfg.auth_mode,
+        cfg.storage_mode,
+    )
+    # A runtime injected by create_app (tests) wins over building one from config.
+    runtime = getattr(app.state, "runtime", None) or await Runtime.create(cfg)
     app.state.runtime = runtime
     set_mcp_runtime(runtime)  # share the same gateways with the MCP tools
     try:
@@ -44,9 +50,13 @@ async def lifespan(app: FastAPI):
         logger.info("Stopped jolt-api")
 
 
-def create_app() -> FastAPI:
-    cfg = get_settings()
+def create_app(settings: Settings | None = None, runtime: Runtime | None = None) -> FastAPI:
+    """Build the app. `settings` / `runtime` are injection points for tests."""
+    cfg = settings or get_settings()
     app = FastAPI(title="Jolt API", version="0.2.0", lifespan=lifespan)
+    app.state.settings = cfg
+    if runtime is not None:
+        app.state.runtime = runtime
 
     app.add_middleware(
         CORSMiddleware,
@@ -63,7 +73,7 @@ def create_app() -> FastAPI:
     app.include_router(tracks.router)
     app.include_router(sources.router)
     app.include_router(progress.router)
-    app.include_router(settings.router)
+    app.include_router(settings_routes.router)
 
     # MCP surface (LLD §4 mcp/) mounted at /mcp
     app.mount("/mcp", build_mcp_app())
