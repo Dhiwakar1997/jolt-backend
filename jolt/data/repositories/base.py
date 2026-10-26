@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import Generic, Optional, Type, TypeVar
 
+from azure.core import MatchConditions
 from azure.cosmos import exceptions as cosmos_exc
 
 from jolt.data.cosmos import CosmosGateway
@@ -47,6 +48,21 @@ class Repository(Generic[T]):
         doc = await self._c.create_item(self._to_doc(model))
         return self._from_doc(doc)
 
+    async def create_if_absent(self, model: T, partition_value: str) -> tuple[T, bool]:
+        """Create, or return the stored document with the same id (BE-06).
+
+        Returns (document, created). Used with deterministic ids to make a
+        write idempotent and race-safe: of two concurrent creates, exactly one
+        wins and the other reads the winner's document.
+        """
+        try:
+            return await self.create(model), True
+        except cosmos_exc.CosmosResourceExistsError:
+            existing = await self.get(model.id, partition_value=partition_value)
+            if existing is None:  # deleted in between: try once more
+                return await self.create(model), True
+            return existing, False
+
     async def upsert(self, model: T) -> T:
         doc = await self._c.upsert_item(self._to_doc(model))
         return self._from_doc(doc)
@@ -60,7 +76,8 @@ class Repository(Generic[T]):
         kwargs: dict = {}
         etag = etag or model.etag
         if etag:
-            kwargs["match_condition"] = "IfMatch"
+            # The SDK wants the enum; a plain "IfMatch" string raises TypeError.
+            kwargs["match_condition"] = MatchConditions.IfNotModified
             kwargs["etag"] = etag
         try:
             doc = await self._c.replace_item(item=model.id, body=self._to_doc(model), **kwargs)
@@ -106,3 +123,23 @@ class Repository(Generic[T]):
             await self._c.delete_item(item=item_id, partition_key=partition_value)
         except cosmos_exc.CosmosResourceNotFoundError:
             pass
+
+    async def delete_partition(self, partition_value: str) -> int:
+        """Delete every document in one partition; returns how many (account
+        delete, BE-08). Raw ids, so a document that no longer validates against
+        the model is deleted too."""
+        if partition_value is None:
+            raise PartitionKeyRequired(
+                f"{self.container_name}.delete_partition needs a partition value"
+            )
+        iterator = self._c.query_items(
+            query="SELECT * FROM c", parameters=[], partition_key=partition_value
+        )
+        ids = [doc["id"] async for doc in iterator]
+        for item_id in ids:
+            await self.delete(item_id, partition_value)
+        return len(ids)
+
+    async def list_partition(self, partition_value: str) -> list[T]:
+        """Every document in one partition (data export, BE-08)."""
+        return await self._query("SELECT * FROM c", [], partition_value=partition_value)

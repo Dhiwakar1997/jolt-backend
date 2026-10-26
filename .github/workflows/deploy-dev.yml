@@ -1,0 +1,146 @@
+name: Deploy dev
+
+# Builds the image, pushes it to ACR, rolls it out to the `jolt-api` Container App
+# in `dev`, then runs scripts/smoke.py against it. Signs in to Azure with OIDC
+# (a federated credential on the `id-jolt-dev-github` managed identity that
+# infra/ creates): no Azure secret is stored in GitHub.
+#
+# Repository variables (Settings > Secrets and variables > Actions > Variables),
+# printed by scripts/deploy-infra.sh (or set with its --set-github-vars):
+#   AZURE_CLIENT_ID        client id of id-jolt-dev-github
+#   AZURE_TENANT_ID        Entra tenant id
+#   AZURE_SUBSCRIPTION_ID  subscription id
+#   AZURE_RESOURCE_GROUP   jolt-dev
+#   ACR_NAME               registry name (crjoltdev...)
+#   CONTAINER_APP_NAME     jolt-api
+#   KEYVAULT_NAME          Key Vault name (kv-jolt-dev-...): the smoke test reads
+#                          the dev sign-in secret `dev-auth-secret` from it (BE-03)
+# Until AZURE_CLIENT_ID is set the deploy job is skipped, not failed. It never
+# runs for branches other than main. See docs/DEPLOY.md.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Roll back: existing image tag (a git SHA) to deploy instead of building"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-dev
+  cancel-in-progress: false
+
+jobs:
+  checks:
+    if: github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    name: Build, push, deploy, smoke
+    needs: checks
+    if: github.ref == 'refs/heads/main' && vars.AZURE_CLIENT_ID != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: dev
+      url: ${{ steps.rollout.outputs.url }}
+    permissions:
+      contents: read
+      id-token: write # OIDC token for azure/login
+    env:
+      RG: ${{ vars.AZURE_RESOURCE_GROUP }}
+      ACR_NAME: ${{ vars.ACR_NAME }}
+      APP_NAME: ${{ vars.CONTAINER_APP_NAME }}
+      KEYVAULT_NAME: ${{ vars.KEYVAULT_NAME }}
+      TAG: ${{ inputs.image_tag || github.sha }}
+      BUILD: ${{ inputs.image_tag == '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Image reference
+        id: image
+        run: echo "ref=${ACR_NAME}.azurecr.io/jolt-api:${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to ACR
+        run: az acr login --name "$ACR_NAME"
+
+      - name: Set up Docker Buildx
+        if: env.BUILD == 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        if: env.BUILD == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.image.outputs.ref }}
+          build-args: APP_VERSION=${{ env.TAG }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Check the rollback image exists
+        if: env.BUILD != 'true'
+        run: az acr repository show --name "$ACR_NAME" --image "jolt-api:${TAG}" --output none
+
+      - name: Roll out to the Container App
+        id: rollout
+        run: |
+          az containerapp update \
+            --resource-group "$RG" \
+            --name "$APP_NAME" \
+            --image "${{ steps.image.outputs.ref }}" \
+            --revision-suffix "${TAG:0:7}-${GITHUB_RUN_ATTEMPT}" \
+            --output none
+          fqdn=$(az containerapp show -g "$RG" -n "$APP_NAME" \
+            --query properties.configuration.ingress.fqdn -o tsv)
+          echo "url=https://${fqdn}" >> "$GITHUB_OUTPUT"
+
+      - name: Same image for the maintenance job
+        # BE-10: the scheduled `jolt-maintenance` job runs the app's image.
+        run: |
+          if az containerapp job show -g "$RG" -n jolt-maintenance --output none 2>/dev/null; then
+            az containerapp job update -g "$RG" -n jolt-maintenance \
+              --image "${{ steps.image.outputs.ref }}" --output none
+          else
+            echo "No jolt-maintenance job yet (run scripts/deploy-infra.sh once since BE-10)."
+          fi
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Dev sign-in secret for the smoke test
+        # id-jolt-dev-github may read this one secret (Key Vault Secrets User on
+        # the secret only, from infra/). The value is masked in the logs.
+        run: |
+          if [[ -z "$KEYVAULT_NAME" ]]; then
+            echo "::error::Repository variable KEYVAULT_NAME is not set (see docs/DEPLOY.md)"
+            exit 1
+          fi
+          secret=$(az keyvault secret show --vault-name "$KEYVAULT_NAME" \
+            --name dev-auth-secret --query value -o tsv)
+          echo "::add-mask::${secret}"
+          echo "JOLT_DEV_AUTH_SECRET=${secret}" >> "$GITHUB_ENV"
+
+      - name: Smoke test
+        run: |
+          pip install -r requirements.txt
+          python scripts/smoke.py \
+            --base-url "${{ steps.rollout.outputs.url }}" \
+            --expect-version "$TAG" \
+            --wait 300

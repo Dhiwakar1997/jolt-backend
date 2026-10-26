@@ -58,8 +58,7 @@ class ConceptStatesRepository(Repository[ConceptState]):
         Backed by the composite index on (user_id, due_at).
         """
         return await self._query(
-            "SELECT * FROM c WHERE c.due_at <= @now ORDER BY c.due_at ASC "
-            "OFFSET 0 LIMIT @limit",
+            "SELECT * FROM c WHERE c.due_at <= @now ORDER BY c.due_at ASC OFFSET 0 LIMIT @limit",
             [
                 {"name": "@now", "value": now.isoformat()},
                 {"name": "@limit", "value": limit},
@@ -70,6 +69,22 @@ class ConceptStatesRepository(Repository[ConceptState]):
     async def all_for_user(self, user_id: str) -> list[ConceptState]:
         return await self._query("SELECT * FROM c", [], partition_value=user_id)
 
+    async def for_track(self, user_id: str, track_id: str) -> list[ConceptState]:
+        """A user's cards on one track (BE-07 Track detail): single-partition."""
+        return await self._query(
+            "SELECT * FROM c WHERE c.track_id = @tid",
+            [{"name": "@tid", "value": track_id}],
+            partition_value=user_id,
+        )
+
+    async def with_corrections(self, user_id: str) -> list[ConceptState]:
+        """Cards with a correction note waiting for the next sync (BE-07 §4)."""
+        return await self._query(
+            "SELECT * FROM c WHERE c.correction_requested_at != @none",
+            [{"name": "@none", "value": None}],
+            partition_value=user_id,
+        )
+
 
 class QuestionsRepository(Repository[Question]):
     container_name = "questions"
@@ -78,7 +93,9 @@ class QuestionsRepository(Repository[Question]):
     async def get_question(self, question_id: str, concept_id: str) -> Optional[Question]:
         return await self.get(question_id, partition_value=concept_id)
 
-    async def list_for_concept(self, concept_id: str, *, active_only: bool = True) -> list[Question]:
+    async def list_for_concept(
+        self, concept_id: str, *, active_only: bool = True
+    ) -> list[Question]:
         if active_only:
             return await self._query(
                 "SELECT * FROM c WHERE c.status = @active",

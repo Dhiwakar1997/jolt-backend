@@ -11,10 +11,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from azure.cosmos.aio import CosmosClient, ContainerProxy, DatabaseProxy
 from azure.cosmos import PartitionKey
+from azure.cosmos.aio import ContainerProxy, CosmosClient, DatabaseProxy
 
 from jolt.config import Settings, get_settings
+from jolt.telemetry import cosmos_response_hook
 
 # Container name -> partition key path (LLD §6 partition strategy).
 CONTAINER_PARTITION_KEYS: dict[str, str] = {
@@ -27,8 +28,11 @@ CONTAINER_PARTITION_KEYS: dict[str, str] = {
     "concept_states": "/user_id",
     "questions": "/concept_id",
     "reviews": "/user_id",
+    "review_sessions": "/user_id",  # BE-06: review session queues
     "answer_feedback": "/review_id",
     "api_keys": "/user_id",
+    "tokens": "/user_id",  # app + MCP tokens (BE-03); resolved by the indexed `lookup`
+    "sync_runs": "/user_id",  # nightly sync runs (BE-04)
 }
 
 # Composite / range indexes worth declaring for the hot queries (LLD §6 query
@@ -39,12 +43,28 @@ COMPOSITE_INDEXES: dict[str, list[list[dict]]] = {
         [{"path": "/user_id", "order": "ascending"}, {"path": "/due_at", "order": "ascending"}],
     ],
     "sources": [
-        [{"path": "/processing_status", "order": "ascending"}, {"path": "/created_at", "order": "ascending"}],
+        [
+            {"path": "/processing_status", "order": "ascending"},
+            {"path": "/created_at", "order": "ascending"},
+        ],
     ],
     "reviews": [
         [{"path": "/status", "order": "ascending"}, {"path": "/created_at", "order": "ascending"}],
     ],
 }
+
+
+def indexing_policy(container: str) -> dict | None:
+    """The container's indexing policy, or None for the Cosmos default."""
+    if container not in COMPOSITE_INDEXES:
+        return None
+    return {
+        "automatic": True,
+        "indexingMode": "consistent",
+        "includedPaths": [{"path": "/*"}],
+        "excludedPaths": [{"path": '/"_etag"/?'}],
+        "compositeIndexes": COMPOSITE_INDEXES[container],
+    }
 
 
 @dataclass
@@ -65,44 +85,54 @@ class CosmosGateway:
 
 def _build_client(settings: Settings) -> CosmosClient:
     if not settings.cosmos_endpoint:
-        raise RuntimeError(
-            "COSMOS_ENDPOINT is not set. Fill it in .env after deploying Cosmos."
-        )
+        raise RuntimeError("COSMOS_ENDPOINT is not set. Fill it in .env after deploying Cosmos.")
     if settings.use_managed_identity:
         # Imported lazily so `key` mode has no Azure Identity dependency at import.
         from azure.identity.aio import DefaultAzureCredential
 
-        return CosmosClient(settings.cosmos_endpoint, credential=DefaultAzureCredential())
-    if not settings.cosmos_key:
-        raise RuntimeError(
-            "AUTH_MODE=key but COSMOS_KEY is empty. Set COSMOS_KEY in .env."
+        return CosmosClient(
+            settings.cosmos_endpoint,
+            credential=DefaultAzureCredential(),
+            raw_response_hook=cosmos_response_hook,
         )
-    return CosmosClient(settings.cosmos_endpoint, credential=settings.cosmos_key)
+    if not settings.cosmos_key:
+        raise RuntimeError("AUTH_MODE=key but COSMOS_KEY is empty. Set COSMOS_KEY in .env.")
+    # raw_response_hook: the RU charge of every response, per route / tool (BE-10).
+    return CosmosClient(
+        settings.cosmos_endpoint,
+        credential=settings.cosmos_key,
+        raw_response_hook=cosmos_response_hook,
+    )
 
 
 async def init_cosmos(settings: Settings | None = None) -> CosmosGateway:
-    """Create the client, ensure database + containers exist, return the gateway.
+    """Create the client and return the gateway with one client per container.
 
     Called once from the FastAPI lifespan (LLD §4 main.py assembly).
+
+    With a key (local dev / emulator) the database and containers are created if
+    missing. Under Managed Identity they are not: Cosmos data-plane RBAC (the
+    "Built-in Data Contributor" role the app holds) cannot create databases or
+    containers, so in Azure they are provisioned by `infra/` (Bicep) from
+    `infra/cosmos-containers.json`, which a test keeps in step with
+    `CONTAINER_PARTITION_KEYS` / `COMPOSITE_INDEXES` above.
     """
     settings = settings or get_settings()
     client = _build_client(settings)
-    database = await client.create_database_if_not_exists(id=settings.cosmos_database)
 
+    if settings.use_managed_identity:
+        database = client.get_database_client(settings.cosmos_database)
+        containers = {
+            name: database.get_container_client(name) for name in CONTAINER_PARTITION_KEYS
+        }
+        return CosmosGateway(client=client, database=database, _containers=containers)
+
+    database = await client.create_database_if_not_exists(id=settings.cosmos_database)
     containers: dict[str, ContainerProxy] = {}
     for name, pk_path in CONTAINER_PARTITION_KEYS.items():
-        indexing_policy = None
-        if name in COMPOSITE_INDEXES:
-            indexing_policy = {
-                "automatic": True,
-                "indexingMode": "consistent",
-                "includedPaths": [{"path": "/*"}],
-                "excludedPaths": [{"path": '/"_etag"/?'}],
-                "compositeIndexes": COMPOSITE_INDEXES[name],
-            }
         containers[name] = await database.create_container_if_not_exists(
             id=name,
             partition_key=PartitionKey(path=pk_path),
-            indexing_policy=indexing_policy,
+            indexing_policy=indexing_policy(name),
         )
     return CosmosGateway(client=client, database=database, _containers=containers)

@@ -288,7 +288,7 @@ App → POST /v1/reviews/{q}/stage1  { free_text }
       ← { options, ... }   (stage-2 payload released only now)
 App → POST /v1/reviews/{q}/stage2  { selected_index }
         is_correct = (selected == correct_index)
-        provisional_fsrs_grade = synthesise(is_correct, stage1_len, latency)
+        provisional_fsrs_grade = synthesise(is_correct, trimmed stage1_len)  # A52: Again / Hard (blank) / Good
         apply provisional grade to concept_state, set due_at
       ← { correct, expected_answer }
 ```
@@ -395,8 +395,8 @@ The guiding assumption: every write path can be safely retried. Agents drop conn
 ## 11. Open questions (LLD-specific)
 
 - **Key-backed feature execution locus (deferred).** When the later intelligence features are built, each one is either a server-side call (Jolt retrieves the key, calls the model, inference on Jolt's compute) or a client-handoff (the app calls the model directly). Storing the key server-side keeps both open; decide per feature when built, not now. On-demand doc processing leans server-side; interactive question-answering could go either way.
-- **MCP transport auth mechanics.** Exactly how the per-user token rides the MCP connection (header vs. init param) depends on the client. Verify against Claude Desktop's and Codex's current MCP config format before finalising `auth/context.py`.
-- **Session boundary.** `jolt_log_session` assumes one session per sync. If an overnight sync processes three days of backlog uploads, is that one session or three (by upload date)? Affects the understanding-over-time timeline granularity.
+- **MCP transport auth mechanics.** Exactly how the per-user token rides the MCP connection (header vs. init param) depends on the client. Verify against Claude Desktop's and Codex's current MCP config format before finalising `auth/context.py`. *Resolved in BE-04:* `Authorization: Bearer` header, or `?token=` on the event-stream URL for URL-only connectors; per-client setup in `docs/CONNECT.md` (real-client confirmation pending deploy).
+- **Session boundary.** `jolt_log_session` assumes one session per sync. If an overnight sync processes three days of backlog uploads, is that one session or three (by upload date)? Affects the understanding-over-time timeline granularity. *Resolved (decision D6, BE-04):* one session per upload date.
 - **Reconciliation atomicity ceiling.** A supersede that reclassifies 50 concepts exceeds a single transactional-batch partition limit. Need a documented max, or a resumable multi-batch reconciliation with a checkpoint.
 - **Curated content storage.** Do curated tracks live in the same Cosmos containers with `user_id: null`, or a separate read-only container? Same-container is simpler; separate isolates the global-read path more strictly.
 - **Cold-start on FSRS job.** Scale-to-zero on a cron job means a cold container each run. Fine for a nightly recompute; verify the FSRS fold over a large user's history finishes inside the job timeout.

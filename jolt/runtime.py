@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from jolt.auth.google import GoogleIdTokenVerifier
 from jolt.config import Settings, get_settings
 from jolt.credentials.vault import VaultClient
 from jolt.data.blob import BlobGateway, init_blob
@@ -25,11 +26,14 @@ from jolt.data.repositories.concepts import (
 from jolt.data.repositories.credentials import ApiKeyRefRepository
 from jolt.data.repositories.reviews import (
     AnswerFeedbackRepository,
+    ReviewSessionsRepository,
     ReviewsRepository,
     SessionsRepository,
 )
 from jolt.data.repositories.sources import ExtractionsRepository, SourcesRepository
-from jolt.data.repositories.tracks import TracksRepository
+from jolt.data.repositories.sync_runs import SyncRunsRepository
+from jolt.data.repositories.tokens import TokensRepository
+from jolt.data.repositories.tracks import TrackContentRepository, TracksRepository
 from jolt.data.repositories.users import UsersRepository
 
 
@@ -45,7 +49,11 @@ class Repositories:
     reviews: ReviewsRepository
     answer_feedback: AnswerFeedbackRepository
     sessions: SessionsRepository
+    review_sessions: ReviewSessionsRepository
     api_keys: ApiKeyRefRepository
+    tokens: TokensRepository
+    sync_runs: SyncRunsRepository
+    track_content: TrackContentRepository  # BE-09 curated track content
 
 
 class Runtime:
@@ -71,16 +79,34 @@ class Runtime:
             reviews=ReviewsRepository(cosmos),
             answer_feedback=AnswerFeedbackRepository(cosmos),
             sessions=SessionsRepository(cosmos),
+            review_sessions=ReviewSessionsRepository(cosmos),
             api_keys=ApiKeyRefRepository(cosmos),
+            tokens=TokensRepository(cosmos),
+            sync_runs=SyncRunsRepository(cosmos),
+            track_content=TrackContentRepository(cosmos),
         )
+        # Google ID token verifier for sign-in (BE-03). Fetches Google's keys
+        # lazily, so building it does no I/O; tests swap in one with their own key.
+        self.google = GoogleIdTokenVerifier(settings.google_client_ids)
 
     @classmethod
     async def create(cls, settings: Settings | None = None) -> "Runtime":
         settings = settings or get_settings()
+        if settings.storage_mode == "memory":
+            return cls.in_memory(settings)
         cosmos = await init_cosmos(settings)
         blob = await init_blob(settings)
         vault = VaultClient(settings)
         return cls(settings, cosmos, blob, vault)
+
+    @classmethod
+    def in_memory(cls, settings: Settings | None = None) -> "Runtime":
+        """A runtime over the in-memory fakes (decision A8): no Azure needed."""
+        from jolt.data.memory import build_memory_gateways
+
+        settings = settings or get_settings()
+        cosmos, blob, vault = build_memory_gateways(settings)
+        return cls(settings, cosmos, blob, vault)  # type: ignore[arg-type]
 
     async def close(self) -> None:
         await self.cosmos.close()

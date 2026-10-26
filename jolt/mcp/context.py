@@ -5,6 +5,7 @@ The per-user token rides the MCP connection as an `Authorization: Bearer` header
 Claude Desktop / Codex send). An ASGI middleware on the mounted MCP app copies that
 header into a contextvar for the duration of each request, and tools resolve it to
 a `user_id` before touching any data — the same scope enforcement as the REST side.
+`/mcp` accepts **MCP tokens** only (BE-03); an app token is rejected.
 """
 
 from __future__ import annotations
@@ -12,7 +13,8 @@ from __future__ import annotations
 from contextvars import ContextVar
 from typing import Optional
 
-from jolt.auth.context import UserContext, resolve_token
+from jolt.auth.context import AuthError, UserContext, authenticate
+from jolt.domain.models import TokenKind
 from jolt.runtime import Runtime
 
 _current_token: ContextVar[Optional[str]] = ContextVar("jolt_mcp_token", default=None)
@@ -34,16 +36,30 @@ def set_current_token(token: Optional[str]) -> None:
     _current_token.set(token)
 
 
+def current_token() -> Optional[str]:
+    """The connection's token, unverified (the per-token rate limit keys on it)."""
+    return _current_token.get()
+
+
 class MCPAuthError(Exception):
     pass
 
 
+async def authenticate_mcp(token: Optional[str]) -> UserContext:
+    """Resolve an MCP token → UserContext, or raise MCPAuthError."""
+    rt = get_runtime()
+    try:
+        return await authenticate(
+            token,
+            kind=TokenKind.MCP,
+            tokens=rt.repos.tokens,
+            users=rt.repos.users,
+            pepper=rt.settings.token_hash_pepper,
+        )
+    except AuthError as exc:
+        raise MCPAuthError(str(exc)) from exc
+
+
 async def require_user() -> UserContext:
     """Resolve the current connection's token → UserContext, or raise."""
-    token = _current_token.get()
-    if not token:
-        raise MCPAuthError("missing bearer token on MCP connection")
-    ctx = await resolve_token(token, get_runtime().repos.users)
-    if ctx is None:
-        raise MCPAuthError("invalid token")
-    return ctx
+    return await authenticate_mcp(_current_token.get())

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Optional
 
 from jolt.credentials.providers import get_adapter
 from jolt.domain.models import ApiKeyRef
@@ -24,6 +25,7 @@ class StoredKey:
     provider: str
     last4: str
     status: str
+    added_at: Optional[datetime] = None
 
 
 class CredentialService:
@@ -45,7 +47,9 @@ class CredentialService:
             existing.key_ref = key_ref
             existing.last4 = result.last4
             existing.last_validated_at = now
+            existing.added_at = now  # a replaced key is a new key
             await self._rt.repos.api_keys.upsert(existing)
+            added_at = now
         else:
             ref = ApiKeyRef(
                 user_id=user_id,
@@ -54,9 +58,11 @@ class CredentialService:
                 last4=result.last4,
                 last_validated_at=now,
             )
-            await self._rt.repos.api_keys.create(ref)
+            added_at = (await self._rt.repos.api_keys.create(ref)).added_at
 
-        return StoredKey(provider=adapter.name, last4=result.last4, status="validated")
+        return StoredKey(
+            provider=adapter.name, last4=result.last4, status="validated", added_at=added_at
+        )
 
     async def delete(self, user_id: str, provider: str) -> None:
         adapter = get_adapter(provider)
@@ -68,4 +74,8 @@ class CredentialService:
 
     async def list_keys(self, user_id: str) -> list[StoredKey]:
         refs = await self._rt.repos.api_keys.list_for_user(user_id)
-        return [StoredKey(provider=r.provider, last4=r.last4, status="stored") for r in refs]
+        refs.sort(key=lambda r: r.added_at, reverse=True)
+        return [
+            StoredKey(provider=r.provider, last4=r.last4, status="stored", added_at=r.added_at)
+            for r in refs
+        ]

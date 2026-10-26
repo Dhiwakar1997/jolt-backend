@@ -1,0 +1,107 @@
+{
+  "containers": [
+    {
+      "name": "users",
+      "partitionKey": "/id",
+      "compositeIndexes": []
+    },
+    {
+      "name": "tracks",
+      "partitionKey": "/user_id",
+      "compositeIndexes": []
+    },
+    {
+      "name": "sources",
+      "partitionKey": "/user_id",
+      "compositeIndexes": [
+        [
+          {
+            "path": "/processing_status",
+            "order": "ascending"
+          },
+          {
+            "path": "/created_at",
+            "order": "ascending"
+          }
+        ]
+      ]
+    },
+    {
+      "name": "extractions",
+      "partitionKey": "/source_id",
+      "compositeIndexes": []
+    },
+    {
+      "name": "sessions",
+      "partitionKey": "/user_id",
+      "compositeIndexes": []
+    },
+    {
+      "name": "concepts",
+      "partitionKey": "/track_id",
+      "compositeIndexes": []
+    },
+    {
+      "name": "concept_states",
+      "partitionKey": "/user_id",
+      "compositeIndexes": [
+        [
+          {
+            "path": "/user_id",
+            "order": "ascending"
+          },
+          {
+            "path": "/due_at",
+            "order": "ascending"
+          }
+        ]
+      ]
+    },
+    {
+      "name": "questions",
+      "partitionKey": "/concept_id",
+      "compositeIndexes": []
+    },
+    {
+      "name": "reviews",
+      "partitionKey": "/user_id",
+      "compositeIndexes": [
+        [
+          {
+            "path": "/status",
+            "order": "ascending"
+          },
+          {
+            "path": "/created_at",
+            "order": "ascending"
+          }
+        ]
+      ]
+    },
+    {
+      "name": "review_sessions",
+      "partitionKey": "/user_id",
+      "compositeIndexes": []
+    },
+    {
+      "name": "answer_feedback",
+      "partitionKey": "/review_id",
+      "compositeIndexes": []
+    },
+    {
+      "name": "api_keys",
+      "partitionKey": "/user_id",
+      "compositeIndexes": []
+    },
+    {
+      "name": "tokens",
+      "partitionKey": "/user_id",
+      "compositeIndexes": []
+    },
+    {
+      "name": "sync_runs",
+      "partitionKey": "/user_id",
+      "compositeIndexes": []
+    }
+  ]
+}

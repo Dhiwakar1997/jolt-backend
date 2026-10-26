@@ -54,12 +54,32 @@ class SourceLeases:
             return None
         source.processing_status = ProcessingStatus.IN_FLIGHT
         source.lease_expires_at = _lease_expiry()
+        source.claim_count += 1
+        source.claimed_at = _now()
         return await self._repo.replace(source, etag=source.etag)
 
     async def release_processed(self, source: Source, active_extraction_id: str) -> Source | None:
-        source.processing_status = ProcessingStatus.PROCESSED
+        """Point the source at its new read and clear the lease.
+
+        A pending read-again request is answered by this read if it was made
+        before the sync claimed the source. One made while the sync was already
+        running is kept, and the source goes back to `unprocessed` so the next
+        sync reads it again (BE-05).
+        """
+        answered = source.reread_requested_at is None or (
+            source.claimed_at is not None and source.reread_requested_at <= source.claimed_at
+        )
+        if answered:
+            source.processing_status = ProcessingStatus.PROCESSED
+            source.reread_requested_at = None
+            source.reread_preferred_model = None
+        else:
+            source.processing_status = ProcessingStatus.UNPROCESSED
         source.lease_expires_at = None
+        source.claim_count = 0
+        source.failed_reason = None
         source.active_extraction_id = active_extraction_id
+        source.read_count += 1
         return await self._repo.replace(source, etag=source.etag)
 
 
@@ -68,12 +88,8 @@ class ReviewLeases:
         self._repo = repo
 
     async def claim(self, review: Review) -> Review | None:
-        claimable = _lease_available(
-            review.status == ReviewStatus.PENDING_GRADING,
-            review.free_text_locked_at and _lease_expiry(),
-        )
-        # Pending gradings use free_text_locked_at as their claim marker; a simple
-        # status check suffices for MVP (no long-held grading lease field yet).
+        # Pending gradings have no lease field yet; a plain status check suffices
+        # for the MVP (gradings are applied idempotently, so a double claim is safe).
         if review.status != ReviewStatus.PENDING_GRADING:
             return None
         return review

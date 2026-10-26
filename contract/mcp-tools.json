@@ -1,0 +1,2438 @@
+{
+  "server": "jolt",
+  "transport": "sse",
+  "endpoint": "/mcp/sse",
+  "auth": "Authorization: Bearer <MCP token> (jolt_live_..., from POST /v1/mcp-tokens), or ?token=<MCP token> on /mcp/sse for URL-only connectors (MCP_QUERY_TOKEN_ENABLED). App tokens are refused: opening /mcp/sse answers 401, tool calls fail. See docs/CONNECT.md.",
+  "errors": "Tools whose output_schema is a union with {error} return that object for recoverable problems. Any other failure (missing/invalid token, unknown source, invalid grade) is raised and arrives as an MCP tool error (isError: true) with the message as text.",
+  "tools": [
+    {
+      "name": "jolt_get_tracks",
+      "description": "List the study tracks visible to the caller: their own tracks plus the world-readable curated ('jolt') tracks. A track is a subject/course that concepts hang off of.\nArguments: none.\nReturns: { tracks: [ { id, name, origin, kind, archived, syllabus, agenda } ] } where `origin` is 'user' or 'jolt' (curated, read-only), `kind` is 'notes' or 'dsa_patterns', and `archived` is true for a track the learner paused (do not file new concepts there unless the note clearly belongs to it). `syllabus` is a flat list of the agenda's topic labels (convenience). `agenda` is the full track agenda: { status ('none'|'draft'|'refined'|'locked'), source ('agent'|'user'|'emergent'), syllabus: [ { concept_key, label, parent, source } ], last_refined_at, refined_from_source_id, outline }. An agenda with status 'draft', source 'user' and an `outline` is a rough outline the learner typed when creating the track: tidy it into a proper syllabus with jolt_set_agenda (mark_refined=true) during this sync, keeping the learner's topics. Use a track `id` as `track_id` for the agenda, concept, coverage, question, and extraction tools. Read-only.",
+      "input_schema": {
+        "properties": {},
+        "title": "get_tracksArguments",
+        "type": "object"
+      },
+      "output_schema": {
+        "$defs": {
+          "AgendaOut": {
+            "additionalProperties": false,
+            "properties": {
+              "status": {
+                "enum": [
+                  "none",
+                  "draft",
+                  "refined",
+                  "locked"
+                ],
+                "title": "Status",
+                "type": "string"
+              },
+              "source": {
+                "enum": [
+                  "agent",
+                  "user",
+                  "emergent"
+                ],
+                "title": "Source",
+                "type": "string"
+              },
+              "syllabus": {
+                "items": {
+                  "$ref": "#/$defs/SyllabusItemOut"
+                },
+                "title": "Syllabus",
+                "type": "array"
+              },
+              "last_refined_at": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Last Refined At"
+              },
+              "refined_from_source_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Refined From Source Id"
+              },
+              "outline": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Outline"
+              }
+            },
+            "required": [
+              "status",
+              "source",
+              "syllabus",
+              "last_refined_at",
+              "refined_from_source_id",
+              "outline"
+            ],
+            "title": "AgendaOut",
+            "type": "object"
+          },
+          "SyllabusItemOut": {
+            "additionalProperties": false,
+            "properties": {
+              "concept_key": {
+                "title": "Concept Key",
+                "type": "string"
+              },
+              "label": {
+                "title": "Label",
+                "type": "string"
+              },
+              "parent": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Parent"
+              },
+              "source": {
+                "enum": [
+                  "agent",
+                  "user",
+                  "emergent"
+                ],
+                "title": "Source",
+                "type": "string"
+              }
+            },
+            "required": [
+              "concept_key",
+              "label",
+              "parent",
+              "source"
+            ],
+            "title": "SyllabusItemOut",
+            "type": "object"
+          },
+          "TrackOut": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "title": "Id",
+                "type": "string"
+              },
+              "name": {
+                "title": "Name",
+                "type": "string"
+              },
+              "origin": {
+                "enum": [
+                  "user",
+                  "jolt"
+                ],
+                "title": "Origin",
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "notes",
+                  "dsa_patterns"
+                ],
+                "title": "Kind",
+                "type": "string"
+              },
+              "archived": {
+                "title": "Archived",
+                "type": "boolean"
+              },
+              "syllabus": {
+                "items": {
+                  "type": "string"
+                },
+                "title": "Syllabus",
+                "type": "array"
+              },
+              "agenda": {
+                "$ref": "#/$defs/AgendaOut"
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "origin",
+              "kind",
+              "archived",
+              "syllabus",
+              "agenda"
+            ],
+            "title": "TrackOut",
+            "type": "object"
+          }
+        },
+        "additionalProperties": false,
+        "properties": {
+          "tracks": {
+            "items": {
+              "$ref": "#/$defs/TrackOut"
+            },
+            "title": "Tracks",
+            "type": "array"
+          }
+        },
+        "required": [
+          "tracks"
+        ],
+        "title": "GetTracksOut",
+        "type": "object"
+      }
+    },
+    {
+      "name": "jolt_get_recent_concepts",
+      "description": "List a track's most recently created concepts, newest first — use it to see what already exists before logging a session, so you extend coverage instead of duplicating concepts.\nArguments:\n  track_id (str, required) — the track to read, from jolt_get_tracks.\n  limit (int, optional, default 20) — max concepts to return.\nReturns: { concepts: [ { id, text, title, syllabus_ref } ] }. `syllabus_ref` is the agenda concept_key the concept is filed under, or null. Only the caller's own concepts are listed (on a curated track, the ones they logged). Raises if the track is neither the caller's nor curated. Read-only.",
+      "input_schema": {
+        "properties": {
+          "track_id": {
+            "title": "Track Id",
+            "type": "string"
+          },
+          "limit": {
+            "default": 20,
+            "title": "Limit",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "track_id"
+        ],
+        "title": "get_recent_conceptsArguments",
+        "type": "object"
+      },
+      "output_schema": {
+        "$defs": {
+          "RecentConceptOut": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "title": "Id",
+                "type": "string"
+              },
+              "text": {
+                "title": "Text",
+                "type": "string"
+              },
+              "title": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Title"
+              },
+              "syllabus_ref": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Syllabus Ref"
+              }
+            },
+            "required": [
+              "id",
+              "text",
+              "title",
+              "syllabus_ref"
+            ],
+            "title": "RecentConceptOut",
+            "type": "object"
+          }
+        },
+        "additionalProperties": false,
+        "properties": {
+          "concepts": {
+            "items": {
+              "$ref": "#/$defs/RecentConceptOut"
+            },
+            "title": "Concepts",
+            "type": "array"
+          }
+        },
+        "required": [
+          "concepts"
+        ],
+        "title": "GetRecentConceptsOut",
+        "type": "object"
+      }
+    },
+    {
+      "name": "jolt_get_coverage",
+      "description": "Report how well the caller's studied concepts cover a track's syllabus — the signal for what to study or extract next.\nArguments:\n  track_id (str, required) — the track to measure, from jolt_get_tracks.\nReturns: { track_id, total_concepts, studied_concepts, decaying_concepts, off_plan_concepts, coverage_ratio (0..1), uncovered_syllabus: [concept_keys] }. `studied_concepts` are those the user has an FSRS memory state for; `decaying_concepts` are studied ones whose recall has weakened or fallen due; `uncovered_syllabus` lists syllabus keys with no studied concept yet. `off_plan_concepts` are concepts on a LOCKED track whose key is not in the syllabus (auto-add is skipped there): they are kept and reviewed but left out of every other count. Raises if the track is neither the caller's nor curated. Read-only.",
+      "input_schema": {
+        "properties": {
+          "track_id": {
+            "title": "Track Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "track_id"
+        ],
+        "title": "get_coverageArguments",
+        "type": "object"
+      },
+      "output_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "track_id": {
+            "title": "Track Id",
+            "type": "string"
+          },
+          "total_concepts": {
+            "title": "Total Concepts",
+            "type": "integer"
+          },
+          "studied_concepts": {
+            "title": "Studied Concepts",
+            "type": "integer"
+          },
+          "decaying_concepts": {
+            "title": "Decaying Concepts",
+            "type": "integer"
+          },
+          "off_plan_concepts": {
+            "title": "Off Plan Concepts",
+            "type": "integer"
+          },
+          "coverage_ratio": {
+            "title": "Coverage Ratio",
+            "type": "number"
+          },
+          "uncovered_syllabus": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Uncovered Syllabus",
+            "type": "array"
+          }
+        },
+        "required": [
+          "track_id",
+          "total_concepts",
+          "studied_concepts",
+          "decaying_concepts",
+          "off_plan_concepts",
+          "coverage_ratio",
+          "uncovered_syllabus"
+        ],
+        "title": "GetCoverageOut",
+        "type": "object"
+      }
+    },
+    {
+      "name": "jolt_get_agenda",
+      "description": "Get a track's agenda — its shaped syllabus and refinement lifecycle. Call this before refining (jolt_set_agenda) so you EXTEND the existing syllabus rather than replace it, and to check whether the agenda is locked (a locked agenda rejects every write).\nArguments:\n  track_id (str, required) — the track to read, from jolt_get_tracks.\nReturns: { status ('none'|'draft'|'refined'|'locked'), source ('agent'|'user'|'emergent'), syllabus: [ { concept_key, label, parent, source } ], last_refined_at, refined_from_source_id, outline }, or { error } if the track is not the caller's (or curated). `concept_key` is the stable key a concept's syllabus_ref points at; `parent` (another item's concept_key) nests the item, null for a leaf/root; an item's `source` says who added it ('user': the learner, 'agent': a refine, 'emergent': auto-added from notes). `outline` is the learner's raw outline when the track was created with one (a 'draft' for you to tidy), else null. Read-only.",
+      "input_schema": {
+        "properties": {
+          "track_id": {
+            "title": "Track Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "track_id"
+        ],
+        "title": "get_agendaArguments",
+        "type": "object"
+      },
+      "output_schema": {
+        "$defs": {
+          "AgendaOut": {
+            "additionalProperties": false,
+            "properties": {
+              "status": {
+                "enum": [
+                  "none",
+                  "draft",
+                  "refined",
+                  "locked"
+                ],
+                "title": "Status",
+                "type": "string"
+              },
+              "source": {
+                "enum": [
+                  "agent",
+                  "user",
+                  "emergent"
+                ],
+                "title": "Source",
+                "type": "string"
+              },
+              "syllabus": {
+                "items": {
+                  "$ref": "#/$defs/SyllabusItemOut"
+                },
+                "title": "Syllabus",
+                "type": "array"
+              },
+              "last_refined_at": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Last Refined At"
+              },
+              "refined_from_source_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Refined From Source Id"
+              },
+              "outline": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Outline"
+              }
+            },
+            "required": [
+              "status",
+              "source",
+              "syllabus",
+              "last_refined_at",
+              "refined_from_source_id",
+              "outline"
+            ],
+            "title": "AgendaOut",
+            "type": "object"
+          },
+          "SyllabusItemOut": {
+            "additionalProperties": false,
+            "properties": {
+              "concept_key": {
+                "title": "Concept Key",
+                "type": "string"
+              },
+              "label": {
+                "title": "Label",
+                "type": "string"
+              },
+              "parent": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Parent"
+              },
+              "source": {
+                "enum": [
+                  "agent",
+                  "user",
+                  "emergent"
+                ],
+                "title": "Source",
+                "type": "string"
+              }
+            },
+            "required": [
+              "concept_key",
+              "label",
+              "parent",
+              "source"
+            ],
+            "title": "SyllabusItemOut",
+            "type": "object"
+          },
+          "ToolError": {
+            "additionalProperties": false,
+            "properties": {
+              "error": {
+                "title": "Error",
+                "type": "string"
+              }
+            },
+            "required": [
+              "error"
+            ],
+            "title": "ToolError",
+            "type": "object"
+          }
+        },
+        "anyOf": [
+          {
+            "$ref": "#/$defs/AgendaOut"
+          },
+          {
+            "$ref": "#/$defs/ToolError"
+          }
+        ]
+      }
+    },
+    {
+      "name": "jolt_get_pending_corrections",
+      "description": "List the learner's correction notes waiting for this sync — the concepts they flagged in the app with \"Something's wrong with this concept\".\nArguments: none.\nReturns: { corrections: [ { concept_id, track_id, title, text, notes: [ { note, created_at } ] } ] }, oldest request first. `text` is the concept as stored; `notes` are the learner's words, oldest first. For each, decide the corrected text (check the source with jolt_get_source_content if needed) and call jolt_correct_concept { track_id, concept_id, text }, which clears the notes. Read-only.",
+      "input_schema": {
+        "properties": {},
+        "title": "get_pending_correctionsArguments",
+        "type": "object"
+      },
+      "output_schema": {
+        "$defs": {
+          "CorrectionNoteOut": {
+            "additionalProperties": false,
+            "properties": {
+              "note": {
+                "title": "Note",
+                "type": "string"
+              },
+              "created_at": {
+                "title": "Created At",
+                "type": "string"
+              }
+            },
+            "required": [
+              "note",
+              "created_at"
+            ],
+            "title": "CorrectionNoteOut",
+            "type": "object"
+          },
+          "PendingCorrectionOut": {
+            "additionalProperties": false,
+            "properties": {
+              "concept_id": {
+                "title": "Concept Id",
+                "type": "string"
+              },
+              "track_id": {
+                "title": "Track Id",
+                "type": "string"
+              },
+              "title": {
+                "title": "Title",
+                "type": "string"
+              },
+              "text": {
+                "title": "Text",
+                "type": "string"
+              },
+              "notes": {
+                "items": {
+                  "$ref": "#/$defs/CorrectionNoteOut"
+                },
+                "title": "Notes",
+                "type": "array"
+              }
+            },
+            "required": [
+              "concept_id",
+              "track_id",
+              "title",
+              "text",
+              "notes"
+            ],
+            "title": "PendingCorrectionOut",
+            "type": "object"
+          }
+        },
+        "additionalProperties": false,
+        "properties": {
+          "corrections": {
+            "items": {
+              "$ref": "#/$defs/PendingCorrectionOut"
+            },
+            "title": "Corrections",
+            "type": "array"
+          }
+        },
+        "required": [
+          "corrections"
+        ],
+        "title": "GetPendingCorrectionsOut",
+        "type": "object"
+      }
+    },
+    {
+      "name": "jolt_request_upload_url",
+      "description": "Mint a short-TTL SAS URL for uploading one source file straight to Blob storage. Jolt compute never receives the bytes — the holder of the URL PUTs them directly. Call this only when you have a file to store; extraction reads existing sources via jolt_get_source_content instead.\nArguments:\n  filename (str, required) — original filename; becomes part of the blob path.\n  content_type (str, required) — MIME type; one of 'image/jpeg', 'image/png', 'image/heic', 'image/webp', 'application/pdf'.\n  sha256 (str, required) — hex SHA-256 (64 hex characters) of the exact bytes to be uploaded; confirm hashes the stored bytes and rejects a mismatch.\nReturns: { source_id, upload_url }, or { error } for an unsupported content_type or a malformed sha256. The upload_url expires (minutes) and is scoped to exactly one blob path — PUT the bytes to it (at most 25 MiB by default), then the app confirms the upload over REST (POST /v1/uploads/{source_id}/confirm); an unconfirmed source is never offered to a sync. The source stays 'unprocessed' until a sync claims it. Re-calling mints a new source, not a retry of an old one.",
+      "input_schema": {
+        "properties": {
+          "filename": {
+            "title": "Filename",
+            "type": "string"
+          },
+          "content_type": {
+            "title": "Content Type",
+            "type": "string"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          }
+        },
+        "required": [
+          "filename",
+          "content_type",
+          "sha256"
+        ],
+        "title": "request_upload_urlArguments",
+        "type": "object"
+      },
+      "output_schema": {
+        "$defs": {
+          "RequestUploadUrlOut": {
+            "additionalProperties": false,
+            "properties": {
+              "source_id": {
+                "title": "Source Id",
+                "type": "string"
+              },
+              "upload_url": {
+                "title": "Upload Url",
+                "type": "string"
+              }
+            },
+            "required": [
+              "source_id",
+              "upload_url"
+            ],
+            "title": "RequestUploadUrlOut",
+            "type": "object"
+          },
+          "ToolError": {
+            "additionalProperties": false,
+            "properties": {
+              "error": {
+                "title": "Error",
+                "type": "string"
+              }
+            },
+            "required": [
+              "error"
+            ],
+            "title": "ToolError",
+            "type": "object"
+          }
+        },
+        "anyOf": [
+          {
+            "$ref": "#/$defs/RequestUploadUrlOut"
+          },
+          {
+            "$ref": "#/$defs/ToolError"
+          }
+        ]
+      }
+    },
+    {
+      "name": "jolt_log_session",
+      "description": "Record a study session and create its concepts, each with a fresh, immediately-due FSRS card so it enters the review rotation at once. This is how extracted material becomes reviewable. Call it once per processed source (or batch of sources) after jolt_store_extraction, before jolt_create_questions.\nArguments:\n  source_ids (list[str], required) — the source(s) this session came from; use [] if none. Records provenance for the timeline.\n  concepts (list[dict], required) — one dict per concept to create. Each dict:\n      text (str, required) — the concept statement to be learned; the atom of recall, one idea per concept. Keep it self-contained.\n      track_id (str, required) — the track this concept belongs to (from jolt_get_tracks); must be one of the caller's OWN tracks (curated tracks are read-only). Different concepts in one call may target different tracks.\n      title (str, optional) — a short label for the concept.\n      syllabus_ref (str, optional) — legacy alias for `concept_key`; used as the concept_key when `concept_key` is omitted. Drives coverage.\n      concept_key (str, optional) — the agenda key this concept covers. If it is not yet in the track's agenda syllabus it is AUTO-ADDED (as a leaf, or under `parent`), so the agenda grows to fit what's learned. Auto-add is keyed on concept_key membership, so it is idempotent and skipped on a locked agenda. Falls back to `syllabus_ref` if omitted.\n      parent (str, optional) — an existing agenda concept_key to nest this concept under when it is auto-added; ignored if it does not resolve.\n      source_id (str, optional) — the specific source this concept came from. Give it: the concept is then credited to that source's active extraction (the app's 'Found N concepts' on the source's past reads), and it decides the concept's session.\n      page (int, optional) — the 1-based page of that source the concept is on (shown to the learner as where it was found).\nSessions follow upload days: each concept is filed in the session of its source's upload date (a concept without source_id goes with the first listed source), so concepts from sources uploaded on different days produce one session per day.\nRaises, writing nothing, if a track is not one of the caller's own or a source id (in `source_ids` or a concept's `source_id`) is not one of their sources.\nReturns: { session_id, session_ids, concept_ids }. `session_ids` has one id per upload date, oldest first; `session_id` is the first of them. `concept_ids` are returned in the SAME order as the input `concepts`, so map each returned id back to its concept and pass it as `concept_id` to jolt_create_questions. Creating a concept without questions leaves it due but unanswerable, so always follow with jolt_create_questions. Not idempotent — calling twice creates duplicate concepts; check jolt_get_recent_concepts first if retrying.",
+      "input_schema": {
+        "properties": {
+          "source_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Source Ids",
+            "type": "array"
+          },
+          "concepts": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Concepts",
+            "type": "array"
+          }
+        },
+        "required": [
+          "source_ids",
+          "concepts"
+        ],
+        "title": "log_sessionArguments",
+        "type": "object"
+      },
+      "output_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "session_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Session Ids",
+            "type": "array"
+          },
+          "concept_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Concept Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "session_id",
+          "session_ids",
+          "concept_ids"
+        ],
+        "title": "LogSessionOut",
+        "type": "object"
+      }
+    },
+    {
+      "name": "jolt_set_agenda",
+      "description": "Write (replace) a track's agenda syllabus — the refinement step of a sync. ALWAYS read jolt_get_agenda first and build on what's there: this REPLACES the whole syllabus, so anything you omit is dropped. The backend only stores what you send; it never shapes or infers a syllabus — the shaping is yours.\nArguments:\n  track_id (str, required) — the track to refine, from jolt_get_tracks.\n  syllabus (list[dict], required) — the full replacement syllabus, one dict per item. Each dict:\n      concept_key (str, required) — stable key; concepts' syllabus_ref/concept_key join on it. Keep keys stable across refines so coverage and auto-add line up.\n      label (str, required) — human-readable topic name.\n      parent (str, optional) — another item's concept_key to nest under; omit for a top-level item.\n      source (str, optional) — who added this item: 'agent', 'user' or 'emergent'. Omit it: an item whose concept_key already exists keeps its provenance, a new one gets the call's `source`.\n  source (str, optional, default 'agent') — who shaped it: 'agent', 'user', or 'emergent'.\n  mark_refined (bool, optional, default false) — true to set status='refined' and stamp last_refined_at (use when this is a deliberate refinement pass).\nReturns: the updated agenda { status, source, syllabus, last_refined_at, refined_from_source_id, outline }, or { error } if the agenda is LOCKED (locking freezes refinement) or the track is not one of the caller's own (curated tracks are read-only). Replacing with the same syllabus is a safe idempotent no-op. Serialised with the auto-add path under optimistic concurrency, so a concurrent auto-add is never clobbered.",
+      "input_schema": {
+        "properties": {
+          "track_id": {
+            "title": "Track Id",
+            "type": "string"
+          },
+          "syllabus": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Syllabus",
+            "type": "array"
+          },
+          "source": {
+            "default": "agent",
+            "title": "Source",
+            "type": "string"
+          },
+          "mark_refined": {
+            "default": false,
+            "title": "Mark Refined",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "track_id",
+          "syllabus"
+        ],
+        "title": "set_agendaArguments",
+        "type": "object"
+      },
+      "output_schema": {
+        "$defs": {
+          "AgendaOut": {
+            "additionalProperties": false,
+            "properties": {
+              "status": {
+                "enum": [
+                  "none",
+                  "draft",
+                  "refined",
+                  "locked"
+                ],
+                "title": "Status",
+                "type": "string"
+              },
+              "source": {
+                "enum": [
+                  "agent",
+                  "user",
+                  "emergent"
+                ],
+                "title": "Source",
+                "type": "string"
+              },
+              "syllabus": {
+                "items": {
+                  "$ref": "#/$defs/SyllabusItemOut"
+                },
+                "title": "Syllabus",
+                "type": "array"
+              },
+              "last_refined_at": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Last Refined At"
+              },
+              "refined_from_source_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Refined From Source Id"
+              },
+              "outline": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Outline"
+              }
+            },
+            "required": [
+              "status",
+              "source",
+              "syllabus",
+              "last_refined_at",
+              "refined_from_source_id",
+              "outline"
+            ],
+            "title": "AgendaOut",
+            "type": "object"
+          },
+          "SyllabusItemOut": {
+            "additionalProperties": false,
+            "properties": {
+              "concept_key": {
+                "title": "Concept Key",
+                "type": "string"
+              },
+              "label": {
+                "title": "Label",
+                "type": "string"
+              },
+              "parent": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Parent"
+              },
+              "source": {
+                "enum": [
+                  "agent",
+                  "user",
+                  "emergent"
+                ],
+                "title": "Source",
+                "type": "string"
+              }
+            },
+            "required": [
+              "concept_key",
+              "label",
+              "parent",
+              "source"
+            ],
+            "title": "SyllabusItemOut",
+            "type": "object"
+          },
+          "ToolError": {
+            "additionalProperties": false,
+            "properties": {
+              "error": {
+                "title": "Error",
+                "type": "string"
+              }
+            },
+            "required": [
+              "error"
+            ],
+            "title": "ToolError",
+            "type": "object"
+          }
+        },
+        "anyOf": [
+          {
+            "$ref": "#/$defs/AgendaOut"
+          },
+          {
+            "$ref": "#/$defs/ToolError"
+          }
+        ]
+      }
+    },
+    {
+      "name": "jolt_store_extraction",
+      "description": "Persist the markdown you extracted from a source and mark the source processed, clearing its sync lease. Call this once per source you claimed via jolt_get_unprocessed_sources, after reading it with jolt_get_source_content and running your own extraction (extraction runs on your compute, not Jolt's).\nArguments:\n  source_id (str, required) — the claimed source this extraction is for.\n  markdown (str, required) — the full extracted text as markdown.\n  confidence (float, optional, default 0.0) — your 0..1 confidence in the extraction's fidelity. Report it honestly: it feeds the silent-misextraction canary metric, so a low value flags a page for human review rather than failing silently.\n  model_id (str, optional) — identifier of the model you extracted with, for provenance.\n  supersede (bool, optional, default false) — false for a source's FIRST extraction. Set true to replace a source's existing active extraction (a re-extraction) — jolt_get_unprocessed_sources marks those with `supersede: true` (the user asked to read the source again).\n  concepts (list[dict], optional) — for a re-extraction, the concepts this read found, so they are RECONCILED against the concepts the previous read produced instead of duplicated. Same fields as jolt_log_session's concepts (text required; title, concept_key, parent, page optional); track_id is optional and defaults to the source's track. Reconciliation is the most dangerous write path — preview it with jolt_diff_extractions first; per concept it is: unchanged (kept), refined (text updated in place, questions and memory kept), changed (a successor concept inherits the memory state; the old one's questions are retired), removed (an old concept with no match leaves the review queue, kept for history), new (a new concept). When you pass `concepts`, do NOT also log them with jolt_log_session.\nA source has one active extraction: whichever flag you pass, the new one becomes active and the previous one is kept as a superseded past read. Without `concepts`, log the concepts you found with jolt_log_session, giving each its `source_id`, so they are credited to this read.\nReturns: { extraction_id, status ('active'), reconciliation } — reconciliation is null without `concepts`, else { status ('complete'|'partial'), total_steps, applied_steps, remaining_steps, max_steps_per_call, concept_ids, deltas: [ { index, change, concept_id, existing_concept_id, similarity, applied } ] }. `concept_ids` follow your `concepts` order. At most max_steps_per_call (25 by default) concepts are reconciled per call: when status is 'partial', call jolt_continue_reconciliation { source_id } until it is 'complete'. Then write questions (jolt_create_questions) for every delta whose change is 'new' or 'changed'. Returns { error }, storing nothing, when a concept is invalid (no text, or no track_id and the source has none); raises if a track is not the caller's own. Safe to retry: a dropped connection can be re-driven; the source ends processed with the new extraction active (a retry is recorded as one more past read).",
+      "input_schema": {
+        "properties": {
+          "source_id": {
+            "title": "Source Id",
+            "type": "string"
+          },
+          "markdown": {
+            "title": "Markdown",
+            "type": "string"
+          },
+          "confidence": {
+            "default": 0.0,
+            "title": "Confidence",
+            "type": "number"
+          },
+          "model_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Model Id"
+          },
+          "supersede": {
+            "default": false,
+            "title": "Supersede",
+            "type": "boolean"
+          },
+          "concepts": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Concepts"
+          }
+        },
+        "required": [
+          "source_id",
+          "markdown"
+        ],
+        "title": "store_extractionArguments",
+        "type": "object"
+      },
+      "output_schema": {
+        "$defs": {
+          "ReconcileDeltaOut": {
+            "additionalProperties": false,
+            "properties": {
+              "index": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Index"
+              },
+              "change": {
+                "enum": [
+                  "unchanged",
+                  "refined",
+                  "changed",
+                  "removed",
+                  "new"
+                ],
+                "title": "Change",
+                "type": "string"
+              },
+              "concept_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Concept Id"
+              },
+              "existing_concept_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Existing Concept Id"
+              },
+              "similarity": {
+                "title": "Similarity",
+                "type": "number"
+              },
+              "applied": {
+                "title": "Applied",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "index",
+              "change",
+              "concept_id",
+              "existing_concept_id",
+              "similarity",
+              "applied"
+            ],
+            "title": "ReconcileDeltaOut",
+            "type": "object"
+          },
+          "ReconciliationOut": {
+            "additionalProperties": false,
+            "properties": {
+              "status": {
+                "enum": [
+                  "complete",
+                  "partial"
+                ],
+                "title": "Status",
+                "type": "string"
+              },
+              "total_steps": {
+                "title": "Total Steps",
+                "type": "integer"
+              },
+              "applied_steps": {
+                "title": "Applied Steps",
+                "type": "integer"
+              },
+              "remaining_steps": {
+                "title": "Remaining Steps",
+                "type": "integer"
+              },
+              "max_steps_per_call": {
+                "title": "Max Steps Per Call",
+                "type": "integer"
+              },
+              "concept_ids": {
+                "items": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "title": "Concept Ids",
+                "type": "array"
+              },
+              "deltas": {
+                "items": {
+                  "$ref": "#/$defs/ReconcileDeltaOut"
+                },
+                "title": "Deltas",
+                "type": "array"
+              }
+            },
+            "required": [
+              "status",
+              "total_steps",
+              "applied_steps",
+              "remaining_steps",
+              "max_steps_per_call",
+              "concept_ids",
+              "deltas"
+            ],
+            "title": "ReconciliationOut",
+            "type": "object"
+          },
+          "StoreExtractionOut": {
+            "additionalProperties": false,
+            "properties": {
+              "extraction_id": {
+                "title": "Extraction Id",
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "active",
+                  "superseded"
+                ],
+                "title": "Status",
+                "type": "string"
+              },
+              "reconciliation": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ReconciliationOut"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "extraction_id",
+              "status",
+              "reconciliation"
+            ],
+            "title": "StoreExtractionOut",
+            "type": "object"
+          },
+          "ToolError": {
+            "additionalProperties": false,
+            "properties": {
+              "error": {
+                "title": "Error",
+                "type": "string"
+              }
+            },
+            "required": [
+              "error"
+            ],
+            "title": "ToolError",
+            "type": "object"
+          }
+        },
+        "anyOf": [
+          {
+            "$ref": "#/$defs/StoreExtractionOut"
+          },
+          {
+            "$ref": "#/$defs/ToolError"
+          }
+        ]
+      }
+    },
+    {
+      "name": "jolt_create_questions",
+      "description": "Attach review questions to a concept. Every concept needs at least one, or it is due but cannot be reviewed. Call after jolt_log_session, using a `concept_id` it returned.\nArguments:\n  concept_id (str, required) — the concept these questions test.\n  questions (list[dict], required) — one dict per question. Each dict:\n      stem (str, required) — the question prompt shown to the learner.\n      options (list[str], required) — the multiple-choice options for stage 2. Write exactly 4 (the app is designed for 4): one correct, three plausible distractors of similar length.\n      correct_index (int, required) — 0-based index into `options` of the correct choice. Must be a valid index into `options`.\n      expected_answer (str, required) — the canonical free-text answer. This is the reference the learner's stage-1 free text is graded against (see jolt_get_pending_gradings), so make it a complete, gradeable answer, not just the option label.\nReturns: { question_ids } in input order. The questions are counted on the read the concept was logged from (the app's 'wrote N questions') and on the current sync run, and the concept's card lists them as its active questions. Raises if the concept is not one of the caller's (they hold no memory state for it). Not idempotent — re-calling adds more questions to the concept.",
+      "input_schema": {
+        "properties": {
+          "concept_id": {
+            "title": "Concept Id",
+            "type": "string"
+          },
+          "questions": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Questions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "concept_id",
+          "questions"
+        ],
+        "title": "create_questionsArguments",
+        "type": "object"
+      },
+      "output_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "question_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Question Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "question_ids"
+        ],
+        "title": "CreateQuestionsOut",
+        "type": "object"
+      }
+    },
+    {
+      "name": "jolt_correct_concept",
+      "description": "Replace a single concept's text in place — a small, in-scope wording or accuracy fix that keeps the concept's questions, reviews, and FSRS state intact. Use this for a typo or a clarified sentence, and to answer the learner's correction notes from jolt_get_pending_corrections (re-sending the current text when you judge no change is needed also answers them). NOT for structural change: if the underlying material changed enough that questions or memory state should no longer apply, re-extract with jolt_store_extraction(supersede=true, concepts=...) instead, which reconciles concepts properly.\nArguments:\n  track_id (str, required) — the concept's track (concepts are keyed by track, so this is needed to locate it).\n  concept_id (str, required) — the concept to edit.\n  text (str, required) — the replacement concept text.\nReturns: { concept_id, updated, corrections_cleared } — `updated` is false if the write lost a concurrency race (re-read and retry); `corrections_cleared` is how many pending learner notes this answered. Returns { error: 'concept not found' } when the concept does not exist, is not the caller's, or is not on `track_id`.",
+      "input_schema": {
+        "properties": {
+          "track_id": {
+            "title": "Track Id",
+            "type": "string"
+          },
+          "concept_id": {
+            "title": "Concept Id",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "track_id",
+          "concept_id",
+          "text"
+        ],
+        "title": "correct_conceptArguments",
+        "type": "object"
+      },
+      "output_schema": {
+        "$defs": {
+          "CorrectConceptOut": {
+            "additionalProperties": false,
+            "properties": {
+              "concept_id": {
+                "title": "Concept Id",
+                "type": "string"
+              },
+              "updated": {
+                "title": "Updated",
+                "type": "boolean"
+              },
+              "corrections_cleared": {
+                "title": "Corrections Cleared",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "concept_id",
+              "updated",
+              "corrections_cleared"
+            ],
+            "title": "CorrectConceptOut",
+            "type": "object"
+          },
+          "ToolError": {
+            "additionalProperties": false,
+            "properties": {
+              "error": {
+                "title": "Error",
+                "type": "string"
+              }
+            },
+            "required": [
+              "error"
+            ],
+            "title": "ToolError",
+            "type": "object"
+          }
+        },
+        "anyOf": [
+          {
+            "$ref": "#/$defs/CorrectConceptOut"
+          },
+          {
+            "$ref": "#/$defs/ToolError"
+          }
+        ]
+      }
+    },
+    {
+      "name": "jolt_sync",
+      "description": "Start AND end of every sync. Returns the plan: what is waiting, in which tracks, and the ordered steps (tool, purpose, limit) to work through it. Calling it opens a sync run for your connection (or continues the open one); the other tools you call add to that run, and the app shows it as last night's sync. Call it again after the steps: when the plan says done=true the run is closed and you should stop. It claims nothing and changes none of the learner's data.\nArguments:\n  limit (int, optional, default 50) — cap on how far to count each queue.\n  errors (list[str], optional) — problems since your previous jolt_sync that you could not resolve (e.g. 'source <id>: pages 3-4 unreadable'). They are recorded on the sync run so the learner sees them. Omit when there are none.\nReturns: { run_id, done, unprocessed_sources, pending_gradings, pending_corrections, rereads, claimed_sources, in_flight_elsewhere, unassigned_sources, upload_dates, tracks, reread_sources, steps, limits, next }:\n  done — true when nothing is left for you: stop. Not done while sources, gradings or correction notes wait.\n  unprocessed_sources / pending_gradings / rereads — counts waiting now (rereads: how many of the waiting sources the learner asked to read again; they are already included in unprocessed_sources or claimed_sources).\n  pending_corrections — concepts the learner flagged as wrong ('Something's wrong with this concept'): read them with jolt_get_pending_corrections and answer each with jolt_correct_concept.\n  claimed_sources — sources YOU claimed in this run and have not stored yet (finish them before claiming more): [{ source_id, filename, track_id, uploaded_at, lease_expires_at }].\n  in_flight_elsewhere — sources another client holds; not yours, ignore.\n  unassigned_sources — sources with no track: choose the best track from `tracks` for their concepts.\n  upload_dates — the YYYY-MM-DD upload days of the waiting sources. A backlog spanning several days becomes one session per day (the server splits jolt_log_session by each concept's source upload date).\n  tracks — every track involved: [{ track_id, name, agenda_status, unprocessed_sources, pending_gradings, rereads, pending_corrections, guidance }]; follow `guidance` for the agenda (e.g. refine a draft, never add keys to a locked one).\n  reread_sources — the read-again requests you can take: [{ source_id, title, filename, track_id, preferred_model, requested_at }]. jolt_get_unprocessed_sources hands each out with supersede=true; store its new read with supersede=true and the concepts you found (concepts=[...]) so the server reconciles them with the old read; a `partial` reconciliation is finished with jolt_continue_reconciliation. `preferred_model` is the model family the learner picked (e.g. 'claude', 'codex') or null for any; it is a preference, not a lock: read it anyway if no other client will.\n  steps — ordered [{ step, tool, purpose, limit, repeat }]; `limit` is the most items per call (null = one item), `repeat` says how often (per batch, per claimed source, per concept, ...). Empty when done.\n  limits — { sources_per_claim, gradings_per_claim, gradings_per_submit, concepts_per_session, questions_per_concept_min, questions_per_concept_max, options_per_question, lease_seconds }.\n  next — a one-line summary of what to do now.\nAlso tidy any 'draft' agenda that has a learner `outline` (see jolt_get_tracks).\nEverything you do runs on the user's own subscription; Jolt only writes rows.",
+      "input_schema": {
+        "properties": {
+          "limit": {
+            "default": 50,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "errors": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Errors"
+          }
+        },
+        "title": "syncArguments",
+        "type": "object"
+      },
+      "output_schema": {
+        "$defs": {
+          "PlanClaimedSourceOut": {
+            "additionalProperties": false,
+            "properties": {
+              "source_id": {
+                "title": "Source Id",
+                "type": "string"
+              },
+              "filename": {
+                "title": "Filename",
+                "type": "string"
+              },
+              "track_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Track Id"
+              },
+              "uploaded_at": {
+                "title": "Uploaded At",
+                "type": "string"
+              },
+              "lease_expires_at": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Lease Expires At"
+              }
+            },
+            "required": [
+              "source_id",
+              "filename",
+              "track_id",
+              "uploaded_at",
+              "lease_expires_at"
+            ],
+            "title": "PlanClaimedSourceOut",
+            "type": "object"
+          },
+          "PlanLimitsOut": {
+            "additionalProperties": false,
+            "properties": {
+              "sources_per_claim": {
+                "title": "Sources Per Claim",
+                "type": "integer"
+              },
+              "gradings_per_claim": {
+                "title": "Gradings Per Claim",
+                "type": "integer"
+              },
+              "gradings_per_submit": {
+                "title": "Gradings Per Submit",
+                "type": "integer"
+              },
+              "concepts_per_session": {
+                "title": "Concepts Per Session",
+                "type": "integer"
+              },
+              "questions_per_concept_min": {
+                "title": "Questions Per Concept Min",
+                "type": "integer"
+              },
+              "questions_per_concept_max": {
+                "title": "Questions Per Concept Max",
+                "type": "integer"
+              },
+              "options_per_question": {
+                "title": "Options Per Question",
+                "type": "integer"
+              },
+              "lease_seconds": {
+                "title": "Lease Seconds",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "sources_per_claim",
+              "gradings_per_claim",
+              "gradings_per_submit",
+              "concepts_per_session",
+              "questions_per_concept_min",
+              "questions_per_concept_max",
+              "options_per_question",
+              "lease_seconds"
+            ],
+            "title": "PlanLimitsOut",
+            "type": "object"
+          },
+          "PlanRereadOut": {
+            "additionalProperties": false,
+            "properties": {
+              "source_id": {
+                "title": "Source Id",
+                "type": "string"
+              },
+              "title": {
+                "title": "Title",
+                "type": "string"
+              },
+              "filename": {
+                "title": "Filename",
+                "type": "string"
+              },
+              "track_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Track Id"
+              },
+              "preferred_model": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Preferred Model"
+              },
+              "requested_at": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Requested At"
+              }
+            },
+            "required": [
+              "source_id",
+              "title",
+              "filename",
+              "track_id",
+              "preferred_model",
+              "requested_at"
+            ],
+            "title": "PlanRereadOut",
+            "type": "object"
+          },
+          "PlanStepOut": {
+            "additionalProperties": false,
+            "properties": {
+              "step": {
+                "title": "Step",
+                "type": "integer"
+              },
+              "tool": {
+                "title": "Tool",
+                "type": "string"
+              },
+              "purpose": {
+                "title": "Purpose",
+                "type": "string"
+              },
+              "limit": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Limit"
+              },
+              "repeat": {
+                "title": "Repeat",
+                "type": "string"
+              }
+            },
+            "required": [
+              "step",
+              "tool",
+              "purpose",
+              "limit",
+              "repeat"
+            ],
+            "title": "PlanStepOut",
+            "type": "object"
+          },
+          "PlanTrackOut": {
+            "additionalProperties": false,
+            "properties": {
+              "track_id": {
+                "title": "Track Id",
+                "type": "string"
+              },
+              "name": {
+                "title": "Name",
+                "type": "string"
+              },
+              "agenda_status": {
+                "enum": [
+                  "none",
+                  "draft",
+                  "refined",
+                  "locked"
+                ],
+                "title": "Agenda Status",
+                "type": "string"
+              },
+              "unprocessed_sources": {
+                "title": "Unprocessed Sources",
+                "type": "integer"
+              },
+              "pending_gradings": {
+                "title": "Pending Gradings",
+                "type": "integer"
+              },
+              "rereads": {
+                "title": "Rereads",
+                "type": "integer"
+              },
+              "pending_corrections": {
+                "title": "Pending Corrections",
+                "type": "integer"
+              },
+              "guidance": {
+                "title": "Guidance",
+                "type": "string"
+              }
+            },
+            "required": [
+              "track_id",
+              "name",
+              "agenda_status",
+              "unprocessed_sources",
+              "pending_gradings",
+              "rereads",
+              "pending_corrections",
+              "guidance"
+            ],
+            "title": "PlanTrackOut",
+            "type": "object"
+          }
+        },
+        "additionalProperties": false,
+        "properties": {
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "done": {
+            "title": "Done",
+            "type": "boolean"
+          },
+          "unprocessed_sources": {
+            "title": "Unprocessed Sources",
+            "type": "integer"
+          },
+          "pending_gradings": {
+            "title": "Pending Gradings",
+            "type": "integer"
+          },
+          "pending_corrections": {
+            "title": "Pending Corrections",
+            "type": "integer"
+          },
+          "rereads": {
+            "title": "Rereads",
+            "type": "integer"
+          },
+          "claimed_sources": {
+            "items": {
+              "$ref": "#/$defs/PlanClaimedSourceOut"
+            },
+            "title": "Claimed Sources",
+            "type": "array"
+          },
+          "in_flight_elsewhere": {
+            "title": "In Flight Elsewhere",
+            "type": "integer"
+          },
+          "unassigned_sources": {
+            "title": "Unassigned Sources",
+            "type": "integer"
+          },
+          "upload_dates": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Upload Dates",
+            "type": "array"
+          },
+          "tracks": {
+            "items": {
+              "$ref": "#/$defs/PlanTrackOut"
+            },
+            "title": "Tracks",
+            "type": "array"
+          },
+          "reread_sources": {
+            "items": {
+              "$ref": "#/$defs/PlanRereadOut"
+            },
+            "title": "Reread Sources",
+            "type": "array"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/$defs/PlanStepOut"
+            },
+            "title": "Steps",
+            "type": "array"
+          },
+          "limits": {
+            "$ref": "#/$defs/PlanLimitsOut"
+          },
+          "next": {
+            "title": "Next",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "done",
+          "unprocessed_sources",
+          "pending_gradings",
+          "pending_corrections",
+          "rereads",
+          "claimed_sources",
+          "in_flight_elsewhere",
+          "unassigned_sources",
+          "upload_dates",
+          "tracks",
+          "reread_sources",
+          "steps",
+          "limits",
+          "next"
+        ],
+        "title": "SyncOut",
+        "type": "object"
+      }
+    },
+    {
+      "name": "jolt_get_unprocessed_sources",
+      "description": "Claim a batch of unprocessed sources for extraction, marking each 'in_flight' under a time-limited lease (default ~15 min) so a concurrent sync will not pick up the same rows. You must finish each claimed source by calling jolt_store_extraction, which clears its lease and marks it processed.\nArguments:\n  limit (int, optional, default 10) — max sources to claim this call. Match it to how many you can extract before the lease expires.\nReturns: { sources: [ { source_id, filename, content_type, lease_expires_at, uploaded_at, title, track_id, page_count, supersede, preferred_model } ] }. `uploaded_at`'s date decides which session the source's concepts go to (one session per upload date). `page_count` is how many files the upload has (a multi-page note is one source; read every page). `track_id` is the track the user added it to (null if none: pick one from jolt_sync's `tracks`). `supersede` true means the source already has an active extraction and the user asked to read it again: store with supersede=true. `preferred_model` is the user's model preference for that re-read, or null. The list may be shorter than `limit` (fewer available, or rows lost to a concurrent claimer). If you crash or the lease expires before you store the extraction, the row becomes claimable again automatically on a later call — no cleanup needed — but after 3 lapsed leases (SOURCE_MAX_ATTEMPTS) the source is marked 'failed' and no longer offered. Next step for each: jolt_get_source_content.",
+      "input_schema": {
+        "properties": {
+          "limit": {
+            "default": 10,
+            "title": "Limit",
+            "type": "integer"
+          }
+        },
+        "title": "get_unprocessed_sourcesArguments",
+        "type": "object"
+      },
+      "output_schema": {
+        "$defs": {
+          "UnprocessedSourceOut": {
+            "additionalProperties": false,
+            "properties": {
+              "source_id": {
+                "title": "Source Id",
+                "type": "string"
+              },
+              "filename": {
+                "title": "Filename",
+                "type": "string"
+              },
+              "content_type": {
+                "title": "Content Type",
+                "type": "string"
+              },
+              "lease_expires_at": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Lease Expires At"
+              },
+              "uploaded_at": {
+                "title": "Uploaded At",
+                "type": "string"
+              },
+              "title": {
+                "title": "Title",
+                "type": "string"
+              },
+              "track_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Track Id"
+              },
+              "page_count": {
+                "title": "Page Count",
+                "type": "integer"
+              },
+              "supersede": {
+                "title": "Supersede",
+                "type": "boolean"
+              },
+              "preferred_model": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Preferred Model"
+              }
+            },
+            "required": [
+              "source_id",
+              "filename",
+              "content_type",
+              "lease_expires_at",
+              "uploaded_at",
+              "title",
+              "track_id",
+              "page_count",
+              "supersede",
+              "preferred_model"
+            ],
+            "title": "UnprocessedSourceOut",
+            "type": "object"
+          }
+        },
+        "additionalProperties": false,
+        "properties": {
+          "sources": {
+            "items": {
+              "$ref": "#/$defs/UnprocessedSourceOut"
+            },
+            "title": "Sources",
+            "type": "array"
+          }
+        },
+        "required": [
+          "sources"
+        ],
+        "title": "GetUnprocessedSourcesOut",
+        "type": "object"
+      }
+    },
+    {
+      "name": "jolt_get_pending_gradings",
+      "description": "Claim a batch of reviews awaiting a semantic grade — the learner has answered (stage 1 free text + stage 2 choice) and a provisional grade already applied; your job is the authoritative grade of the FREE TEXT against the expected answer, per the versioned rubric.\nArguments:\n  limit (int, optional, default 10) — max reviews to claim this call.\nReturns: { gradings: [ { review_id, concept_id, question_id, free_text, expected_answer, stem, options, correct_index, question_version, selected_index, is_correct } ], allow_question_rewrite }. `free_text` is the learner's own recall (the graded artefact); `expected_answer` is the reference. Grade the substance of the recall against the reference, not spelling or phrasing. `stem`, `options`, `correct_index` and `question_version` are the question as the learner saw it; `selected_index` / `is_correct` are their multiple-choice pick. `allow_question_rewrite` is the user's opt-in to question rewriting: only when it is true is a `rewritten_question` sent to jolt_submit_gradings stored (otherwise do not write one). Feed each `review_id` and your grade to jolt_submit_gradings. May return fewer than `limit`.",
+      "input_schema": {
+        "properties": {
+          "limit": {
+            "default": 10,
+            "title": "Limit",
+            "type": "integer"
+          }
+        },
+        "title": "get_pending_gradingsArguments",
+        "type": "object"
+      },
+      "output_schema": {
+        "$defs": {
+          "PendingGradingOut": {
+            "additionalProperties": false,
+            "properties": {
+              "review_id": {
+                "title": "Review Id",
+                "type": "string"
+              },
+              "concept_id": {
+                "title": "Concept Id",
+                "type": "string"
+              },
+              "question_id": {
+                "title": "Question Id",
+                "type": "string"
+              },
+              "free_text": {
+                "title": "Free Text",
+                "type": "string"
+              },
+              "expected_answer": {
+                "title": "Expected Answer",
+                "type": "string"
+              },
+              "stem": {
+                "title": "Stem",
+                "type": "string"
+              },
+              "options": {
+                "items": {
+                  "type": "string"
+                },
+                "title": "Options",
+                "type": "array"
+              },
+              "correct_index": {
+                "title": "Correct Index",
+                "type": "integer"
+              },
+              "question_version": {
+                "title": "Question Version",
+                "type": "integer"
+              },
+              "selected_index": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Selected Index"
+              },
+              "is_correct": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Is Correct"
+              }
+            },
+            "required": [
+              "review_id",
+              "concept_id",
+              "question_id",
+              "free_text",
+              "expected_answer",
+              "stem",
+              "options",
+              "correct_index",
+              "question_version",
+              "selected_index",
+              "is_correct"
+            ],
+            "title": "PendingGradingOut",
+            "type": "object"
+          }
+        },
+        "additionalProperties": false,
+        "properties": {
+          "gradings": {
+            "items": {
+              "$ref": "#/$defs/PendingGradingOut"
+            },
+            "title": "Gradings",
+            "type": "array"
+          },
+          "allow_question_rewrite": {
+            "title": "Allow Question Rewrite",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "gradings",
+          "allow_question_rewrite"
+        ],
+        "title": "GetPendingGradingsOut",
+        "type": "object"
+      }
+    },
+    {
+      "name": "jolt_submit_gradings",
+      "description": "Submit authoritative FSRS grades for reviews from jolt_get_pending_gradings. Each accepted grade is applied and the affected concept's card is re-folded immediately, which is what lets your semantic grade correct the earlier provisional one.\nArguments:\n  gradings (list[dict], required) — one dict per review. Each dict:\n      review_id (str, required) — the review being graded, from jolt_get_pending_gradings.\n      suggested_fsrs_grade (int, required) — 1=Again, 2=Hard, 3=Good, 4=Easy, chosen per the rubric: grade the free-text recall's substance; when torn between two, pick the LOWER (under-crediting only costs a slightly earlier review, over-crediting silently erodes retention). Any value outside 1..4 is rejected.\n      rationale (str, optional) — a short justification for the grade. It is shown to the learner as the feedback on their answer, so address them: one or two plain sentences on what their recall got right or missed.\n      rubric_version (str, optional) — the rubric version string you graded against, stamped for audit.\n      rewritten_question (dict, optional) — only when jolt_get_pending_gradings said allow_question_rewrite=true: a better next version of the question, tuned to how the learner answered (e.g. probe the part they missed, or ask from a new angle once they clearly know it). Same fields as in jolt_create_questions: stem (str), options (list[str], at least two), correct_index (int, valid index into options), expected_answer (str), plus rewrite_reason (str, optional) — one short sentence the learner sees on why the question changed. It becomes version n+1 of the question (old versions are kept, not edited) and the old version leaves the review queue. Omit it when the question is fine as it is.\nReturns: { applied, submitted, rewritten, rewrites_skipped } — `submitted` is how many you sent, `applied` how many were newly graded; `rewritten` lists each version created: [ { review_id, question_id (the new version), version, previous_version_id } ]; `rewrites_skipped` lists each rewrite not stored, with a reason (rewriting is off for this user, invalid fields, review already graded). A skipped rewrite never blocks the grade. Idempotent per review_id: re-submitting an already-graded review is a safe no-op (counted in `submitted`, not `applied`; a rewrite it created is listed again, never duplicated), so retrying after a dropped connection never double-writes. Applied grades and new versions are counted on the current sync run.",
+      "input_schema": {
+        "properties": {
+          "gradings": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Gradings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "gradings"
+        ],
+        "title": "submit_gradingsArguments",
+        "type": "object"
+      },
+      "output_schema": {
+        "$defs": {
+          "RewriteSkippedOut": {
+            "additionalProperties": false,
+            "properties": {
+              "review_id": {
+                "title": "Review Id",
+                "type": "string"
+              },
+              "reason": {
+                "title": "Reason",
+                "type": "string"
+              }
+            },
+            "required": [
+              "review_id",
+              "reason"
+            ],
+            "title": "RewriteSkippedOut",
+            "type": "object"
+          },
+          "RewrittenQuestionOut": {
+            "additionalProperties": false,
+            "properties": {
+              "review_id": {
+                "title": "Review Id",
+                "type": "string"
+              },
+              "question_id": {
+                "title": "Question Id",
+                "type": "string"
+              },
+              "version": {
+                "title": "Version",
+                "type": "integer"
+              },
+              "previous_version_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Previous Version Id"
+              }
+            },
+            "required": [
+              "review_id",
+              "question_id",
+              "version",
+              "previous_version_id"
+            ],
+            "title": "RewrittenQuestionOut",
+            "type": "object"
+          }
+        },
+        "additionalProperties": false,
+        "properties": {
+          "applied": {
+            "title": "Applied",
+            "type": "integer"
+          },
+          "submitted": {
+            "title": "Submitted",
+            "type": "integer"
+          },
+          "rewritten": {
+            "items": {
+              "$ref": "#/$defs/RewrittenQuestionOut"
+            },
+            "title": "Rewritten",
+            "type": "array"
+          },
+          "rewrites_skipped": {
+            "items": {
+              "$ref": "#/$defs/RewriteSkippedOut"
+            },
+            "title": "Rewrites Skipped",
+            "type": "array"
+          }
+        },
+        "required": [
+          "applied",
+          "submitted",
+          "rewritten",
+          "rewrites_skipped"
+        ],
+        "title": "SubmitGradingsOut",
+        "type": "object"
+      }
+    },
+    {
+      "name": "jolt_list_sources",
+      "description": "List all of the caller's sources with their processing status — an overview for deciding what to (re-)extract.\nArguments: none.\nReturns: { sources: [ { source_id, filename, processing_status, active_extraction_id, page_count, reread_requested } ] } where processing_status is 'unprocessed', 'in_flight' (claimed by a sync), 'processed', or 'failed' (could not be read after repeated attempts). `active_extraction_id` is the current canonical extraction, or null if never extracted. `reread_requested` is true while the user's read-again request is pending. Uploads that were never confirmed are left out. Read-only — does not claim anything (use jolt_get_unprocessed_sources to claim for extraction).",
+      "input_schema": {
+        "properties": {},
+        "title": "list_sourcesArguments",
+        "type": "object"
+      },
+      "output_schema": {
+        "$defs": {
+          "ListedSourceOut": {
+            "additionalProperties": false,
+            "properties": {
+              "source_id": {
+                "title": "Source Id",
+                "type": "string"
+              },
+              "filename": {
+                "title": "Filename",
+                "type": "string"
+              },
+              "processing_status": {
+                "enum": [
+                  "unprocessed",
+                  "in_flight",
+                  "processed",
+                  "failed"
+                ],
+                "title": "Processing Status",
+                "type": "string"
+              },
+              "active_extraction_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Active Extraction Id"
+              },
+              "page_count": {
+                "title": "Page Count",
+                "type": "integer"
+              },
+              "reread_requested": {
+                "title": "Reread Requested",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "source_id",
+              "filename",
+              "processing_status",
+              "active_extraction_id",
+              "page_count",
+              "reread_requested"
+            ],
+            "title": "ListedSourceOut",
+            "type": "object"
+          }
+        },
+        "additionalProperties": false,
+        "properties": {
+          "sources": {
+            "items": {
+              "$ref": "#/$defs/ListedSourceOut"
+            },
+            "title": "Sources",
+            "type": "array"
+          }
+        },
+        "required": [
+          "sources"
+        ],
+        "title": "ListSourcesOut",
+        "type": "object"
+      }
+    },
+    {
+      "name": "jolt_get_source_content",
+      "description": "Get a short-TTL signed GET URL to read a source's original bytes, so you can run extraction on your own compute. Call it for each source you claimed via jolt_get_unprocessed_sources (or any source you want to re-read for a supersede).\nArguments:\n  source_id (str, required) — the source to read.\nReturns: { source_id, filename, content_type, read_url, page_count, pages: [ { index, filename, content_type, read_url } ] }. A multi-page note is one source with several files: read every entry of `pages`, in `index` order, and extract them together as one note. The top-level filename / content_type / read_url are the first page's. Read URLs expire in minutes — fetch promptly and re-call for fresh ones if they lapse. Use each page's `content_type` to decide how to parse (PDF vs image). Read-only; does not change the source's processing status.",
+      "input_schema": {
+        "properties": {
+          "source_id": {
+            "title": "Source Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_id"
+        ],
+        "title": "get_source_contentArguments",
+        "type": "object"
+      },
+      "output_schema": {
+        "$defs": {
+          "SourcePageOut": {
+            "additionalProperties": false,
+            "properties": {
+              "index": {
+                "title": "Index",
+                "type": "integer"
+              },
+              "filename": {
+                "title": "Filename",
+                "type": "string"
+              },
+              "content_type": {
+                "title": "Content Type",
+                "type": "string"
+              },
+              "read_url": {
+                "title": "Read Url",
+                "type": "string"
+              }
+            },
+            "required": [
+              "index",
+              "filename",
+              "content_type",
+              "read_url"
+            ],
+            "title": "SourcePageOut",
+            "type": "object"
+          }
+        },
+        "additionalProperties": false,
+        "properties": {
+          "source_id": {
+            "title": "Source Id",
+            "type": "string"
+          },
+          "filename": {
+            "title": "Filename",
+            "type": "string"
+          },
+          "content_type": {
+            "title": "Content Type",
+            "type": "string"
+          },
+          "read_url": {
+            "title": "Read Url",
+            "type": "string"
+          },
+          "page_count": {
+            "title": "Page Count",
+            "type": "integer"
+          },
+          "pages": {
+            "items": {
+              "$ref": "#/$defs/SourcePageOut"
+            },
+            "title": "Pages",
+            "type": "array"
+          }
+        },
+        "required": [
+          "source_id",
+          "filename",
+          "content_type",
+          "read_url",
+          "page_count",
+          "pages"
+        ],
+        "title": "GetSourceContentOut",
+        "type": "object"
+      }
+    },
+    {
+      "name": "jolt_diff_extractions",
+      "description": "Preview the per-concept reconciliation a re-extraction WOULD produce, without writing anything. Run this before jolt_store_extraction(supersede=true) to see how your proposed concepts line up against the track's existing ones, so a supersede never silently discards memory state.\nArguments:\n  track_id (str, required) — the track whose active concepts to diff against (the caller's own concepts on it; raises if the track is neither the caller's nor curated).\n  proposed_concepts (list[dict], required) — the concepts your new extraction would create. Each dict: text (str, required), title (str, optional), syllabus_ref (str, optional) — same fields as jolt_log_session concepts.\nReturns: { deltas: [ { change, existing_concept_id, proposed_text, similarity } ] } where `change` is one of:\n    unchanged — matches an existing concept; no-op on commit.\n    refined  — minor edit; existing concept's text updates, keeping its questions, reviews, and FSRS state.\n    changed  — materially different; existing concept is superseded by a successor that carries the state forward, its old questions retired.\n    removed  — an existing concept with no match in your proposal; superseded and dropped from the due queue but kept for history.\n    new      — no existing match; a new concept (generate questions for it).\n`similarity` is the 0..1 text-match score behind the classification. Read-only. If the diff is not what you intend, adjust `proposed_concepts` before committing the supersede.",
+      "input_schema": {
+        "properties": {
+          "track_id": {
+            "title": "Track Id",
+            "type": "string"
+          },
+          "proposed_concepts": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Proposed Concepts",
+            "type": "array"
+          }
+        },
+        "required": [
+          "track_id",
+          "proposed_concepts"
+        ],
+        "title": "diff_extractionsArguments",
+        "type": "object"
+      },
+      "output_schema": {
+        "$defs": {
+          "ExtractionDeltaOut": {
+            "additionalProperties": false,
+            "properties": {
+              "change": {
+                "enum": [
+                  "unchanged",
+                  "refined",
+                  "changed",
+                  "removed",
+                  "new"
+                ],
+                "title": "Change",
+                "type": "string"
+              },
+              "existing_concept_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Existing Concept Id"
+              },
+              "proposed_text": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Proposed Text"
+              },
+              "similarity": {
+                "title": "Similarity",
+                "type": "number"
+              }
+            },
+            "required": [
+              "change",
+              "existing_concept_id",
+              "proposed_text",
+              "similarity"
+            ],
+            "title": "ExtractionDeltaOut",
+            "type": "object"
+          }
+        },
+        "additionalProperties": false,
+        "properties": {
+          "deltas": {
+            "items": {
+              "$ref": "#/$defs/ExtractionDeltaOut"
+            },
+            "title": "Deltas",
+            "type": "array"
+          }
+        },
+        "required": [
+          "deltas"
+        ],
+        "title": "DiffExtractionsOut",
+        "type": "object"
+      }
+    },
+    {
+      "name": "jolt_continue_reconciliation",
+      "description": "Resume a re-extraction's concept reconciliation that jolt_store_extraction(concepts=...) left 'partial' — a large supersede is applied at most max_steps_per_call concepts per call from a saved checkpoint, so an interrupted one is never half-lost.\nArguments:\n  source_id (str, required) — the re-extracted source.\nReturns: the same reconciliation object as jolt_store_extraction { status, total_steps, applied_steps, remaining_steps, max_steps_per_call, concept_ids, deltas }. Call again while status is 'partial'. Safe to repeat: a complete reconciliation is returned unchanged, and a step interrupted mid-way converges when resumed. Returns { error } when the source's active read has no reconciliation (it was stored without `concepts`); raises if the source is not the caller's.",
+      "input_schema": {
+        "properties": {
+          "source_id": {
+            "title": "Source Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_id"
+        ],
+        "title": "continue_reconciliationArguments",
+        "type": "object"
+      },
+      "output_schema": {
+        "$defs": {
+          "ReconcileDeltaOut": {
+            "additionalProperties": false,
+            "properties": {
+              "index": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Index"
+              },
+              "change": {
+                "enum": [
+                  "unchanged",
+                  "refined",
+                  "changed",
+                  "removed",
+                  "new"
+                ],
+                "title": "Change",
+                "type": "string"
+              },
+              "concept_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Concept Id"
+              },
+              "existing_concept_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Existing Concept Id"
+              },
+              "similarity": {
+                "title": "Similarity",
+                "type": "number"
+              },
+              "applied": {
+                "title": "Applied",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "index",
+              "change",
+              "concept_id",
+              "existing_concept_id",
+              "similarity",
+              "applied"
+            ],
+            "title": "ReconcileDeltaOut",
+            "type": "object"
+          },
+          "ReconciliationOut": {
+            "additionalProperties": false,
+            "properties": {
+              "status": {
+                "enum": [
+                  "complete",
+                  "partial"
+                ],
+                "title": "Status",
+                "type": "string"
+              },
+              "total_steps": {
+                "title": "Total Steps",
+                "type": "integer"
+              },
+              "applied_steps": {
+                "title": "Applied Steps",
+                "type": "integer"
+              },
+              "remaining_steps": {
+                "title": "Remaining Steps",
+                "type": "integer"
+              },
+              "max_steps_per_call": {
+                "title": "Max Steps Per Call",
+                "type": "integer"
+              },
+              "concept_ids": {
+                "items": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "title": "Concept Ids",
+                "type": "array"
+              },
+              "deltas": {
+                "items": {
+                  "$ref": "#/$defs/ReconcileDeltaOut"
+                },
+                "title": "Deltas",
+                "type": "array"
+              }
+            },
+            "required": [
+              "status",
+              "total_steps",
+              "applied_steps",
+              "remaining_steps",
+              "max_steps_per_call",
+              "concept_ids",
+              "deltas"
+            ],
+            "title": "ReconciliationOut",
+            "type": "object"
+          },
+          "ToolError": {
+            "additionalProperties": false,
+            "properties": {
+              "error": {
+                "title": "Error",
+                "type": "string"
+              }
+            },
+            "required": [
+              "error"
+            ],
+            "title": "ToolError",
+            "type": "object"
+          }
+        },
+        "anyOf": [
+          {
+            "$ref": "#/$defs/ReconciliationOut"
+          },
+          {
+            "$ref": "#/$defs/ToolError"
+          }
+        ]
+      }
+    }
+  ]
+}
