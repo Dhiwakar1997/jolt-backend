@@ -19,7 +19,9 @@ reads, read again and storage (BE-05), and the review loop: review sessions,
 idempotent stages, question versions and retiring mastered concepts (BE-06),
 and progress and settings: the Progress screen, the whole Settings body with
 model status, per-user FSRS desired retention, a daily review cap and a time
-zone, data export and account delete (BE-08).
+zone, data export and account delete (BE-08). BE-10 adds per-token rate limits
+(`429` + `Retry-After`) and request size limits (`413`) on every route, and
+enforces `data_retention_days` with a daily sweep; no route or shape changed.
 Screens that have no endpoint yet are listed in [`GAPS.md`](./GAPS.md).
 
 ## Conventions
@@ -29,8 +31,9 @@ Screens that have no endpoint yet are listed in [`GAPS.md`](./GAPS.md).
 | **Base paths** | REST under `/v1`. MCP over HTTP+SSE: connect to `/mcp/sse`, post to `/mcp/messages/`. `GET /health` → `{status: "ok", version}` (no auth). CORS: the origins in `CORS_ORIGINS` / `CORS_ORIGIN_REGEX`, no credentials (the token is a header). |
 | **Auth** | `Authorization: Bearer <token>`. Two opaque token kinds: an **app token** (`jolt_app_…`, one per signed-in device, from sign-in) on every `/v1` route except the sign-in routes, and an **MCP token** (`jolt_live_…`, one per connected client, from `POST /v1/mcp-tokens`) on the MCP connection. Each surface refuses the other kind with `401` (`detail: "wrong token kind: …"`); opening `/mcp/sse` with a missing, revoked or wrong-kind token is a `401` before the stream starts. On `/mcp/sse` only, the MCP token may instead ride the URL as `?token=` (for connectors that take only a URL; `MCP_QUERY_TOKEN_ENABLED`, redacted from access logs); client setup in [`CONNECT.md`](./CONNECT.md). Tokens do not expire; revoking (sign-out, `DELETE /v1/mcp-tokens/{id}`) takes effect on the next request. A bare token without `Bearer` is also accepted. |
 | **Scope** | Identity comes only from the token. No route or tool takes a `user_id`. |
-| **Errors (REST)** | Non-2xx bodies are `{"detail": "<message>"}` (`ErrorResponse`). Request-validation failures are `422` with `{"detail": [ {loc, msg, type} ]}` (`HTTPValidationError`). `401` always carries `WWW-Authenticate: Bearer`. |
-| **Errors (MCP)** | Tools marked *`{error}` on* return `{"error": "<message>"}` for the listed recoverable cases. Every other failure (missing/invalid token, unknown source, grade outside 1–4) is raised and arrives as an MCP tool error (`isError: true`). |
+| **Errors (REST)** | Non-2xx bodies are `{"detail": "<message>"}` (`ErrorResponse`). Request-validation failures are `422` with `{"detail": [ {loc, msg, type} ]}` (`HTTPValidationError`). `401` always carries `WWW-Authenticate: Bearer`. Every route can also answer `429` and every route with a body `413` (next row); the per-route tables below do not repeat them. |
+| **Limits** (BE-10) | **Rate**: per token, `RATE_LIMIT_REST_PER_MINUTE` (120) requests a minute on `/v1` (bursts up to that many, refilling continuously); requests without a token (sign-in) count per client IP; and a coarse `RATE_LIMIT_IP_PER_MINUTE` (600) per IP over `/v1` and `/mcp`. Over a limit: **`429`** `{"detail": "rate limit exceeded; retry in N s"}` with **`Retry-After: N`** (seconds; exposed to browsers through CORS). The app should wait `Retry-After` and retry once; no route is rate-limited differently. Limits are in-process, **per replica** (prod runs one). **Size**: a body over `REQUEST_MAX_BYTES` (1 MiB; `MCP_REQUEST_MAX_BYTES`, 4 MiB, on `/mcp`) answers **`413`** `{"detail": "request body larger than N bytes"}` before the route runs. Files never go through the API (uploads PUT straight to Blob), so only a broken client meets it. `GET /health` and CORS preflights are never limited. |
+| **Errors (MCP)** | Tools marked *`{error}` on* return `{"error": "<message>"}` for the listed recoverable cases. Every other failure (missing/invalid token, unknown source, grade outside 1–4) is raised and arrives as an MCP tool error (`isError: true`). **Rate limit** (BE-10): `RATE_LIMIT_MCP_PER_MINUTE` (300) tool calls a minute per MCP token; an over-limit call is an MCP tool error `rate limit exceeded; retry in N s` (the call's HTTP POST was already accepted, so there is no HTTP 429 for it); opening `/mcp/sse` counts against the same budget and is refused with `429` + `Retry-After` when it is spent. A POST body over 4 MiB is a `413`. |
 | **Types** | IDs are opaque strings (32-hex today). Timestamps are ISO-8601 UTC. FSRS grades: 1 Again, 2 Hard, 3 Good, 4 Easy. |
 | **Agenda** | `{status: none\|draft\|refined\|locked, source: agent\|user\|emergent, syllabus: [{concept_key, label, parent}], last_refined_at, refined_from_source_id}`; written `Agenda` below. |
 
@@ -366,7 +369,7 @@ allow_question_rewrite, daily_review_cap, data_retention_days, time_zone}`:
 | `retire_mastered` | `true` | Section 4, mastery and retirement. |
 | `allow_question_rewrite` | `false` | Decision D8: opt-in. |
 | `daily_review_cap` | `null` (no cap) | 1–500 answers a day; sessions are cut to what is left (section 4). |
-| `data_retention_days` | `null` (keep) | 1–3650. How long to keep uploads: a stored preference, **not enforced yet**. *Data* retention, not FSRS retention (was `PUT /v1/settings/retention`'s `retention_days`). |
+| `data_retention_days` | `null` (keep) | 1–3650. How long to keep uploads. **Enforced** (BE-10) by a daily maintenance sweep (03:17 UTC): every source uploaded more than that many days ago is deleted with its files and its reads (extractions), so it leaves Sources, the Reader and storage used. What was learned from it stays: concepts, questions, answers and FSRS state. Deleted files stay recoverable by an operator for the Blob soft-delete window (7 days dev, 14 prod), then are gone. *Data* retention, not FSRS retention (was `PUT /v1/settings/retention`'s `retention_days`). |
 | `time_zone` | `UTC` | IANA name. The learner's day: "today" and the daily cap, the session summary's next days, progress days, streak and weeks, D6 upload dates, and the default zone of `GET /v1/sync/status`. The app should send the device's zone (e.g. `Intl.DateTimeFormat().resolvedOptions().timeZone`) once after sign-in. |
 
 `ModelStatus = {mcp_server_url, tokens: [{id, label, last4, created_at,
@@ -385,6 +388,11 @@ next_expected_at}`: the same data as `GET /v1/mcp-tokens` and `GET
 
 Storage used (Settings · Data) is `GET /v1/storage` (section 3); export and
 delete are `POST /v1/export` and `DELETE /v1/me` (section 1).
+
+The same sweep removes **abandoned uploads**: a source whose upload was
+requested but never confirmed (`POST /v1/uploads/{id}/confirm`) within
+`ABANDONED_UPLOAD_HOURS` (24 h) is deleted with any pages that did arrive. Such
+sources never appear in the app's lists; after the sweep their id answers 404.
 
 ---
 

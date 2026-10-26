@@ -12,7 +12,7 @@ a REST API over Azure Cosmos DB, Blob Storage, and Key Vault. The core loop runs
 - `/v1/*` — the REST API for the Flutter app
 - `/health` — liveness
 
-There is **no scheduler and no timed job**. FSRS recompute runs **inline**, in the
+There is **no scheduler inside the app**. FSRS recompute runs **inline**, in the
 same request a grade arrives in:
 
 - stage-2 review submission (`POST /v1/reviews/{review_id}/stage2`) folds the card's
@@ -23,6 +23,11 @@ same request a grade arrives in:
 Expired sync leases are reclaimed **lazily** — the claim query treats an `in_flight`
 row past its `lease_expires_at` as claimable — so no sweeper is needed either.
 
+The one timed task is data hygiene (BE-10): `python -m jolt.maintenance`, run
+daily by the `jolt-maintenance` Container Apps Job from the same image, deletes
+uploads never confirmed after 24 h and sources past each user's
+`data_retention_days`.
+
 ## Layout
 
 ```
@@ -30,8 +35,10 @@ jolt/
 ├── main.py            FastAPI assembly, lifespan, mounts
 ├── config.py          settings from env / .env (pydantic-settings)
 ├── runtime.py         composition root: gateways + repositories
+├── telemetry.py       OpenTelemetry -> Application Insights, custom metrics, Cosmos RU meter
+├── maintenance.py     `python -m jolt.maintenance`: the daily sweep (scheduled job)
 ├── mcp/               MCP tool surface (server + tools/ + descriptions/)
-├── api/               REST routes + auth deps
+├── api/               REST routes + auth deps, rate and size limits (limits.py)
 ├── services/          use-case composition over domain + data
 ├── domain/            business logic — no FastAPI, no Azure SDK (unit-testable)
 ├── data/              the only layer touching Azure (cosmos, blob, repositories, leases)
@@ -64,6 +71,8 @@ cp .env.example .env
 | `GOOGLE_OAUTH_CLIENT_ID` | Google OAuth client id(s) whose ID tokens sign-in accepts |
 | `MCP_SERVER_URL` | MCP address shown in the app (`GET /v1/me`) |
 | `DEV_AUTH_ENABLED` / `DEV_AUTH_SECRET` | dev-only sign-in by e-mail (`POST /v1/auth/dev`); never in prod |
+| `APPLICATIONINSIGHTS_CONNECTION_STRING` | turns on OpenTelemetry export to Application Insights; empty = off |
+| `RATE_LIMIT_*`, `REQUEST_MAX_BYTES`, `MCP_REQUEST_MAX_BYTES` | per-token rate limits (429 + `Retry-After`, per replica) and body caps (413) |
 
 With `AUTH_MODE=managed_identity`, leave the `*_KEY` / `*_CONNECTION_STRING` blank —
 the app authenticates via `DefaultAzureCredential` (a Managed Identity in Container
@@ -167,15 +176,22 @@ Single image, single entrypoint:
 docker build --build-arg APP_VERSION=$(git rev-parse HEAD) -t jolt-api .
 ```
 
-The `dev` environment on Azure is infrastructure as code in `infra/` (Bicep:
-Container Apps, Cosmos serverless, Storage, Key Vault, Log Analytics, ACR, Managed
-Identity and its role assignments) and is created or updated with one command:
+The `dev` and `prod` environments on Azure are infrastructure as code in `infra/`
+(one Bicep template, two parameter files: Container Apps and the maintenance
+job, Cosmos serverless, Storage, Key Vault, Log Analytics + Application Insights
+and a workbook, ACR, Managed Identity and its role assignments; in prod also a
+custom domain with a managed certificate, alerts, budgets, Cosmos continuous
+backup and Blob versioning). Each is created or updated with one command:
 
 ```bash
-scripts/deploy-infra.sh            # see docs/DEPLOY.md
+scripts/deploy-infra.sh                                # dev; see docs/DEPLOY.md
+scripts/deploy-infra.sh --env prod --promote <sha>     # prod: a dev image, never rebuilt
 ```
 
-Pushes to `main` then deploy automatically (`.github/workflows/deploy-dev.yml`:
-checks → build → push to ACR → roll out → `scripts/smoke.py`). Every manual step,
-setting, secret and the rollback procedure: [`docs/DEPLOY.md`](./docs/DEPLOY.md).
+Pushes to `main` then deploy dev automatically (`.github/workflows/deploy-dev.yml`:
+checks → build → push to ACR → roll out → `scripts/smoke.py`); a `v*` tag or a
+manual run promotes that image to prod after an approval in the GitHub
+environment `prod` (`.github/workflows/deploy-prod.yml`, then
+`scripts/smoke.py --public`). Every manual step, setting, secret, alert, the
+backup restore and the rollback procedure: [`docs/DEPLOY.md`](./docs/DEPLOY.md).
 ```

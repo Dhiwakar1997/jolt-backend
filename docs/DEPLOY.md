@@ -1,10 +1,16 @@
-# Deploying the Jolt backend (dev)
+# Deploying the Jolt backend (dev and prod)
 
 Everything in Azure is described in `infra/` (Bicep) and created by one command,
 `scripts/deploy-infra.sh`. After that, every push to `main` builds, deploys and
-smoke-tests automatically (`.github/workflows/deploy-dev.yml`). This page lists
-every manual step and every value the owner has to provide; there are no secrets
-to paste anywhere.
+smoke-tests `dev` automatically (`.github/workflows/deploy-dev.yml`), and a `v*`
+tag (or a manual run) promotes that same image to `prod` after an approval
+(`.github/workflows/deploy-prod.yml`). This page lists every manual step and
+every value the owner has to provide; there are no secrets to paste anywhere.
+
+`dev` and `prod` come from the same template (`infra/main.bicep`) with their own
+parameters file (`infra/main.dev.bicepparam`, `infra/main.prod.bicepparam`) and
+resource group (`jolt-dev`, `jolt-prod`). The sections up to 5 walk through dev;
+[Production](#production) lists what differs.
 
 - [What gets created](#what-gets-created)
 - [Owner checklist](#owner-checklist) (the manual steps, in order)
@@ -14,6 +20,12 @@ to paste anywhere.
 - [Google sign-in](#google-sign-in)
 - [4. Verify](#4-verify)
 - [5. Automatic deploys from GitHub](#5-automatic-deploys-from-github)
+- [Production](#production) (prod parameters, custom domain, promotion, approval)
+- [Observability](#observability) (Application Insights, workbook)
+- [Alerts and budgets](#alerts-and-budgets)
+- [Backups and restore](#backups-and-restore)
+- [Maintenance job](#maintenance-job) (abandoned uploads, data retention)
+- [Rate and size limits](#rate-and-size-limits)
 - [Configuration and secrets](#configuration-and-secrets)
 - [Roll back](#roll-back)
 - [Tear down and recreate](#tear-down-and-recreate)
@@ -31,12 +43,16 @@ globally unique and the same on every run.
 | User-assigned Managed Identity | `id-jolt-dev-api` | The app's only credential. |
 | User-assigned Managed Identity | `id-jolt-dev-github` | GitHub Actions signs in as this (OIDC federated credential, no secret). |
 | Log Analytics workspace | `log-jolt-dev` | Container Apps logs; 30-day retention, 1 GB/day cap. |
+| Application Insights (workspace-based) | `appi-jolt-dev` | OpenTelemetry traces, logs and custom metrics from the app and the maintenance job (BE-10), stored in `log-jolt-dev`. |
+| Azure Monitor workbook | "Jolt API (dev)" | Charts of the custom metrics ([Observability](#observability)). |
 | Container Registry (Basic) | `crjoltdev<sfx>` | Images `jolt-api:<git-sha>`. |
 | Cosmos DB for NoSQL, **serverless** | `cosmos-jolt-dev-<sfx>` | Database `jolt`; the 14 containers (`tokens` added by BE-03, `sync_runs` by BE-04, `review_sessions` by BE-06), partition keys and composite indexes of LLD §6 (from `infra/cosmos-containers.json`, kept equal to `jolt/data/cosmos.py` by `tests/test_infra.py`). Account keys disabled. Periodic backup every 24 h, kept 48 h. |
 | Storage account (StorageV2, LRS, Hot) | `stjoltdev<sfx>` | Private container `sources`; Blob CORS for the app origins; blob and container soft delete 7 days; a lifecycle rule deletes data exports (`sources/exports/`, BE-08) a day after they are written; shared keys disabled (uploads use user-delegation SAS). |
 | Key Vault (RBAC) | `kv-jolt-dev-<sfx8>` | Secrets `token-hash-pepper` and `dev-auth-secret` (dev sign-in, BE-03); per-user provider keys `apikey-*` written by the app. Soft delete 7 days, no purge protection (dev). |
 | Container Apps environment | `cae-jolt-dev` | Consumption plan. |
 | Container App | `jolt-api` | External HTTPS ingress → port 8000, `/health` startup/readiness/liveness probes, scale 0..1, 0.5 vCPU / 1 GiB. |
+| Container Apps Job (scheduled) | `jolt-maintenance` | `python -m jolt.maintenance` daily at 03:17 UTC, same image and identity ([Maintenance job](#maintenance-job)). |
+| Action group, alerts, budget | `ag-jolt-dev`, `jolt-dev-*` | Only when `alertEmails` is set (off in dev by default; on in prod). [Alerts and budgets](#alerts-and-budgets). |
 
 Role assignments (least privilege):
 
@@ -79,7 +95,9 @@ costs cents.
 8. Set seven GitHub repository variables (printed by the script, or let it set
    them with `--set-github-vars`).
 9. In GitHub, restrict the `dev` environment to the `main` branch.
-10. Optional: a budget alert on the subscription (LLD §9).
+10. Optional for dev: alert e-mails and a budget (`alertEmails`, `budgetAmount`);
+    prod has them ([Alerts and budgets](#alerts-and-budgets)).
+11. Prod: [Production](#production) (its own checklist).
 
 Nothing else is manual. The two secrets, the token-hash pepper and the dev
 sign-in secret, are generated on the first deploy and never leave Key Vault (the
@@ -94,7 +112,8 @@ az account set --subscription "<subscription name or id>"
 az account show --query "{name:name, id:id, user:user.name}" -o table
 
 for ns in Microsoft.App Microsoft.ContainerRegistry Microsoft.DocumentDB Microsoft.KeyVault \
-          Microsoft.ManagedIdentity Microsoft.OperationalInsights Microsoft.Storage; do
+          Microsoft.ManagedIdentity Microsoft.OperationalInsights Microsoft.Storage \
+          Microsoft.Insights Microsoft.AlertsManagement Microsoft.Consumption; do
   az provider register --namespace "$ns"
 done
 ```
@@ -257,6 +276,295 @@ add a deployment branch rule for `main`, so no other branch can use that subject
 To check: push to `main` (or Actions → Deploy dev → Run workflow on `main`) and
 watch the job; it ends with `SMOKE PASSED`.
 
+## Production
+
+`prod` is the same template with `infra/main.prod.bicepparam`, in resource group
+`jolt-prod`. Values marked `OWNER` there are placeholders (`example.com`) the
+owner replaces with the real domain, origins and recipients before the first
+deploy. What differs from dev, and why:
+
+| Setting | dev | prod | Why |
+|---|---|---|---|
+| Dev sign-in (`devAuthEnabled`) | on (smoke test) | **off** | The app refuses to start with it in prod; no `dev-auth-secret` is generated. |
+| CORS origins | localhost + Netlify + previews regex | **the production origin(s) only** | No localhost, no deploy previews (`corsOriginRegex = ''`). |
+| `minReplicas` / `maxReplicas` | 0 / 1 | **1 / 1** | One warm replica: no cold start for the first request of the day or a nightly sync. About US$10–15 a month at the idle rate after the free grant. Max stays 1 while MCP uses SSE, which also makes the per-replica rate limits exact. |
+| Custom domain | none | **`customDomain`** + managed certificate | [Custom domain](#custom-domain). |
+| Cosmos backup | periodic (24 h, kept 48 h) | **continuous, 30 days** | Self-service point-in-time restore to any second of the last 30 days; cents at this size. One-way switch. |
+| Blob | soft delete 7 days | **soft delete 14 days + versioning** | Overwritten or deleted blobs keep a version, removed by a lifecycle rule after 14 days. |
+| Key Vault soft delete | 7 days | **90 days** | A deleted pepper stays recoverable. Fixed when the vault is created. Purge protection stays off in both (the app purges per-user API keys on delete). |
+| Logs | 30 days, 1 GB/day | **90 days, 5 GB/day** | |
+| Alerts, budgets | off | **on** (`alertEmails`, `budgetAmount`, `subscriptionBudgetAmount`) | [Alerts and budgets](#alerts-and-budgets). |
+| Images | built from `main` | **promoted from dev** | Never rebuilt: the digest that passed the dev smoke test is what runs. |
+| GitHub identity | `id-jolt-dev-github`, environment `dev` | `id-jolt-prod-github`, environment **`prod`** | Also gets AcrPull + Reader on the dev registry to copy images (`promoteFromEnvironment = 'dev'`). |
+
+### Prod checklist
+
+1. Edit `infra/main.prod.bicepparam`: `appOrigins` (the production front end),
+   `customDomain`, `googleOAuthClientId` (add the production origin to the
+   OAuth client's Authorized JavaScript origins), `alertEmails`, the budget
+   amounts and `budgetStartDate` (first day of a month, not in the past).
+2. Dev must be deployed (the promotion source) and the image to promote must be
+   in the dev registry: any `main` commit that `deploy-dev.yml` deployed.
+3. First deploy (needs Owner, as for dev; it also writes a role assignment into
+   `jolt-dev`):
+   ```bash
+   scripts/deploy-infra.sh --env prod --promote <git-sha> --set-github-vars
+   ```
+   The script refuses to build an image for prod. `--promote` deploys the
+   infrastructure first if needed, copies `jolt-api:<sha>` from the dev
+   registry with `az acr import` (same digest), then deploys the app.
+4. Create the DNS records it prints ([Custom domain](#custom-domain)) and rerun
+   `scripts/deploy-infra.sh --env prod --skip-build` until it reports the
+   domain bound, then once more with `--smoke`.
+5. GitHub: create the `prod` environment with **required reviewers**
+   ([Promotion](#promotion-and-approval)).
+6. Optional: set `PROD_APP_ORIGIN` (the production front-end origin) so the
+   workflow's smoke test checks the CORS preflight.
+7. Test the alert e-mails ([Alerts and budgets](#alerts-and-budgets)).
+
+### Custom domain
+
+The API is served on the custom domain (`var customDomain` in
+`infra/main.prod.bicepparam`, a subdomain such as `api.jolt.example.com`) with
+a free, auto-renewed managed certificate. Azure checks the DNS records when a
+hostname is added to an app, a managed certificate can only be issued for a
+hostname already on the app, and the app can only bind a certificate that
+exists, so it takes three steps; `deploy-infra.sh` drives them and each rerun
+moves on as far as DNS allows:
+
+1. **Without the domain.** While the domain does not resolve, the script
+   deploys without it (`JOLT_SKIP_CUSTOM_DOMAIN=true`) and prints the two DNS
+   records to create at the domain's DNS host:
+
+   | Type | Name | Value |
+   |---|---|---|
+   | CNAME | `api.jolt.example.com` | the app's default host (output `containerAppFqdn`, `jolt-api.<env-domain>.azurecontainerapps.io`) |
+   | TXT | `asuid.api.jolt.example.com` | output `customDomainVerificationId` |
+
+2. **Add it.** Once the CNAME resolves, `scripts/deploy-infra.sh --env prod --skip-build`
+   adds the hostname to the app unbound (`bindingType: Disabled`) and requests
+   the certificate (`infra/modules/certificate.bicep`, CNAME validation). If
+   Azure issues it during the run, the script binds it straight away.
+3. **Bind it.** Otherwise the next `--skip-build` run finds the certificate
+   (`az containerapp env certificate list --managed-certificates-only`), sets
+   `JOLT_CUSTOM_DOMAIN_CERT_READY=true` (read by `customDomainCertificateReady`)
+   and binds it with SNI. From then on every deploy keeps it bound, and
+   `MCP_SERVER_URL` and the output `publicUrl` become `https://<custom domain>`.
+
+The default `*.azurecontainerapps.io` host keeps working. An apex domain
+(`jolt.example.com` itself) needs an A record and HTTP validation instead;
+use a subdomain. Check: `curl -sS https://api.jolt.example.com/health`.
+
+### Promotion and approval
+
+`.github/workflows/deploy-prod.yml` deploys an image that already exists, never
+builds one:
+
+- **Tag**: `git tag v2.0.0 <sha> && git push origin v2.0.0` promotes the image
+  of the tagged commit (`jolt-api:<commit sha>`, which `deploy-dev.yml` built
+  and smoke-tested when that commit reached `main`).
+- **Manual**: Actions → Deploy prod → Run workflow, optionally `image_tag` = a
+  SHA already in the dev registry (also how prod rolls back).
+
+The job waits for an approval in the GitHub environment `prod`, then copies
+`jolt-api:<sha>` from the dev registry to the prod registry (`docker pull` /
+`push`, same digest), updates `jolt-api` and the `jolt-maintenance` job, and
+runs `scripts/smoke.py --public --expect-dev-auth-off` against
+`PROD_PUBLIC_URL` (health and version, 401 without or with a bogus token on
+`/v1` and `/mcp`, Google sign-in configured, 413 for an oversized body, dev
+sign-in 404, and the CORS preflight from `PROD_APP_ORIGIN` when set). Dev
+sign-in is off in prod, so the smoke test creates no account.
+
+Set up the gate once, in GitHub → Settings → Environments → **New environment**
+`prod`:
+
+1. **Required reviewers**: the owner (and anyone else allowed to ship). Tick
+   "Prevent self-review" if there is more than one reviewer.
+2. **Deployment branches and tags** → Selected branches and tags: add the tag
+   pattern `v*` and the branch `main` (for manual runs).
+3. Leave environment secrets empty: sign-in is OIDC, and the variables are
+   repository variables (the job's `if:` reads them before the environment).
+
+Repository variables (Settings → Secrets and variables → Actions → Variables;
+`scripts/deploy-infra.sh --env prod --set-github-vars` sets them):
+
+| Variable | Value |
+|---|---|
+| `PROD_AZURE_CLIENT_ID` | client id of `id-jolt-prod-github` |
+| `PROD_AZURE_RESOURCE_GROUP` | `jolt-prod` |
+| `PROD_ACR_NAME` | `crjoltprod<sfx>` |
+| `PROD_CONTAINER_APP_NAME` | `jolt-api` |
+| `PROD_KEYVAULT_NAME` | `kv-jolt-prod-<sfx8>` (not used by the workflow; for reference) |
+| `PROD_PUBLIC_URL` | `https://<custom domain>` (output `publicUrl`) |
+| `PROD_APP_ORIGIN` | optional: the production front-end origin |
+| `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `ACR_NAME` | shared with dev (`ACR_NAME` is the dev registry, the source) |
+
+Until `PROD_AZURE_CLIENT_ID` is set the job is skipped. The federated credential
+on `id-jolt-prod-github` trusts only `repo:Dhiwakar1997/jolt-backend:environment:prod`,
+so only a job that passed the approval can sign in as it.
+
+**Roll back prod**: Actions → Deploy prod → Run workflow → `image_tag` = the
+previous SHA (it is still in both registries), or
+`az containerapp update -g jolt-prod -n jolt-api --image <prod acr>.azurecr.io/jolt-api:<sha>`.
+
+## Observability
+
+The app exports traces, logs and metrics with OpenTelemetry (the Azure Monitor
+distro, `jolt/telemetry.py`) to the workspace-based Application Insights
+`appi-jolt-<env>`, only when `APPLICATIONINSIGHTS_CONNECTION_STRING` is set
+(Bicep sets it as a Container Apps secret; tests and local runs leave it empty
+and load nothing):
+
+- **Requests** (`requests` table): every HTTP request except `/health`, with
+  duration and result code; **dependencies**: Cosmos, Blob, Key Vault and
+  Google calls; **traces**: the `jolt.*` loggers (never the access log).
+- **Custom metrics** (`customMetrics`, attributes in `customDimensions`):
+
+  | Metric | What | Attributes |
+  |---|---|---|
+  | `jolt.sync.runs` | sync runs started / finished / closed incomplete | `user_id` (opaque id, never an e-mail), `status`, `client` |
+  | `jolt.extraction.confidence` | confidence of every stored read (histogram) | `low_confidence`, `model` |
+  | `jolt.lease.expiries` | sync leases that lapsed: reclaimed by a later sync, or the source marked failed | `kind`, `outcome` |
+  | `jolt.cosmos.request_charge` | Cosmos RU per REST request and per MCP tool call (histogram), from the `x-ms-request-charge` header of every Cosmos response | `surface` (`rest` / `mcp`), `operation` (`GET /v1/sources/{source_id}` / tool name) |
+  | `jolt.http.requests` | requests by route template and status | `route`, `method`, `status_code`, `status_class` |
+  | `jolt.mcp.tool_calls` | tool calls by outcome | `tool`, `outcome` (`ok` / `error` / `unauthorized` / `rate_limited`) |
+  | `jolt.rate_limited` | 429s | `surface`, `scope` (`token` / `ip`) |
+  | `jolt.maintenance.deleted` | what the maintenance job removed | `kind` |
+
+The **workbook** "Jolt API (<env>)" (Azure portal → Monitor → Workbooks, or the
+Application Insights resource → Workbooks; source `infra/workbook.json`) charts
+sync runs per day and per user, the extraction-confidence distribution and
+mean, lease expiries and the expiry rate per stored read, RU per tool and per
+route, HTTP 4xx/5xx rates, MCP tool outcomes, failing routes, 429s, exceptions
+and maintenance deletions. To change it, edit it in the portal, copy the
+gallery template JSON (Advanced editor) into `infra/workbook.json`, redeploy.
+
+Ad hoc: Application Insights → Logs, e.g.
+`customMetrics | where name == "jolt.cosmos.request_charge" | summarize sum(valueSum) by tostring(customDimensions.operation)`.
+
+## Alerts and budgets
+
+With `alertEmails` set (prod; optional in dev), `infra/modules/alerts.bicep`
+creates the action group `ag-jolt-<env>` (e-mail, common alert schema) and:
+
+| Rule | Fires when | Parameter (prod default) |
+|---|---|---|
+| `jolt-<env>-cosmos-ru` | Cosmos `TotalRequestUnits` over the last hour above the threshold (evaluated every 15 min) | `cosmosRuAlertPerHour` (1,000,000 RU ≈ US$0.25 serverless) |
+| `jolt-<env>-blob-capacity` | `BlobCapacity` (average over 6 h) above the threshold | `blobCapacityAlertGb` (50 GiB) |
+| `jolt-<env>-http-5xx` | Container Apps `Requests` with status 5xx in 5 minutes above the count | `http5xxAlertCount` (10) |
+| `jolt-<env>-http-5xx-rate` | Application Insights: failed (≥ 500) share of requests over 15 min above the percentage, with at least 20 requests | `http5xxAlertRatePercent` (5) |
+| Budget `jolt-<env>-monthly` | resource-group cost: actual at 80 %, forecast at 100 % | `budgetAmount` (50), `budgetStartDate` |
+| Budget `jolt-subscription-monthly` | whole subscription, same thresholds (set in prod only) | `subscriptionBudgetAmount` (100) |
+
+Amounts are in the subscription's billing currency. Budgets e-mail
+`alertEmails` and notify the action group.
+
+**Test that alerts reach people** (after a deploy; "deploy pending" until then):
+
+```bash
+# Sends a sample notification of each kind through the action group:
+az monitor action-group test-notifications create -g jolt-prod \
+  --action-group ag-jolt-prod --alert-type budget
+az monitor action-group test-notifications create -g jolt-prod \
+  --action-group ag-jolt-prod --alert-type metricstaticthreshold
+```
+
+To fire a real rule end to end, deploy once with `blobCapacityAlertGb = 0`
+(any stored blob crosses it; fires within about an hour), confirm the e-mail,
+then set it back and redeploy.
+
+## Backups and restore
+
+| Store | dev | prod | Restore |
+|---|---|---|---|
+| Cosmos DB | periodic: every 24 h, kept 48 h | **continuous**, 30-day point in time | below |
+| Blob (`sources`) | soft delete 7 days (blobs and containers) | soft delete 14 days + **versioning** (versions kept 14 days) | below |
+| Key Vault | soft delete 7 days | soft delete 90 days | `az keyvault secret recover --vault-name <kv> -n token-hash-pepper` |
+
+**Cosmos, prod (continuous).** A point-in-time restore creates a **new**
+account; the live one is never overwritten.
+
+```bash
+az cosmosdb restorable-database-account list --account-name cosmos-jolt-prod-<sfx> -o table
+az cosmosdb restore -g jolt-prod \
+  --account-name cosmos-jolt-prod-<sfx> \
+  --target-database-account-name cosmos-jolt-prod-restore-<date> \
+  --restore-timestamp 2026-12-01T10:00:00Z --location centralindia
+```
+
+Then either copy the needed documents back (small incidents: one user's data),
+or switch the app to the restored account: give `id-jolt-prod-api` the Cosmos
+DB Built-in Data Contributor role on it (as `infra/modules/cosmos.bicep` does),
+`az containerapp update -g jolt-prod -n jolt-api --set-env-vars COSMOS_ENDPOINT=<restored endpoint>`
+(and the same on the `jolt-maintenance` job), and later fold the change into
+Bicep. A deleted database or container can also be restored in place:
+`az cosmosdb sql container restore -g jolt-prod -a cosmos-jolt-prod-<sfx> -d jolt -n <container> --restore-timestamp <time>`.
+**Account deletes:** a restore brings back users who deleted their account
+after the restore point; delete them again (their ids are in the app logs:
+`account deleted: user=<id>`) before switching over.
+
+**Cosmos, dev (periodic):** no self-service restore; open a support request
+in the portal (Help + support → Create a support request → Azure Cosmos DB,
+problem type "Backup and restore") within 48 h of the incident.
+
+**Blob.** Soft-deleted blobs are listed and undeleted with
+`az storage blob list --account-name <st> -c sources --include d --prefix <user_id>/ --auth-mode login`
+and `az storage blob undelete --account-name <st> -c sources -n <path> --auth-mode login`.
+In prod, versioning keeps the previous version of a deleted or overwritten
+blob; restore one by copying it over the current name:
+`az storage blob list ... --include v`, then
+`az storage blob copy start --account-name <st> --destination-container sources --destination-blob <path> --source-uri "https://<st>.blob.core.windows.net/sources/<path>?versionid=<id>" --auth-mode login`.
+A deleted container: `az storage container list --include-deleted` and
+`az storage container restore -n sources --deleted-version <v>`. The deploying
+user needs a Blob data role for these (e.g. via `developerPrincipalId` in dev,
+or a temporary Storage Blob Data Contributor assignment in prod).
+
+Rehearse a Cosmos restore and a blob undelete once after the first prod
+deploy, and after any change to `infra/modules/cosmos.bicep` or
+`storage.bicep`.
+
+## Maintenance job
+
+`jolt-maintenance` is a scheduled Container Apps Job (`maintenanceSchedule`,
+default `17 3 * * *` UTC) running `python -m jolt.maintenance` from the app's
+image, with the app's identity and store settings (no ingress, no pepper). Each
+run:
+
+1. deletes **abandoned uploads**: sources whose upload was requested but never
+   confirmed for `ABANDONED_UPLOAD_HOURS` (24), with any pages that arrived;
+2. enforces **data retention**: for each user with `data_retention_days`, deletes
+   sources uploaded longer ago than that, with their blobs and reads
+   (extractions). Concepts, questions and review history stay.
+
+It prints a JSON report and logs it (and the `jolt.maintenance.deleted`
+metric); a failure exits 1, which shows as a failed execution. The deploy
+workflows roll the job to each new image. By hand:
+
+```bash
+az containerapp job start -g jolt-prod -n jolt-maintenance          # run now
+az containerapp job execution list -g jolt-prod -n jolt-maintenance -o table
+az containerapp job logs show -g jolt-prod -n jolt-maintenance --container jolt-maintenance
+python -m jolt.maintenance --dry-run                                # locally, against .env
+```
+
+There is deliberately no HTTP route for it. Set `maintenanceEnabled = false` to
+remove nothing on a schedule (the job is then not created; delete an existing
+one with `az containerapp job delete`).
+
+## Rate and size limits
+
+In-process token buckets, **per replica** (`jolt/api/limits.py`):
+`RATE_LIMIT_REST_PER_MINUTE` (120) per app token on `/v1` (sign-in and other
+token-less requests per client IP), `RATE_LIMIT_MCP_PER_MINUTE` (300) per MCP
+token for tool calls and connections, and `RATE_LIMIT_IP_PER_MINUTE` (600) per
+IP across both. Over a limit: `429` with `Retry-After`. Bodies over
+`REQUEST_MAX_BYTES` (1 MiB; `MCP_REQUEST_MAX_BYTES` 4 MiB on `/mcp`) get `413`.
+The client IP is the one Container Apps ingress forwards (Uvicorn runs with
+`--proxy-headers`). With more than one replica each enforces its own buckets;
+a shared limiter (Redis) is only worth it once `maxReplicas` > 1. Change a
+limit without a code change: `az containerapp update -g <rg> -n jolt-api --set-env-vars RATE_LIMIT_REST_PER_MINUTE=240`
+(or add it to `infra/modules/containerapp.bicep`).
+
 ## Configuration and secrets
 
 Every variable is documented in `.env.example`. In Azure they are set on the
@@ -283,6 +591,9 @@ container by Bicep (`infra/modules/containerapp.bicep`):
 | `BLOB_SAS_TTL_SECONDS`, `LEASE_TTL_SECONDS`, `FSRS_DESIRED_RETENTION`, `APP_TOKEN_PREFIX`, `MCP_TOKEN_PREFIX`, `*_API_BASE` | defaults | code | — |
 | `SYNC_RUN_IDLE_SECONDS` (1800), `SYNC_LATE_AFTER_HOURS` (30), `SYNC_SCHEDULE_TIME` (`00:15`), `MCP_QUERY_TOKEN_ENABLED` (`true`) | defaults | code (BE-04) | — |
 | `EXPORT_URL_TTL_SECONDS` (3600) | default | code (BE-08) | — |
+| `APPLICATIONINSIGHTS_CONNECTION_STRING` | `appi-jolt-<env>`'s connection string (Container Apps secret `appinsights-connection-string`) | Bicep | — |
+| `RATE_LIMIT_ENABLED` (`true`), `RATE_LIMIT_REST_PER_MINUTE` (120), `RATE_LIMIT_MCP_PER_MINUTE` (300), `RATE_LIMIT_IP_PER_MINUTE` (600), `REQUEST_MAX_BYTES` (1 MiB), `MCP_REQUEST_MAX_BYTES` (4 MiB) | defaults | code (BE-10) | — ([Rate and size limits](#rate-and-size-limits)) |
+| `ABANDONED_UPLOAD_HOURS` (24) | default | code (BE-10), read by the maintenance job | — |
 
 To change a value without a code change, edit the Bicep parameter and run
 `scripts/deploy-infra.sh --skip-build`. To rotate the pepper (logs every user
@@ -290,15 +601,8 @@ out): `az keyvault secret set --vault-name <kv> -n token-hash-pepper --value "$(
 then restart the app (`az containerapp revision restart`); Container Apps also
 re-reads Key Vault references periodically.
 
-**Budget alert (optional, LLD §9):**
-
-```bash
-az consumption budget create --budget-name jolt-dev-monthly --amount 20 \
-  --category cost --time-grain monthly --resource-group jolt-dev \
-  --start-date "$(date +%Y-%m-01)" --end-date 2027-12-31
-```
-
-(Notification e-mails are easiest to add in the portal: Cost Management → Budgets.)
+**Budgets** are Bicep parameters now (`budgetAmount`, `subscriptionBudgetAmount`,
+`alertEmails`): [Alerts and budgets](#alerts-and-budgets).
 
 ## Roll back
 
@@ -318,11 +622,9 @@ The app runs in single-revision mode; every deploy is an immutable image
 - **Infrastructure:** check out the previous commit of `infra/` and run
   `scripts/deploy-infra.sh --skip-build`. Deployments are incremental: resources
   removed from Bicep are not deleted, so remove them by hand if needed.
-- **Data:** Cosmos periodic backups (every 24 h, kept 48 h) are restored by
-  opening a support request from the portal. Deleted blobs and containers can be
-  undeleted for 7 days (`az storage blob undelete --auth-mode login …`). Deleted
-  Key Vault secrets are recoverable for 7 days unless the app purged them (API-key
-  deletes purge on purpose).
+- **Data:** [Backups and restore](#backups-and-restore). Deleted Key Vault
+  secrets are recoverable for the soft-delete window unless the app purged them
+  (API-key deletes purge on purpose).
 
 ## Tear down and recreate
 
@@ -385,6 +687,26 @@ no secret needed in memory mode), and `python scripts/smoke.py --base-url http:/
   BE-03 (it grants the GitHub identity read access to that one secret).
 - **Deploy job skipped in GitHub:** `AZURE_CLIENT_ID` repository variable missing,
   or the run is not on `main`.
+- **429 Too Many Requests:** a client went over its per-token budget
+  ([Rate and size limits](#rate-and-size-limits)); the `jolt.rate_limited`
+  metric and the workbook show which surface. Raise the limit with an env var
+  if it is legitimate traffic.
+- **No data in Application Insights:** check the app has
+  `APPLICATIONINSIGHTS_CONNECTION_STRING` (`az containerapp show ... --query
+  "properties.template.containers[0].env"`) and its log line
+  `telemetry: exporting to Application Insights`; metrics arrive about a minute
+  after the traffic.
+- **Deploy fails adding the custom domain ("TXT record ... asuid" / "CNAME
+  record ... not found"):** the TXT record is missing or not propagated; the
+  CNAME already resolved, which is why the script tried. Fix DNS and rerun.
+- **Custom domain answers with a certificate error:** the certificate is not
+  bound yet. `az containerapp env certificate list -g jolt-prod -n cae-jolt-prod --managed-certificates-only -o table`;
+  `Pending` means DNS (CNAME and `asuid` TXT) is not visible yet; once
+  `Succeeded`, rerun `scripts/deploy-infra.sh --env prod --skip-build`.
 - **`azure/login` fails with "AADSTS70021: No matching federated identity record":**
   the job must run in environment `dev` from repo `Dhiwakar1997/jolt-backend`;
   check `githubRepository` / `githubEnvironment` in the params file.
+  For prod, the job must run in environment `prod` (`githubEnvironment = 'prod'`).
+- **Deploy prod: "jolt-api:<sha> is not in <dev acr>":** the commit was never
+  deployed to dev (or its image was deleted). Merge to `main` and let
+  `deploy-dev.yml` build it first.

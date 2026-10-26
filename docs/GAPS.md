@@ -128,7 +128,7 @@ Frame numbers are phone / web / tablet.
 | Settings · API key + sheet | 20 / 36 / 50, 51, 58 | Add, list (`added_at`), remove | `POST`, `GET` (with `added_at`, BE-08), `DELETE /v1/settings/api-key` | ready | — |
 | Settings · Appearance | 20 / 36 / 50 | Theme | `theme` in `GET` / `PATCH /v1/settings` (BE-08) | ready | — |
 | Settings · Reviews | 20 / 36 / 50 | Desired retention (FSRS), daily cap, retire mastered, allow question rewrite | All four in `GET` / `PATCH /v1/settings`, each with its behaviour: desired retention per user in every FSRS fold, daily cap on session size (BE-08), retire / rewrite (BE-06) | ready | — |
-| Settings · Data | 20 / 36 / 50, 59 | Storage used, export, delete account | `GET /v1/storage` (BE-05); `POST /v1/export` → signed download URL, `DELETE /v1/me {confirm: "DELETE"}` (BE-08); `data_retention_days` in settings (stored, not enforced) | ready | Enforcing data retention: no pass yet (below) |
+| Settings · Data | 20 / 36 / 50, 59 | Storage used, export, delete account | `GET /v1/storage` (BE-05); `POST /v1/export` → signed download URL, `DELETE /v1/me {confirm: "DELETE"}` (BE-08); `data_retention_days` in settings, enforced by the daily maintenance sweep (BE-10) | ready | — |
 
 **BE-08 decisions and follow-ups for the progress and settings screens**
 
@@ -149,9 +149,11 @@ Frame numbers are phone / web / tablet.
   mock, so it can have fewer than `weeks` points.
 - **Desired retention changes future intervals only.** Cards keep the due date
   they have until their next answer (no bulk reschedule).
-- **Data retention is stored, not enforced.** Nothing deletes uploads by age.
-  A cleanup (and the abandoned-upload sweep from BE-05) needs a scheduled job,
-  which the single-service design avoids: → BE-10 (data hygiene) or later.
+- ~~**Data retention is stored, not enforced.**~~ Fixed in BE-10: the
+  `jolt-maintenance` Container Apps Job (`python -m jolt.maintenance`, daily)
+  deletes sources past the user's `data_retention_days` with their files and
+  reads, and uploads never confirmed after 24 h. Concepts, questions and review
+  history learned from a deleted source stay; sessions keep its (dangling) id.
 - **Export holds documents, not files.** The bundle has every document and
   every read's markdown, with page metadata but not the uploaded images or
   PDFs. Zipping originals would make the export a long-running job. → later, if
