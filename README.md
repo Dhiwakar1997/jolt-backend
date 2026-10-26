@@ -35,7 +35,7 @@ jolt/
 ├── services/          use-case composition over domain + data
 ├── domain/            business logic — no FastAPI, no Azure SDK (unit-testable)
 ├── data/              the only layer touching Azure (cosmos, blob, repositories, leases)
-├── auth/              opaque-token issue / verify, token → user resolution
+├── auth/              app + MCP tokens (issue / look up / verify), Google ID tokens, token → user
 └── credentials/       per-user provider keys (vault, providers, dormant inference seam)
 ```
 
@@ -60,7 +60,10 @@ cp .env.example .env
 | `COSMOS_ENDPOINT` / `COSMOS_DATABASE` / `COSMOS_KEY` | Cosmos account |
 | `BLOB_ACCOUNT_URL` / `BLOB_CONTAINER` / `BLOB_CONNECTION_STRING` | Blob storage |
 | `KEYVAULT_URL` | Key Vault for tokens material + per-user provider keys |
-| `TOKEN_HASH_PEPPER` | server-side pepper mixed into token hashing |
+| `TOKEN_HASH_PEPPER` | server-side pepper mixed into token hashing and the token lookup index |
+| `GOOGLE_OAUTH_CLIENT_ID` | Google OAuth client id(s) whose ID tokens sign-in accepts |
+| `MCP_SERVER_URL` | MCP address shown in the app (`GET /v1/me`) |
+| `DEV_AUTH_ENABLED` / `DEV_AUTH_SECRET` | dev-only sign-in by e-mail (`POST /v1/auth/dev`); never in prod |
 
 With `AUTH_MODE=managed_identity`, leave the `*_KEY` / `*_CONNECTION_STRING` blank —
 the app authenticates via `DefaultAzureCredential` (a Managed Identity in Container
@@ -85,18 +88,23 @@ With `PUBLIC_BASE_URL` set, upload/read URLs are served by the app itself at
 `/_dev/blob/...`, so the browser upload flow works too:
 
 ```bash
-STORAGE_MODE=memory PUBLIC_BASE_URL=http://localhost:8000 uvicorn jolt.main:app --port 8000
+STORAGE_MODE=memory DEV_AUTH_ENABLED=true PUBLIC_BASE_URL=http://localhost:8000 \
+    uvicorn jolt.main:app --port 8000
 python scripts/smoke.py --base-url http://localhost:8000   # full round trip
 ```
 
-### Bootstrapping a user
+### Signing in and connecting a model
 
 ```
-POST /v1/accounts            -> { user_id, token }   # token shown ONCE
+POST /v1/auth/google {id_token}   -> { app_token, user }   # the app, per device
+POST /v1/auth/dev    {email}      -> { app_token, user }   # dev only (DEV_AUTH_ENABLED)
+POST /v1/mcp-tokens  {label}      -> { id, token, ... }    # token shown ONCE
 ```
 
-Put the token in the MCP client config (connection `Authorization` header) and in the
-app's secure storage (`Authorization: Bearer <token>`).
+The app keeps its app token (`jolt_app_…`) and sends it as `Authorization: Bearer`
+on `/v1`. The MCP token (`jolt_live_…`) goes in the Claude / Codex MCP client
+config as the connection's `Authorization` header; `/mcp` accepts only MCP
+tokens, `/v1` only app tokens. See `docs/API.md` §1.
 
 ## Tests and checks
 

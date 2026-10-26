@@ -1,6 +1,6 @@
 [project]
 name = "jolt-backend"
-version = "0.2.0"
+version = "0.3.0"
 description = "Jolt backend — thin MCP tool surface + REST API over Cosmos/Blob/Key Vault"
 requires-python = ">=3.11"
 

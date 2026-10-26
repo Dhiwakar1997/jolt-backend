@@ -11,32 +11,45 @@ Regenerate both with `python scripts/export_contract.py` after changing a route,
 tool, a tool description or `jolt/mcp/schemas.py`. This file is written by hand:
 update it in the same change.
 
-State: API version 0.2.0, the MVP plus the track agenda model (PR #3). Screens that
-have no endpoint yet are listed in [`GAPS.md`](./GAPS.md).
+State: API version 0.3.0: the MVP, the track agenda model (PR #3), and accounts,
+Google sign-in and MCP token management (BE-03). Screens that have no endpoint yet
+are listed in [`GAPS.md`](./GAPS.md).
 
 ## Conventions
 
 | | |
 |---|---|
 | **Base paths** | REST under `/v1`. MCP over HTTP+SSE: connect to `/mcp/sse`, post to `/mcp/messages/`. `GET /health` → `{status: "ok", version}` (no auth). CORS: the origins in `CORS_ORIGINS` / `CORS_ORIGIN_REGEX`, no credentials (the token is a header). |
-| **Auth** | `Authorization: Bearer <token>` on every `/v1` route except `POST /v1/accounts`, and on the MCP connection. Today there is one token kind (`jolt_live_…`) for both surfaces; BE-03 splits app and MCP tokens. A bare token without `Bearer` is also accepted. |
+| **Auth** | `Authorization: Bearer <token>`. Two opaque token kinds: an **app token** (`jolt_app_…`, one per signed-in device, from sign-in) on every `/v1` route except the sign-in routes, and an **MCP token** (`jolt_live_…`, one per connected client, from `POST /v1/mcp-tokens`) on the MCP connection. Each surface refuses the other kind with `401` (`detail: "wrong token kind: …"`); opening `/mcp/sse` with a missing, revoked or wrong-kind token is a `401` before the stream starts. Tokens do not expire; revoking (sign-out, `DELETE /v1/mcp-tokens/{id}`) takes effect on the next request. A bare token without `Bearer` is also accepted. |
 | **Scope** | Identity comes only from the token. No route or tool takes a `user_id`. |
 | **Errors (REST)** | Non-2xx bodies are `{"detail": "<message>"}` (`ErrorResponse`). Request-validation failures are `422` with `{"detail": [ {loc, msg, type} ]}` (`HTTPValidationError`). `401` always carries `WWW-Authenticate: Bearer`. |
 | **Errors (MCP)** | Tools marked *`{error}` on* return `{"error": "<message>"}` for the listed recoverable cases. Every other failure (missing/invalid token, unknown source, grade outside 1–4) is raised and arrives as an MCP tool error (`isError: true`). |
 | **Types** | IDs are opaque strings (32-hex today). Timestamps are ISO-8601 UTC. FSRS grades: 1 Again, 2 Hard, 3 Good, 4 Easy. |
 | **Agenda** | `{status: none\|draft\|refined\|locked, source: agent\|user\|emergent, syllabus: [{concept_key, label, parent}], last_refined_at, refined_from_source_id}`; written `Agenda` below. |
 
-Auth column: **—** none, **token** bearer token required (401 without a valid one).
+Auth column: **—** none, **token** app token required (401 without a valid one).
 
 ---
 
-## 1. Accounts
+## 1. Accounts, sign-in and MCP tokens
+
+`User = {id, email, display_name, picture_url, created_at}`. `display_name` falls
+back to the part of the e-mail before `@`; `picture_url` is Google's profile
+picture or `null`.
 
 | Method | Path | Auth | Request | Response | Errors |
 |---|---|---|---|---|---|
-| POST | `/v1/accounts` | — | `{display_name?: string}` | `{user_id, token}`; the token appears only in this response and cannot be read back | 422 |
+| POST | `/v1/auth/google` | — | `{id_token}`: the Google ID token (JWT) from Google sign-in | `{app_token, user: User}`. Verifies signature (Google's JWKS), issuer, audience (`GOOGLE_OAUTH_CLIENT_ID`) and expiry; creates the user on first sign-in (keyed by Google `sub`), refreshes e-mail, name and picture after. Each call issues a new app token (one per device). | 401 `invalid Google ID token: <reason>` (expired, issued for another client, bad signature, …); 422; 503 not configured / Google's keys unreachable |
+| POST | `/v1/auth/dev` | — | `{email, display_name?}`; header `X-Jolt-Dev-Auth-Secret` when the server has `DEV_AUTH_SECRET` | `{app_token, user: User}`. **Dev only**: mounted when `DEV_AUTH_ENABLED` is on, never in prod. The same e-mail is always the same user (a different user from a Google sign-in with that e-mail). For the front end's dev mode against a local memory-mode server and for `scripts/smoke.py`. | 403 wrong/missing secret; 404 when not enabled; 422 |
+| POST | `/v1/auth/sign-out` | token | — | 204; revokes the app token that made the request (other devices stay signed in) | 401 |
+| GET | `/v1/me` | token | — | `{user: User, onboarding: {has_track, has_mcp_token, first_sync_at}, mcp_server_url, has_api_key}`. `has_track`: the user owns a track (curated enrolment counts from BE-09). `first_sync_at`: `null` until the first successful nightly sync (set by BE-04). `mcp_server_url`: the address to paste into Claude / Codex (`MCP_SERVER_URL`, e.g. `https://<host>/mcp/sse`). `has_api_key`: a provider key is stored. | 401 |
+| POST | `/v1/mcp-tokens` | token | `{label}` (1–60 characters after trimming, e.g. `"Claude Desktop"`) | **201** `{id, label, last4, created_at, last_used_at: null, token}`. The plaintext `token` appears only in this response. | 401, 422 |
+| GET | `/v1/mcp-tokens` | token | — | `[{id, label, last4, created_at, last_used_at}]`, newest first; never the token. `last_used_at` is updated at most once a minute. | 401 |
+| DELETE | `/v1/mcp-tokens/{token_id}` | token | — | 204; the next MCP call with that token fails | 401, 404 `token not found` (unknown, another user's, or an app token's id) |
 
-There is no sign-in, `/me` or token management yet (BE-03).
+Only hashes are stored: each token document holds an Argon2 hash of the peppered
+token and an indexed lookup key (truncated HMAC-SHA256 keyed by the pepper), so
+resolving a token is one indexed query plus one Argon2 verify.
 
 ---
 
@@ -137,13 +150,16 @@ inline. The agent later replaces the provisional grade (section 2).
 
 ## Testing against the API without Azure
 
-`STORAGE_MODE=memory uvicorn jolt.main:app` serves this whole API on in-memory
-fakes (`jolt/data/memory.py`). Tests use the same fakes (`tests/conftest.py`).
+`STORAGE_MODE=memory DEV_AUTH_ENABLED=true uvicorn jolt.main:app` serves this
+whole API on in-memory fakes (`jolt/data/memory.py`); sign in with
+`POST /v1/auth/dev {"email": "you@example.com"}`, then create an MCP token for
+agents. Tests use the same fakes (`tests/conftest.py`) and verify Google ID tokens
+minted with a test RSA key, so they never call Google.
 
 Uploads work too when the server knows its own URL:
 
 ```bash
-STORAGE_MODE=memory PUBLIC_BASE_URL=http://localhost:8000 uvicorn jolt.main:app --port 8000
+STORAGE_MODE=memory DEV_AUTH_ENABLED=true PUBLIC_BASE_URL=http://localhost:8000 uvicorn jolt.main:app --port 8000
 ```
 
 `upload_url` / `read_url` then point at `/_dev/blob/<container>/<path>?sp=…&sig=…`

@@ -2,7 +2,7 @@
 
 Each screen in the Jolt 2.0 design (Figma prototype, frames listed in
 `Jolt/design/frames/index.json`; screens per pass in `Jolt/docs/v2/PLAN.md` §5 and
-the FE pass briefs) compared with the API as of BE-01 ([`API.md`](./API.md)). For
+the FE pass briefs) compared with the API as of BE-03 ([`API.md`](./API.md)). For
 each gap, the backend pass whose brief covers it.
 
 Status: **ready** (today's endpoints are enough) · **partial** (some data
@@ -16,10 +16,10 @@ Frame numbers are phone / web / tablet.
 | Screen | Frames | Needs from the backend | Today | Status | Covered by |
 |---|---|---|---|---|---|
 | Splash, Welcome | 1, 2 / 21 | — | — | client | — |
-| Sign in (Google) | 2 / 21 | `POST /v1/auth/google` → app token + user | Only anonymous `POST /v1/accounts` | missing | BE-03 |
-| Connect your model | 3 / 21 | Create an MCP token shown once, MCP server URL, per-client steps, nightly prompt | Token only from account creation, same token for app and MCP | missing | BE-03 (`/v1/mcp-tokens`, `/v1/me`), BE-04 (`docs/CONNECT.md`, `GET /v1/sync/prompt`) |
+| Sign in (Google) | 2 / 21 | `POST /v1/auth/google` → app token + user | `POST /v1/auth/google` (BE-03); dev mode: `POST /v1/auth/dev` | ready | — |
+| Connect your model | 3 / 21 | Create an MCP token shown once, MCP server URL, per-client steps, nightly prompt | `POST /v1/mcp-tokens` (token shown once), `mcp_server_url` on `GET /v1/me` (BE-03); no prompt or per-client steps | partial | BE-04 (`docs/CONNECT.md`, `GET /v1/sync/prompt`) |
 | First track | 4 / 21 | Create a notes track with name and optional outline (→ `draft`); or enrol in curated DSA | `POST /v1/tracks {name, syllabus}` gives a `refined` agenda, no outline/`draft`, no `kind` | partial | BE-07 (outline → `draft`, `kind`), BE-09 (catalog, enrol) |
-| Waiting for first sync | — / 21 | Poll sync status; resume point for a returning user | — | missing | BE-04 (`GET /v1/sync/status`), BE-03 (`GET /v1/me` onboarding state) |
+| Waiting for first sync | — / 21 | Poll sync status; resume point for a returning user | `GET /v1/me` `onboarding` (BE-03); `first_sync_at` stays `null` until BE-04 sets it | partial | BE-04 (`GET /v1/sync/status`, sets `first_sync_at`) |
 
 ## Today (FE-04)
 
@@ -31,7 +31,7 @@ Frame numbers are phone / web / tablet.
 | Tracks | 5 / 22 / 37 | Concepts, due and sources count per track | `GET /v1/tracks` has no counts | partial | BE-07 |
 | Tonight's uploads | 5 / 22 / 37 | Unprocessed sources with their track | `GET /v1/sources` (filter on the client; no `track_id`) | partial | BE-05 |
 | What's new | 5 / 22 / 37 | Concepts added by the last sync, with the source date ("Found in your 12 Sep notes") | — | missing | **No brief covers it.** Proposal: BE-04 records concept ids per sync run and `GET /v1/sync/runs` returns them, or BE-07 adds `GET /v1/concepts?since=` |
-| Empty / first-run states | — | Same data as above, plus `GET /v1/me` | — | missing | BE-03, BE-04 |
+| Empty / first-run states | — | Same data as above, plus `GET /v1/me` | `GET /v1/me` (BE-03) | partial | BE-04 |
 
 ## Review (FE-06)
 
@@ -54,7 +54,7 @@ Frame numbers are phone / web / tablet.
 | Lock toggle | 11 / 28 / 42 | Lock / unlock | `POST /v1/tracks/{id}/agenda/lock` and `/unlock` | ready | — |
 | "Added to the syllabus from your notes" | 11 / 28 / 42 | Per-item provenance (auto-added vs authored) | Only track-level `agenda.source` | partial | BE-07 (not named in the brief; add a per-item `source`) |
 | Concept | 12 / 29 / 43 | Summary, source and page, answer timeline (date, your words, correct, grade, feedback, question version), adaptive question note, FSRS state | `GET /v1/progress/concepts/{id}`: FSRS state and timeline of date, grade, correct; no text, no words, no feedback, no versions, no source | partial | BE-07 (`GET /v1/concepts/{id}`), BE-06 (question versions, feedback summary) |
-| Feedback panel gate | 12 / 29 / 43 | `has_api_key` | `GET /v1/settings/api-key` (works as a stand-in) | partial | BE-08 (`has_api_key` on `/v1/me`); panel content BE-11 |
+| Feedback panel gate | 12 / 29 / 43 | `has_api_key` | `has_api_key` on `GET /v1/me` (added in BE-03 for BE-08) | ready | panel content BE-11 |
 | "Something's wrong with this concept" | 12 / 29 / 43 | Store a correction note for the next sync | Agents can call `jolt_correct_concept`; no REST route | missing | BE-07 (`POST /v1/concepts/{id}/correction`) |
 | DSA track (placeholder) | 13 / 30 / 44 | Curated track, enrol, patterns as syllabus, `pattern_match` questions, decision tree, library | — | missing | BE-09 |
 
@@ -76,7 +76,7 @@ Frame numbers are phone / web / tablet.
 | Screen part | Frames | Needs | Today | Status | Covered by |
 |---|---|---|---|---|---|
 | Progress | 19 / 35 / 49 | Retention and weekly series, reviews, streak, learning / mastered, daily heatmap, per-track table | Only per-concept `GET /v1/progress/concepts/{id}` | missing | BE-08 (`GET /v1/progress`) |
-| Settings · Model | 20 / 36 / 50 | MCP status, last sync and health, connected clients (create / revoke tokens), nightly prompt | — | missing | BE-03 (tokens), BE-04 (sync status, prompt), BE-08 (model status block) |
+| Settings · Model | 20 / 36 / 50 | MCP status, last sync and health, connected clients (create / revoke tokens), nightly prompt | `GET`/`POST /v1/mcp-tokens`, `DELETE /v1/mcp-tokens/{id}` with `label`, `last_used_at` (BE-03) | partial | BE-04 (sync status, prompt), BE-08 (model status block) |
 | Settings · API key + sheet | 20 / 36 / 50, 51, 58 | Add, list (`added_at`), remove | `POST`, `GET` (no `added_at`), `DELETE /v1/settings/api-key` | partial | BE-08 |
 | Settings · Appearance | 20 / 36 / 50 | Theme | — | missing | BE-08 (`GET/PATCH /v1/settings`) |
 | Settings · Reviews | 20 / 36 / 50 | Desired retention (FSRS), daily cap, retire mastered, allow question rewrite | — (`FSRS_DESIRED_RETENTION` is a server-wide setting) | missing | BE-08 (settings), BE-06 (behaviour) |
@@ -115,7 +115,12 @@ To fix in the pass named, or sooner.
 4. **`PUT /v1/settings/retention` naming.** It stores *data* retention in days,
    which is easy to confuse with FSRS *desired retention* (Settings · Reviews). →
    BE-08 should fold it into `PATCH /v1/settings` with explicit names.
-5. **Token lookup scans every user** (Argon2 verify per user). → BE-03.
+5. ~~**Token lookup scans every user** (Argon2 verify per user).~~ Fixed in
+   BE-03: an indexed HMAC lookup key, then one Argon2 verify.
 6. **`GET /v1/reviews/due` `limit`** counts cards, not questions; a card with
    several active questions returns them all. → BE-06 replaces it with review
    sessions.
+7. **Tokens never expire, and app tokens cannot be listed.** Sign-out and MCP
+   token revocation work, but a lost device's app token stays valid until the
+   pepper rotates, and Settings has no "signed-in devices" list. → BE-10
+   (expiry / idle timeout for app tokens, optional device list).
