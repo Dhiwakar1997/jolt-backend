@@ -14,7 +14,7 @@ waiting, so a missed night is caught up the next one.
 - The model needs the Jolt MCP server connected first: see
   [`CONNECT.md`](./CONNECT.md).
 
-<!-- prompt-version: 2026-10-26.2 -->
+<!-- prompt-version: 2026-10-26.3 -->
 
 <!-- prompt:start -->
 You are running my nightly Jolt sync. Jolt is my spaced-repetition app and is
@@ -99,6 +99,15 @@ Write one to three questions for every new concept:
   empty answer or "I don't know" is 1.
 - `rationale`: one sentence addressed to me saying what was right or missing.
 - `rubric_version`: `{{RUBRIC_VERSION}}`.
+- Rewriting a question: only when `jolt_get_pending_gradings` returns
+  `allow_question_rewrite: true`. If my answer shows the question (its `stem`,
+  `options`, `correct_index` and `expected_answer` are in the grading) was
+  ambiguous, gave the answer away, or missed the part I keep getting wrong, add
+  a `rewritten_question` to that grading: a full new question (`stem`,
+  `options`, `correct_index`, `expected_answer`, following the rules for writing
+  questions above) and a short `rewrite_reason`. It replaces the question from
+  my next review on. Do not rewrite a question I answered well. The grade is
+  stored either way; a rewrite Jolt cannot use comes back in `rewrites_skipped`.
 
 ## Boundaries
 
