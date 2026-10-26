@@ -23,6 +23,7 @@ from typing import Optional
 from jolt.domain.grading import GradingInput, QuestionRewrite, apply_grading
 from jolt.domain.models import Question, QuestionStatus, Review
 from jolt.runtime import Runtime
+from jolt.services.cards import refresh_card_questions
 from jolt.services.reviews import ReviewService
 
 REWRITE_OFF = "question rewriting is off for this user (allow_question_rewrite)"
@@ -135,6 +136,8 @@ class GradingService:
             outcome.rewrites_skipped.append(RewriteSkipped(review.id, "question not found"))
             return
         review.rewritten_question_id = created.id
+        # The card lists the concept's active questions for the read models.
+        await refresh_card_questions(self._rt, review.user_id, review.concept_id)
         outcome.rewritten.append(
             Rewritten(
                 review.id,

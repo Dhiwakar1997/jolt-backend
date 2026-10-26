@@ -7,7 +7,7 @@
   "tools": [
     {
       "name": "jolt_get_tracks",
-      "description": "List the study tracks visible to the caller: their own tracks plus the world-readable curated ('jolt') tracks. A track is a subject/course that concepts hang off of.\nArguments: none.\nReturns: { tracks: [ { id, name, origin, syllabus, agenda } ] } where `origin` is 'user' or 'jolt' (curated). `syllabus` is a flat list of the agenda's topic labels (convenience). `agenda` is the full track agenda: { status ('none'|'draft'|'refined'|'locked'), source ('agent'|'user'|'emergent'), syllabus: [ { concept_key, label, parent } ], last_refined_at, refined_from_source_id }. Use a track `id` as `track_id` for the agenda, concept, coverage, question, and extraction tools. Read-only.",
+      "description": "List the study tracks visible to the caller: their own tracks plus the world-readable curated ('jolt') tracks. A track is a subject/course that concepts hang off of.\nArguments: none.\nReturns: { tracks: [ { id, name, origin, kind, archived, syllabus, agenda } ] } where `origin` is 'user' or 'jolt' (curated, read-only), `kind` is 'notes' or 'dsa_patterns', and `archived` is true for a track the learner paused (do not file new concepts there unless the note clearly belongs to it). `syllabus` is a flat list of the agenda's topic labels (convenience). `agenda` is the full track agenda: { status ('none'|'draft'|'refined'|'locked'), source ('agent'|'user'|'emergent'), syllabus: [ { concept_key, label, parent, source } ], last_refined_at, refined_from_source_id, outline }. An agenda with status 'draft', source 'user' and an `outline` is a rough outline the learner typed when creating the track: tidy it into a proper syllabus with jolt_set_agenda (mark_refined=true) during this sync, keeping the learner's topics. Use a track `id` as `track_id` for the agenda, concept, coverage, question, and extraction tools. Read-only.",
       "input_schema": {
         "properties": {},
         "title": "get_tracksArguments",
@@ -65,6 +65,17 @@
                   }
                 ],
                 "title": "Refined From Source Id"
+              },
+              "outline": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Outline"
               }
             },
             "required": [
@@ -72,7 +83,8 @@
               "source",
               "syllabus",
               "last_refined_at",
-              "refined_from_source_id"
+              "refined_from_source_id",
+              "outline"
             ],
             "title": "AgendaOut",
             "type": "object"
@@ -98,12 +110,22 @@
                   }
                 ],
                 "title": "Parent"
+              },
+              "source": {
+                "enum": [
+                  "agent",
+                  "user",
+                  "emergent"
+                ],
+                "title": "Source",
+                "type": "string"
               }
             },
             "required": [
               "concept_key",
               "label",
-              "parent"
+              "parent",
+              "source"
             ],
             "title": "SyllabusItemOut",
             "type": "object"
@@ -127,6 +149,18 @@
                 "title": "Origin",
                 "type": "string"
               },
+              "kind": {
+                "enum": [
+                  "notes",
+                  "dsa_patterns"
+                ],
+                "title": "Kind",
+                "type": "string"
+              },
+              "archived": {
+                "title": "Archived",
+                "type": "boolean"
+              },
               "syllabus": {
                 "items": {
                   "type": "string"
@@ -142,6 +176,8 @@
               "id",
               "name",
               "origin",
+              "kind",
+              "archived",
               "syllabus",
               "agenda"
             ],
@@ -168,7 +204,7 @@
     },
     {
       "name": "jolt_get_recent_concepts",
-      "description": "List a track's most recently created concepts, newest first — use it to see what already exists before logging a session, so you extend coverage instead of duplicating concepts.\nArguments:\n  track_id (str, required) — the track to read, from jolt_get_tracks.\n  limit (int, optional, default 20) — max concepts to return.\nReturns: { concepts: [ { id, text, syllabus_ref } ] }. `syllabus_ref` is the syllabus label the concept is filed under, or null. Read-only.",
+      "description": "List a track's most recently created concepts, newest first — use it to see what already exists before logging a session, so you extend coverage instead of duplicating concepts.\nArguments:\n  track_id (str, required) — the track to read, from jolt_get_tracks.\n  limit (int, optional, default 20) — max concepts to return.\nReturns: { concepts: [ { id, text, title, syllabus_ref } ] }. `syllabus_ref` is the agenda concept_key the concept is filed under, or null. Only the caller's own concepts are listed (on a curated track, the ones they logged). Raises if the track is neither the caller's nor curated. Read-only.",
       "input_schema": {
         "properties": {
           "track_id": {
@@ -200,6 +236,17 @@
                 "title": "Text",
                 "type": "string"
               },
+              "title": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Title"
+              },
               "syllabus_ref": {
                 "anyOf": [
                   {
@@ -215,6 +262,7 @@
             "required": [
               "id",
               "text",
+              "title",
               "syllabus_ref"
             ],
             "title": "RecentConceptOut",
@@ -240,7 +288,7 @@
     },
     {
       "name": "jolt_get_coverage",
-      "description": "Report how well the caller's studied concepts cover a track's syllabus — the signal for what to study or extract next.\nArguments:\n  track_id (str, required) — the track to measure, from jolt_get_tracks.\nReturns: { track_id, total_concepts, studied_concepts, decaying_concepts, coverage_ratio (0..1), uncovered_syllabus: [labels] }. `studied_concepts` are those the user has an FSRS memory state for; `decaying_concepts` are studied ones whose recall has weakened or fallen due; `uncovered_syllabus` lists syllabus labels with no studied concept yet. Read-only.",
+      "description": "Report how well the caller's studied concepts cover a track's syllabus — the signal for what to study or extract next.\nArguments:\n  track_id (str, required) — the track to measure, from jolt_get_tracks.\nReturns: { track_id, total_concepts, studied_concepts, decaying_concepts, off_plan_concepts, coverage_ratio (0..1), uncovered_syllabus: [concept_keys] }. `studied_concepts` are those the user has an FSRS memory state for; `decaying_concepts` are studied ones whose recall has weakened or fallen due; `uncovered_syllabus` lists syllabus keys with no studied concept yet. `off_plan_concepts` are concepts on a LOCKED track whose key is not in the syllabus (auto-add is skipped there): they are kept and reviewed but left out of every other count. Raises if the track is neither the caller's nor curated. Read-only.",
       "input_schema": {
         "properties": {
           "track_id": {
@@ -273,6 +321,10 @@
             "title": "Decaying Concepts",
             "type": "integer"
           },
+          "off_plan_concepts": {
+            "title": "Off Plan Concepts",
+            "type": "integer"
+          },
           "coverage_ratio": {
             "title": "Coverage Ratio",
             "type": "number"
@@ -290,6 +342,7 @@
           "total_concepts",
           "studied_concepts",
           "decaying_concepts",
+          "off_plan_concepts",
           "coverage_ratio",
           "uncovered_syllabus"
         ],
@@ -299,7 +352,7 @@
     },
     {
       "name": "jolt_get_agenda",
-      "description": "Get a track's agenda — its shaped syllabus and refinement lifecycle. Call this before refining (jolt_set_agenda) so you EXTEND the existing syllabus rather than replace it, and to check whether the agenda is locked (a locked agenda rejects every write).\nArguments:\n  track_id (str, required) — the track to read, from jolt_get_tracks.\nReturns: { status ('none'|'draft'|'refined'|'locked'), source ('agent'|'user'|'emergent'), syllabus: [ { concept_key, label, parent } ], last_refined_at, refined_from_source_id }. `concept_key` is the stable key a concept's syllabus_ref points at; `parent` (another item's concept_key) nests the item, null for a leaf/root. Read-only.",
+      "description": "Get a track's agenda — its shaped syllabus and refinement lifecycle. Call this before refining (jolt_set_agenda) so you EXTEND the existing syllabus rather than replace it, and to check whether the agenda is locked (a locked agenda rejects every write).\nArguments:\n  track_id (str, required) — the track to read, from jolt_get_tracks.\nReturns: { status ('none'|'draft'|'refined'|'locked'), source ('agent'|'user'|'emergent'), syllabus: [ { concept_key, label, parent, source } ], last_refined_at, refined_from_source_id, outline }, or { error } if the track is not the caller's (or curated). `concept_key` is the stable key a concept's syllabus_ref points at; `parent` (another item's concept_key) nests the item, null for a leaf/root; an item's `source` says who added it ('user': the learner, 'agent': a refine, 'emergent': auto-added from notes). `outline` is the learner's raw outline when the track was created with one (a 'draft' for you to tidy), else null. Read-only.",
       "input_schema": {
         "properties": {
           "track_id": {
@@ -365,6 +418,17 @@
                   }
                 ],
                 "title": "Refined From Source Id"
+              },
+              "outline": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Outline"
               }
             },
             "required": [
@@ -372,7 +436,8 @@
               "source",
               "syllabus",
               "last_refined_at",
-              "refined_from_source_id"
+              "refined_from_source_id",
+              "outline"
             ],
             "title": "AgendaOut",
             "type": "object"
@@ -398,12 +463,22 @@
                   }
                 ],
                 "title": "Parent"
+              },
+              "source": {
+                "enum": [
+                  "agent",
+                  "user",
+                  "emergent"
+                ],
+                "title": "Source",
+                "type": "string"
               }
             },
             "required": [
               "concept_key",
               "label",
-              "parent"
+              "parent",
+              "source"
             ],
             "title": "SyllabusItemOut",
             "type": "object"
@@ -431,6 +506,90 @@
             "$ref": "#/$defs/ToolError"
           }
         ]
+      }
+    },
+    {
+      "name": "jolt_get_pending_corrections",
+      "description": "List the learner's correction notes waiting for this sync — the concepts they flagged in the app with \"Something's wrong with this concept\".\nArguments: none.\nReturns: { corrections: [ { concept_id, track_id, title, text, notes: [ { note, created_at } ] } ] }, oldest request first. `text` is the concept as stored; `notes` are the learner's words, oldest first. For each, decide the corrected text (check the source with jolt_get_source_content if needed) and call jolt_correct_concept { track_id, concept_id, text }, which clears the notes. Read-only.",
+      "input_schema": {
+        "properties": {},
+        "title": "get_pending_correctionsArguments",
+        "type": "object"
+      },
+      "output_schema": {
+        "$defs": {
+          "CorrectionNoteOut": {
+            "additionalProperties": false,
+            "properties": {
+              "note": {
+                "title": "Note",
+                "type": "string"
+              },
+              "created_at": {
+                "title": "Created At",
+                "type": "string"
+              }
+            },
+            "required": [
+              "note",
+              "created_at"
+            ],
+            "title": "CorrectionNoteOut",
+            "type": "object"
+          },
+          "PendingCorrectionOut": {
+            "additionalProperties": false,
+            "properties": {
+              "concept_id": {
+                "title": "Concept Id",
+                "type": "string"
+              },
+              "track_id": {
+                "title": "Track Id",
+                "type": "string"
+              },
+              "title": {
+                "title": "Title",
+                "type": "string"
+              },
+              "text": {
+                "title": "Text",
+                "type": "string"
+              },
+              "notes": {
+                "items": {
+                  "$ref": "#/$defs/CorrectionNoteOut"
+                },
+                "title": "Notes",
+                "type": "array"
+              }
+            },
+            "required": [
+              "concept_id",
+              "track_id",
+              "title",
+              "text",
+              "notes"
+            ],
+            "title": "PendingCorrectionOut",
+            "type": "object"
+          }
+        },
+        "additionalProperties": false,
+        "properties": {
+          "corrections": {
+            "items": {
+              "$ref": "#/$defs/PendingCorrectionOut"
+            },
+            "title": "Corrections",
+            "type": "array"
+          }
+        },
+        "required": [
+          "corrections"
+        ],
+        "title": "GetPendingCorrectionsOut",
+        "type": "object"
       }
     },
     {
@@ -507,7 +666,7 @@
     },
     {
       "name": "jolt_log_session",
-      "description": "Record a study session and create its concepts, each with a fresh, immediately-due FSRS card so it enters the review rotation at once. This is how extracted material becomes reviewable. Call it once per processed source (or batch of sources) after jolt_store_extraction, before jolt_create_questions.\nArguments:\n  source_ids (list[str], required) — the source(s) this session came from; use [] if none. Records provenance for the timeline.\n  concepts (list[dict], required) — one dict per concept to create. Each dict:\n      text (str, required) — the concept statement to be learned; the atom of recall, one idea per concept. Keep it self-contained.\n      track_id (str, required) — the track this concept belongs to (from jolt_get_tracks). Different concepts in one call may target different tracks.\n      title (str, optional) — a short label for the concept.\n      syllabus_ref (str, optional) — legacy alias for `concept_key`; used as the concept_key when `concept_key` is omitted. Drives coverage.\n      concept_key (str, optional) — the agenda key this concept covers. If it is not yet in the track's agenda syllabus it is AUTO-ADDED (as a leaf, or under `parent`), so the agenda grows to fit what's learned. Auto-add is keyed on concept_key membership, so it is idempotent and skipped on a locked agenda. Falls back to `syllabus_ref` if omitted.\n      parent (str, optional) — an existing agenda concept_key to nest this concept under when it is auto-added; ignored if it does not resolve.\n      source_id (str, optional) — the specific source this concept came from. Give it: the concept is then credited to that source's active extraction (the app's 'Found N concepts' on the source's past reads), and it decides the concept's session.\nSessions follow upload days: each concept is filed in the session of its source's upload date (a concept without source_id goes with the first listed source), so concepts from sources uploaded on different days produce one session per day.\nReturns: { session_id, session_ids, concept_ids }. `session_ids` has one id per upload date, oldest first; `session_id` is the first of them. `concept_ids` are returned in the SAME order as the input `concepts`, so map each returned id back to its concept and pass it as `concept_id` to jolt_create_questions. Creating a concept without questions leaves it due but unanswerable, so always follow with jolt_create_questions. Not idempotent — calling twice creates duplicate concepts; check jolt_get_recent_concepts first if retrying.",
+      "description": "Record a study session and create its concepts, each with a fresh, immediately-due FSRS card so it enters the review rotation at once. This is how extracted material becomes reviewable. Call it once per processed source (or batch of sources) after jolt_store_extraction, before jolt_create_questions.\nArguments:\n  source_ids (list[str], required) — the source(s) this session came from; use [] if none. Records provenance for the timeline.\n  concepts (list[dict], required) — one dict per concept to create. Each dict:\n      text (str, required) — the concept statement to be learned; the atom of recall, one idea per concept. Keep it self-contained.\n      track_id (str, required) — the track this concept belongs to (from jolt_get_tracks); must be one of the caller's OWN tracks (curated tracks are read-only). Different concepts in one call may target different tracks.\n      title (str, optional) — a short label for the concept.\n      syllabus_ref (str, optional) — legacy alias for `concept_key`; used as the concept_key when `concept_key` is omitted. Drives coverage.\n      concept_key (str, optional) — the agenda key this concept covers. If it is not yet in the track's agenda syllabus it is AUTO-ADDED (as a leaf, or under `parent`), so the agenda grows to fit what's learned. Auto-add is keyed on concept_key membership, so it is idempotent and skipped on a locked agenda. Falls back to `syllabus_ref` if omitted.\n      parent (str, optional) — an existing agenda concept_key to nest this concept under when it is auto-added; ignored if it does not resolve.\n      source_id (str, optional) — the specific source this concept came from. Give it: the concept is then credited to that source's active extraction (the app's 'Found N concepts' on the source's past reads), and it decides the concept's session.\n      page (int, optional) — the 1-based page of that source the concept is on (shown to the learner as where it was found).\nSessions follow upload days: each concept is filed in the session of its source's upload date (a concept without source_id goes with the first listed source), so concepts from sources uploaded on different days produce one session per day.\nRaises, writing nothing, if a track is not one of the caller's own or a source id (in `source_ids` or a concept's `source_id`) is not one of their sources.\nReturns: { session_id, session_ids, concept_ids }. `session_ids` has one id per upload date, oldest first; `session_id` is the first of them. `concept_ids` are returned in the SAME order as the input `concepts`, so map each returned id back to its concept and pass it as `concept_id` to jolt_create_questions. Creating a concept without questions leaves it due but unanswerable, so always follow with jolt_create_questions. Not idempotent — calling twice creates duplicate concepts; check jolt_get_recent_concepts first if retrying.",
       "input_schema": {
         "properties": {
           "source_ids": {
@@ -565,7 +724,7 @@
     },
     {
       "name": "jolt_set_agenda",
-      "description": "Write (replace) a track's agenda syllabus — the refinement step of a sync. ALWAYS read jolt_get_agenda first and build on what's there: this REPLACES the whole syllabus, so anything you omit is dropped. The backend only stores what you send; it never shapes or infers a syllabus — the shaping is yours.\nArguments:\n  track_id (str, required) — the track to refine, from jolt_get_tracks.\n  syllabus (list[dict], required) — the full replacement syllabus, one dict per item. Each dict:\n      concept_key (str, required) — stable key; concepts' syllabus_ref/concept_key join on it. Keep keys stable across refines so coverage and auto-add line up.\n      label (str, required) — human-readable topic name.\n      parent (str, optional) — another item's concept_key to nest under; omit for a top-level item.\n  source (str, optional, default 'agent') — who shaped it: 'agent', 'user', or 'emergent'.\n  mark_refined (bool, optional, default false) — true to set status='refined' and stamp last_refined_at (use when this is a deliberate refinement pass).\nReturns: the updated agenda { status, source, syllabus, last_refined_at, refined_from_source_id }, or { error } if the agenda is LOCKED (locking freezes refinement) or the track was not found. Replacing with the same syllabus is a safe idempotent no-op. Serialised with the auto-add path under optimistic concurrency, so a concurrent auto-add is never clobbered.",
+      "description": "Write (replace) a track's agenda syllabus — the refinement step of a sync. ALWAYS read jolt_get_agenda first and build on what's there: this REPLACES the whole syllabus, so anything you omit is dropped. The backend only stores what you send; it never shapes or infers a syllabus — the shaping is yours.\nArguments:\n  track_id (str, required) — the track to refine, from jolt_get_tracks.\n  syllabus (list[dict], required) — the full replacement syllabus, one dict per item. Each dict:\n      concept_key (str, required) — stable key; concepts' syllabus_ref/concept_key join on it. Keep keys stable across refines so coverage and auto-add line up.\n      label (str, required) — human-readable topic name.\n      parent (str, optional) — another item's concept_key to nest under; omit for a top-level item.\n      source (str, optional) — who added this item: 'agent', 'user' or 'emergent'. Omit it: an item whose concept_key already exists keeps its provenance, a new one gets the call's `source`.\n  source (str, optional, default 'agent') — who shaped it: 'agent', 'user', or 'emergent'.\n  mark_refined (bool, optional, default false) — true to set status='refined' and stamp last_refined_at (use when this is a deliberate refinement pass).\nReturns: the updated agenda { status, source, syllabus, last_refined_at, refined_from_source_id, outline }, or { error } if the agenda is LOCKED (locking freezes refinement) or the track is not one of the caller's own (curated tracks are read-only). Replacing with the same syllabus is a safe idempotent no-op. Serialised with the auto-add path under optimistic concurrency, so a concurrent auto-add is never clobbered.",
       "input_schema": {
         "properties": {
           "track_id": {
@@ -649,6 +808,17 @@
                   }
                 ],
                 "title": "Refined From Source Id"
+              },
+              "outline": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Outline"
               }
             },
             "required": [
@@ -656,7 +826,8 @@
               "source",
               "syllabus",
               "last_refined_at",
-              "refined_from_source_id"
+              "refined_from_source_id",
+              "outline"
             ],
             "title": "AgendaOut",
             "type": "object"
@@ -682,12 +853,22 @@
                   }
                 ],
                 "title": "Parent"
+              },
+              "source": {
+                "enum": [
+                  "agent",
+                  "user",
+                  "emergent"
+                ],
+                "title": "Source",
+                "type": "string"
               }
             },
             "required": [
               "concept_key",
               "label",
-              "parent"
+              "parent",
+              "source"
             ],
             "title": "SyllabusItemOut",
             "type": "object"
@@ -719,7 +900,7 @@
     },
     {
       "name": "jolt_store_extraction",
-      "description": "Persist the markdown you extracted from a source and mark the source processed, clearing its sync lease. Call this once per source you claimed via jolt_get_unprocessed_sources, after reading it with jolt_get_source_content and running your own extraction (extraction runs on your compute, not Jolt's).\nArguments:\n  source_id (str, required) — the claimed source this extraction is for.\n  markdown (str, required) — the full extracted text as markdown.\n  confidence (float, optional, default 0.0) — your 0..1 confidence in the extraction's fidelity. Report it honestly: it feeds the silent-misextraction canary metric, so a low value flags a page for human review rather than failing silently.\n  model_id (str, optional) — identifier of the model you extracted with, for provenance.\n  supersede (bool, optional, default false) — false for a source's FIRST extraction. Set true to replace a source's existing active extraction (a re-extraction) — jolt_get_unprocessed_sources marks those with `supersede: true` (the user asked to read the source again). A supersede triggers concept reconciliation and is the most dangerous write path — ALWAYS preview it with jolt_diff_extractions first, and see that tool for what each change class does.\nA source has one active extraction: whichever flag you pass, the new one becomes active and the previous one is kept as a superseded past read. Then log the concepts you found with jolt_log_session, giving each its `source_id`, so they are credited to this read.\nReturns: { extraction_id, status } where status is 'active'. Safe to retry: a dropped connection can be re-driven; the source ends processed with the new extraction active (a retry is recorded as one more past read).",
+      "description": "Persist the markdown you extracted from a source and mark the source processed, clearing its sync lease. Call this once per source you claimed via jolt_get_unprocessed_sources, after reading it with jolt_get_source_content and running your own extraction (extraction runs on your compute, not Jolt's).\nArguments:\n  source_id (str, required) — the claimed source this extraction is for.\n  markdown (str, required) — the full extracted text as markdown.\n  confidence (float, optional, default 0.0) — your 0..1 confidence in the extraction's fidelity. Report it honestly: it feeds the silent-misextraction canary metric, so a low value flags a page for human review rather than failing silently.\n  model_id (str, optional) — identifier of the model you extracted with, for provenance.\n  supersede (bool, optional, default false) — false for a source's FIRST extraction. Set true to replace a source's existing active extraction (a re-extraction) — jolt_get_unprocessed_sources marks those with `supersede: true` (the user asked to read the source again).\n  concepts (list[dict], optional) — for a re-extraction, the concepts this read found, so they are RECONCILED against the concepts the previous read produced instead of duplicated. Same fields as jolt_log_session's concepts (text required; title, concept_key, parent, page optional); track_id is optional and defaults to the source's track. Reconciliation is the most dangerous write path — preview it with jolt_diff_extractions first; per concept it is: unchanged (kept), refined (text updated in place, questions and memory kept), changed (a successor concept inherits the memory state; the old one's questions are retired), removed (an old concept with no match leaves the review queue, kept for history), new (a new concept). When you pass `concepts`, do NOT also log them with jolt_log_session.\nA source has one active extraction: whichever flag you pass, the new one becomes active and the previous one is kept as a superseded past read. Without `concepts`, log the concepts you found with jolt_log_session, giving each its `source_id`, so they are credited to this read.\nReturns: { extraction_id, status ('active'), reconciliation } — reconciliation is null without `concepts`, else { status ('complete'|'partial'), total_steps, applied_steps, remaining_steps, max_steps_per_call, concept_ids, deltas: [ { index, change, concept_id, existing_concept_id, similarity, applied } ] }. `concept_ids` follow your `concepts` order. At most max_steps_per_call (25 by default) concepts are reconciled per call: when status is 'partial', call jolt_continue_reconciliation { source_id } until it is 'complete'. Then write questions (jolt_create_questions) for every delta whose change is 'new' or 'changed'. Returns { error }, storing nothing, when a concept is invalid (no text, or no track_id and the source has none); raises if a track is not the caller's own. Safe to retry: a dropped connection can be re-driven; the source ends processed with the new extraction active (a retry is recorded as one more past read).",
       "input_schema": {
         "properties": {
           "source_id": {
@@ -751,6 +932,21 @@
             "default": false,
             "title": "Supersede",
             "type": "boolean"
+          },
+          "concepts": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Concepts"
           }
         },
         "required": [
@@ -761,32 +957,197 @@
         "type": "object"
       },
       "output_schema": {
-        "additionalProperties": false,
-        "properties": {
-          "extraction_id": {
-            "title": "Extraction Id",
-            "type": "string"
-          },
-          "status": {
-            "enum": [
-              "active",
-              "superseded"
+        "$defs": {
+          "ReconcileDeltaOut": {
+            "additionalProperties": false,
+            "properties": {
+              "index": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Index"
+              },
+              "change": {
+                "enum": [
+                  "unchanged",
+                  "refined",
+                  "changed",
+                  "removed",
+                  "new"
+                ],
+                "title": "Change",
+                "type": "string"
+              },
+              "concept_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Concept Id"
+              },
+              "existing_concept_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Existing Concept Id"
+              },
+              "similarity": {
+                "title": "Similarity",
+                "type": "number"
+              },
+              "applied": {
+                "title": "Applied",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "index",
+              "change",
+              "concept_id",
+              "existing_concept_id",
+              "similarity",
+              "applied"
             ],
-            "title": "Status",
-            "type": "string"
+            "title": "ReconcileDeltaOut",
+            "type": "object"
+          },
+          "ReconciliationOut": {
+            "additionalProperties": false,
+            "properties": {
+              "status": {
+                "enum": [
+                  "complete",
+                  "partial"
+                ],
+                "title": "Status",
+                "type": "string"
+              },
+              "total_steps": {
+                "title": "Total Steps",
+                "type": "integer"
+              },
+              "applied_steps": {
+                "title": "Applied Steps",
+                "type": "integer"
+              },
+              "remaining_steps": {
+                "title": "Remaining Steps",
+                "type": "integer"
+              },
+              "max_steps_per_call": {
+                "title": "Max Steps Per Call",
+                "type": "integer"
+              },
+              "concept_ids": {
+                "items": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "title": "Concept Ids",
+                "type": "array"
+              },
+              "deltas": {
+                "items": {
+                  "$ref": "#/$defs/ReconcileDeltaOut"
+                },
+                "title": "Deltas",
+                "type": "array"
+              }
+            },
+            "required": [
+              "status",
+              "total_steps",
+              "applied_steps",
+              "remaining_steps",
+              "max_steps_per_call",
+              "concept_ids",
+              "deltas"
+            ],
+            "title": "ReconciliationOut",
+            "type": "object"
+          },
+          "StoreExtractionOut": {
+            "additionalProperties": false,
+            "properties": {
+              "extraction_id": {
+                "title": "Extraction Id",
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "active",
+                  "superseded"
+                ],
+                "title": "Status",
+                "type": "string"
+              },
+              "reconciliation": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ReconciliationOut"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "extraction_id",
+              "status",
+              "reconciliation"
+            ],
+            "title": "StoreExtractionOut",
+            "type": "object"
+          },
+          "ToolError": {
+            "additionalProperties": false,
+            "properties": {
+              "error": {
+                "title": "Error",
+                "type": "string"
+              }
+            },
+            "required": [
+              "error"
+            ],
+            "title": "ToolError",
+            "type": "object"
           }
         },
-        "required": [
-          "extraction_id",
-          "status"
-        ],
-        "title": "StoreExtractionOut",
-        "type": "object"
+        "anyOf": [
+          {
+            "$ref": "#/$defs/StoreExtractionOut"
+          },
+          {
+            "$ref": "#/$defs/ToolError"
+          }
+        ]
       }
     },
     {
       "name": "jolt_create_questions",
-      "description": "Attach review questions to a concept. Every concept needs at least one, or it is due but cannot be reviewed. Call after jolt_log_session, using a `concept_id` it returned.\nArguments:\n  concept_id (str, required) — the concept these questions test.\n  questions (list[dict], required) — one dict per question. Each dict:\n      stem (str, required) — the question prompt shown to the learner.\n      options (list[str], required) — the multiple-choice options for stage 2. Write exactly 4 (the app is designed for 4): one correct, three plausible distractors of similar length.\n      correct_index (int, required) — 0-based index into `options` of the correct choice. Must be a valid index into `options`.\n      expected_answer (str, required) — the canonical free-text answer. This is the reference the learner's stage-1 free text is graded against (see jolt_get_pending_gradings), so make it a complete, gradeable answer, not just the option label.\nReturns: { question_ids } in input order. The questions are counted on the read the concept was logged from (the app's 'wrote N questions') and on the current sync run. Not idempotent — re-calling adds more questions to the concept.",
+      "description": "Attach review questions to a concept. Every concept needs at least one, or it is due but cannot be reviewed. Call after jolt_log_session, using a `concept_id` it returned.\nArguments:\n  concept_id (str, required) — the concept these questions test.\n  questions (list[dict], required) — one dict per question. Each dict:\n      stem (str, required) — the question prompt shown to the learner.\n      options (list[str], required) — the multiple-choice options for stage 2. Write exactly 4 (the app is designed for 4): one correct, three plausible distractors of similar length.\n      correct_index (int, required) — 0-based index into `options` of the correct choice. Must be a valid index into `options`.\n      expected_answer (str, required) — the canonical free-text answer. This is the reference the learner's stage-1 free text is graded against (see jolt_get_pending_gradings), so make it a complete, gradeable answer, not just the option label.\nReturns: { question_ids } in input order. The questions are counted on the read the concept was logged from (the app's 'wrote N questions') and on the current sync run, and the concept's card lists them as its active questions. Raises if the concept is not one of the caller's (they hold no memory state for it). Not idempotent — re-calling adds more questions to the concept.",
       "input_schema": {
         "properties": {
           "concept_id": {
@@ -828,7 +1189,7 @@
     },
     {
       "name": "jolt_correct_concept",
-      "description": "Replace a single concept's text in place — a small, in-scope wording or accuracy fix that keeps the concept's questions, reviews, and FSRS state intact. Use this for a typo or a clarified sentence, NOT for structural change: if the underlying material changed enough that questions or memory state should no longer apply, re-extract with jolt_store_extraction(supersede=true) instead, which reconciles concepts properly.\nArguments:\n  track_id (str, required) — the concept's track (concepts are keyed by track, so this is needed to locate it).\n  concept_id (str, required) — the concept to edit.\n  text (str, required) — the replacement concept text.\nReturns: { concept_id, updated } — `updated` is false if the concept was not found or the write lost a concurrency race; re-read and retry in that case.",
+      "description": "Replace a single concept's text in place — a small, in-scope wording or accuracy fix that keeps the concept's questions, reviews, and FSRS state intact. Use this for a typo or a clarified sentence, and to answer the learner's correction notes from jolt_get_pending_corrections (re-sending the current text when you judge no change is needed also answers them). NOT for structural change: if the underlying material changed enough that questions or memory state should no longer apply, re-extract with jolt_store_extraction(supersede=true, concepts=...) instead, which reconciles concepts properly.\nArguments:\n  track_id (str, required) — the concept's track (concepts are keyed by track, so this is needed to locate it).\n  concept_id (str, required) — the concept to edit.\n  text (str, required) — the replacement concept text.\nReturns: { concept_id, updated, corrections_cleared } — `updated` is false if the write lost a concurrency race (re-read and retry); `corrections_cleared` is how many pending learner notes this answered. Returns { error: 'concept not found' } when the concept does not exist, is not the caller's, or is not on `track_id`.",
       "input_schema": {
         "properties": {
           "track_id": {
@@ -864,11 +1225,16 @@
               "updated": {
                 "title": "Updated",
                 "type": "boolean"
+              },
+              "corrections_cleared": {
+                "title": "Corrections Cleared",
+                "type": "integer"
               }
             },
             "required": [
               "concept_id",
-              "updated"
+              "updated",
+              "corrections_cleared"
             ],
             "title": "CorrectConceptOut",
             "type": "object"
@@ -900,7 +1266,7 @@
     },
     {
       "name": "jolt_sync",
-      "description": "Start AND end of every sync. Returns the plan: what is waiting, in which tracks, and the ordered steps (tool, purpose, limit) to work through it. Calling it opens a sync run for your connection (or continues the open one); the other tools you call add to that run, and the app shows it as last night's sync. Call it again after the steps: when the plan says done=true the run is closed and you should stop. It claims nothing and changes none of the learner's data.\nArguments:\n  limit (int, optional, default 50) — cap on how far to count each queue.\n  errors (list[str], optional) — problems since your previous jolt_sync that you could not resolve (e.g. 'source <id>: pages 3-4 unreadable'). They are recorded on the sync run so the learner sees them. Omit when there are none.\nReturns: { run_id, done, unprocessed_sources, pending_gradings, rereads, claimed_sources, in_flight_elsewhere, unassigned_sources, upload_dates, tracks, reread_sources, steps, limits, next }:\n  done — true when nothing is left for you: stop.\n  unprocessed_sources / pending_gradings / rereads — counts waiting now (rereads: how many of the waiting sources the learner asked to read again; they are already included in unprocessed_sources or claimed_sources).\n  claimed_sources — sources YOU claimed in this run and have not stored yet (finish them before claiming more): [{ source_id, filename, track_id, uploaded_at, lease_expires_at }].\n  in_flight_elsewhere — sources another client holds; not yours, ignore.\n  unassigned_sources — sources with no track: choose the best track from `tracks` for their concepts.\n  upload_dates — the YYYY-MM-DD upload days of the waiting sources. A backlog spanning several days becomes one session per day (the server splits jolt_log_session by each concept's source upload date).\n  tracks — every track involved: [{ track_id, name, agenda_status, unprocessed_sources, pending_gradings, rereads, guidance }]; follow `guidance` for the agenda (e.g. refine a draft, never add keys to a locked one).\n  reread_sources — the read-again requests you can take: [{ source_id, title, filename, track_id, preferred_model, requested_at }]. jolt_get_unprocessed_sources hands each out with supersede=true; store its new read with supersede=true. `preferred_model` is the model family the learner picked (e.g. 'claude', 'codex') or null for any; it is a preference, not a lock: read it anyway if no other client will.\n  steps — ordered [{ step, tool, purpose, limit, repeat }]; `limit` is the most items per call (null = one item), `repeat` says how often (per batch, per claimed source, per concept, ...). Empty when done.\n  limits — { sources_per_claim, gradings_per_claim, gradings_per_submit, concepts_per_session, questions_per_concept_min, questions_per_concept_max, options_per_question, lease_seconds }.\n  next — a one-line summary of what to do now.\nEverything you do runs on the user's own subscription; Jolt only writes rows.",
+      "description": "Start AND end of every sync. Returns the plan: what is waiting, in which tracks, and the ordered steps (tool, purpose, limit) to work through it. Calling it opens a sync run for your connection (or continues the open one); the other tools you call add to that run, and the app shows it as last night's sync. Call it again after the steps: when the plan says done=true the run is closed and you should stop. It claims nothing and changes none of the learner's data.\nArguments:\n  limit (int, optional, default 50) — cap on how far to count each queue.\n  errors (list[str], optional) — problems since your previous jolt_sync that you could not resolve (e.g. 'source <id>: pages 3-4 unreadable'). They are recorded on the sync run so the learner sees them. Omit when there are none.\nReturns: { run_id, done, unprocessed_sources, pending_gradings, pending_corrections, rereads, claimed_sources, in_flight_elsewhere, unassigned_sources, upload_dates, tracks, reread_sources, steps, limits, next }:\n  done — true when nothing is left for you: stop. Not done while sources, gradings or correction notes wait.\n  unprocessed_sources / pending_gradings / rereads — counts waiting now (rereads: how many of the waiting sources the learner asked to read again; they are already included in unprocessed_sources or claimed_sources).\n  pending_corrections — concepts the learner flagged as wrong ('Something's wrong with this concept'): read them with jolt_get_pending_corrections and answer each with jolt_correct_concept.\n  claimed_sources — sources YOU claimed in this run and have not stored yet (finish them before claiming more): [{ source_id, filename, track_id, uploaded_at, lease_expires_at }].\n  in_flight_elsewhere — sources another client holds; not yours, ignore.\n  unassigned_sources — sources with no track: choose the best track from `tracks` for their concepts.\n  upload_dates — the YYYY-MM-DD upload days of the waiting sources. A backlog spanning several days becomes one session per day (the server splits jolt_log_session by each concept's source upload date).\n  tracks — every track involved: [{ track_id, name, agenda_status, unprocessed_sources, pending_gradings, rereads, pending_corrections, guidance }]; follow `guidance` for the agenda (e.g. refine a draft, never add keys to a locked one).\n  reread_sources — the read-again requests you can take: [{ source_id, title, filename, track_id, preferred_model, requested_at }]. jolt_get_unprocessed_sources hands each out with supersede=true; store its new read with supersede=true and the concepts you found (concepts=[...]) so the server reconciles them with the old read; a `partial` reconciliation is finished with jolt_continue_reconciliation. `preferred_model` is the model family the learner picked (e.g. 'claude', 'codex') or null for any; it is a preference, not a lock: read it anyway if no other client will.\n  steps — ordered [{ step, tool, purpose, limit, repeat }]; `limit` is the most items per call (null = one item), `repeat` says how often (per batch, per claimed source, per concept, ...). Empty when done.\n  limits — { sources_per_claim, gradings_per_claim, gradings_per_submit, concepts_per_session, questions_per_concept_min, questions_per_concept_max, options_per_question, lease_seconds }.\n  next — a one-line summary of what to do now.\nAlso tidy any 'draft' agenda that has a learner `outline` (see jolt_get_tracks).\nEverything you do runs on the user's own subscription; Jolt only writes rows.",
       "input_schema": {
         "properties": {
           "limit": {
@@ -1160,6 +1526,10 @@
                 "title": "Rereads",
                 "type": "integer"
               },
+              "pending_corrections": {
+                "title": "Pending Corrections",
+                "type": "integer"
+              },
               "guidance": {
                 "title": "Guidance",
                 "type": "string"
@@ -1172,6 +1542,7 @@
               "unprocessed_sources",
               "pending_gradings",
               "rereads",
+              "pending_corrections",
               "guidance"
             ],
             "title": "PlanTrackOut",
@@ -1194,6 +1565,10 @@
           },
           "pending_gradings": {
             "title": "Pending Gradings",
+            "type": "integer"
+          },
+          "pending_corrections": {
+            "title": "Pending Corrections",
             "type": "integer"
           },
           "rereads": {
@@ -1256,6 +1631,7 @@
           "done",
           "unprocessed_sources",
           "pending_gradings",
+          "pending_corrections",
           "rereads",
           "claimed_sources",
           "in_flight_elsewhere",
@@ -1789,7 +2165,7 @@
     },
     {
       "name": "jolt_diff_extractions",
-      "description": "Preview the per-concept reconciliation a re-extraction WOULD produce, without writing anything. Run this before jolt_store_extraction(supersede=true) to see how your proposed concepts line up against the track's existing ones, so a supersede never silently discards memory state.\nArguments:\n  track_id (str, required) — the track whose active concepts to diff against.\n  proposed_concepts (list[dict], required) — the concepts your new extraction would create. Each dict: text (str, required), title (str, optional), syllabus_ref (str, optional) — same fields as jolt_log_session concepts.\nReturns: { deltas: [ { change, existing_concept_id, proposed_text, similarity } ] } where `change` is one of:\n    unchanged — matches an existing concept; no-op on commit.\n    refined  — minor edit; existing concept's text updates, keeping its questions, reviews, and FSRS state.\n    changed  — materially different; existing concept is superseded by a successor that carries the state forward, its old questions retired.\n    removed  — an existing concept with no match in your proposal; superseded and dropped from the due queue but kept for history.\n    new      — no existing match; a new concept (generate questions for it).\n`similarity` is the 0..1 text-match score behind the classification. Read-only. If the diff is not what you intend, adjust `proposed_concepts` before committing the supersede.",
+      "description": "Preview the per-concept reconciliation a re-extraction WOULD produce, without writing anything. Run this before jolt_store_extraction(supersede=true) to see how your proposed concepts line up against the track's existing ones, so a supersede never silently discards memory state.\nArguments:\n  track_id (str, required) — the track whose active concepts to diff against (the caller's own concepts on it; raises if the track is neither the caller's nor curated).\n  proposed_concepts (list[dict], required) — the concepts your new extraction would create. Each dict: text (str, required), title (str, optional), syllabus_ref (str, optional) — same fields as jolt_log_session concepts.\nReturns: { deltas: [ { change, existing_concept_id, proposed_text, similarity } ] } where `change` is one of:\n    unchanged — matches an existing concept; no-op on commit.\n    refined  — minor edit; existing concept's text updates, keeping its questions, reviews, and FSRS state.\n    changed  — materially different; existing concept is superseded by a successor that carries the state forward, its old questions retired.\n    removed  — an existing concept with no match in your proposal; superseded and dropped from the due queue but kept for history.\n    new      — no existing match; a new concept (generate questions for it).\n`similarity` is the 0..1 text-match score behind the classification. Read-only. If the diff is not what you intend, adjust `proposed_concepts` before committing the supersede.",
       "input_schema": {
         "properties": {
           "track_id": {
@@ -1879,6 +2255,177 @@
         ],
         "title": "DiffExtractionsOut",
         "type": "object"
+      }
+    },
+    {
+      "name": "jolt_continue_reconciliation",
+      "description": "Resume a re-extraction's concept reconciliation that jolt_store_extraction(concepts=...) left 'partial' — a large supersede is applied at most max_steps_per_call concepts per call from a saved checkpoint, so an interrupted one is never half-lost.\nArguments:\n  source_id (str, required) — the re-extracted source.\nReturns: the same reconciliation object as jolt_store_extraction { status, total_steps, applied_steps, remaining_steps, max_steps_per_call, concept_ids, deltas }. Call again while status is 'partial'. Safe to repeat: a complete reconciliation is returned unchanged, and a step interrupted mid-way converges when resumed. Returns { error } when the source's active read has no reconciliation (it was stored without `concepts`); raises if the source is not the caller's.",
+      "input_schema": {
+        "properties": {
+          "source_id": {
+            "title": "Source Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_id"
+        ],
+        "title": "continue_reconciliationArguments",
+        "type": "object"
+      },
+      "output_schema": {
+        "$defs": {
+          "ReconcileDeltaOut": {
+            "additionalProperties": false,
+            "properties": {
+              "index": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Index"
+              },
+              "change": {
+                "enum": [
+                  "unchanged",
+                  "refined",
+                  "changed",
+                  "removed",
+                  "new"
+                ],
+                "title": "Change",
+                "type": "string"
+              },
+              "concept_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Concept Id"
+              },
+              "existing_concept_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Existing Concept Id"
+              },
+              "similarity": {
+                "title": "Similarity",
+                "type": "number"
+              },
+              "applied": {
+                "title": "Applied",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "index",
+              "change",
+              "concept_id",
+              "existing_concept_id",
+              "similarity",
+              "applied"
+            ],
+            "title": "ReconcileDeltaOut",
+            "type": "object"
+          },
+          "ReconciliationOut": {
+            "additionalProperties": false,
+            "properties": {
+              "status": {
+                "enum": [
+                  "complete",
+                  "partial"
+                ],
+                "title": "Status",
+                "type": "string"
+              },
+              "total_steps": {
+                "title": "Total Steps",
+                "type": "integer"
+              },
+              "applied_steps": {
+                "title": "Applied Steps",
+                "type": "integer"
+              },
+              "remaining_steps": {
+                "title": "Remaining Steps",
+                "type": "integer"
+              },
+              "max_steps_per_call": {
+                "title": "Max Steps Per Call",
+                "type": "integer"
+              },
+              "concept_ids": {
+                "items": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "title": "Concept Ids",
+                "type": "array"
+              },
+              "deltas": {
+                "items": {
+                  "$ref": "#/$defs/ReconcileDeltaOut"
+                },
+                "title": "Deltas",
+                "type": "array"
+              }
+            },
+            "required": [
+              "status",
+              "total_steps",
+              "applied_steps",
+              "remaining_steps",
+              "max_steps_per_call",
+              "concept_ids",
+              "deltas"
+            ],
+            "title": "ReconciliationOut",
+            "type": "object"
+          },
+          "ToolError": {
+            "additionalProperties": false,
+            "properties": {
+              "error": {
+                "title": "Error",
+                "type": "string"
+              }
+            },
+            "required": [
+              "error"
+            ],
+            "title": "ToolError",
+            "type": "object"
+          }
+        },
+        "anyOf": [
+          {
+            "$ref": "#/$defs/ReconciliationOut"
+          },
+          {
+            "$ref": "#/$defs/ToolError"
+          }
+        ]
       }
     }
   ]

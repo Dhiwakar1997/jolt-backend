@@ -42,6 +42,7 @@ jolt/
 ├── services/          use-case composition over domain + data
 ├── domain/            business logic — no FastAPI, no Azure SDK (unit-testable)
 ├── data/              the only layer touching Azure (cosmos, blob, repositories, leases)
+├── curated/           curated-track import (the DSA track read from a Jolt checkout, BE-09)
 ├── auth/              app + MCP tokens (issue / look up / verify), Google ID tokens, token → user
 └── credentials/       per-user provider keys (vault, providers, dormant inference seam)
 ```
@@ -73,6 +74,7 @@ cp .env.example .env
 | `DEV_AUTH_ENABLED` / `DEV_AUTH_SECRET` | dev-only sign-in by e-mail (`POST /v1/auth/dev`); never in prod |
 | `APPLICATIONINSIGHTS_CONNECTION_STRING` | turns on OpenTelemetry export to Application Insights; empty = off |
 | `RATE_LIMIT_*`, `REQUEST_MAX_BYTES`, `MCP_REQUEST_MAX_BYTES` | per-token rate limits (429 + `Retry-After`, per replica) and body caps (413) |
+| `DSA_SEED_FROM` | memory mode only: a Jolt checkout to import the curated DSA track from at startup |
 
 With `AUTH_MODE=managed_identity`, leave the `*_KEY` / `*_CONNECTION_STRING` blank —
 the app authenticates via `DefaultAzureCredential` (a Managed Identity in Container
@@ -98,8 +100,17 @@ With `PUBLIC_BASE_URL` set, upload/read URLs are served by the app itself at
 
 ```bash
 STORAGE_MODE=memory DEV_AUTH_ENABLED=true PUBLIC_BASE_URL=http://localhost:8000 \
-    uvicorn jolt.main:app --port 8000
+    DSA_SEED_FROM=../Jolt uvicorn jolt.main:app --port 8000
 python scripts/smoke.py --base-url http://localhost:8000   # full round trip
+```
+
+`DSA_SEED_FROM` (optional) imports the curated DSA track from a Jolt checkout at
+startup. Against Cosmos, the same import is a script (BE-09; idempotent, validates
+like Jolt's `check-batch.mjs`; details in `docs/API.md` section 7):
+
+```bash
+python scripts/import_dsa.py --from ../Jolt --dry-run   # report only
+python scripts/import_dsa.py --from ../Jolt [--include-new]
 ```
 
 ### Signing in and connecting a model

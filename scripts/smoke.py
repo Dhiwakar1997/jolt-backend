@@ -1,4 +1,4 @@
-"""End-to-end smoke test against a running Jolt backend (BE-02 to BE-08).
+"""End-to-end smoke test against a running Jolt backend (BE-02 to BE-09).
 
     python scripts/smoke.py --base-url https://<dev-host>
     python scripts/smoke.py --base-url http://localhost:8000      # local, see below
@@ -29,16 +29,29 @@ share it, with a fresh test user:
     version 2 (GET /v1/concepts/{id}/questions), the next session serves it, the
     review shows `graded` with feedback; POST /v1/concepts/{id}/unretire; then
     jolt_get_coverage
-10. jolt_sync again: done, which closes the sync run; GET /v1/sync/status and
-    /v1/sync/runs show it (client label, counts, the question_rewritten change),
-    GET /v1/sync/prompt
-11. MCP with the token in the URL (?token=, how a URL-only connector connects)
-12. GET /v1/me shows the onboarding progress (incl. first_sync_at)
-13. Progress and settings (BE-08): GET /v1/progress counts the answer; PATCH
-    /v1/settings round trip (theme, desired retention, daily cap, data
-    retention, time zone) and the model status block; POST /v1/export and
-    download the bundle from its signed URL
-14. Revoke the MCP token (/mcp then refuses it); sign in a second device and
+10. Tracks and concepts (BE-07): POST /v1/tracks with an outline (draft agenda),
+    PATCH rename and archive, GET /v1/tracks counts, GET /v1/tracks/{id} (items,
+    due today, recent sources), GET /v1/concepts/{id} (timeline, versions,
+    adaptive note), POST /v1/concepts/{id}/correction -> jolt_sync counts it ->
+    jolt_get_pending_corrections -> jolt_correct_concept clears it; read again once
+    more, answered with jolt_store_extraction(supersede, concepts) ->
+    reconciliation (unchanged + new) and jolt_continue_reconciliation
+11. jolt_sync again: done, which closes the sync run; GET /v1/sync/status and
+    /v1/sync/runs show it (client label, counts, the question_rewritten change and
+    the concept the reconciliation added), GET /v1/sync/prompt
+12. Curated DSA track (BE-09): GET /v1/tracks/catalog, POST /v1/tracks/dsa/enrol,
+    GET /v1/tracks/dsa/library and /decision-tree, POST /v1/review-sessions
+    {kind: dsa_patterns, time_budget_minutes} -> one pattern_match question: stage
+    1 (no title anywhere before the answer) -> stage 2 (match, question_title).
+    Skipped, with a note, when the catalog has no DSA track yet (import it with
+    scripts/import_dsa.py); --require-dsa makes that a failure, --skip-dsa skips
+13. MCP with the token in the URL (?token=, how a URL-only connector connects)
+14. GET /v1/me shows the onboarding progress (incl. first_sync_at)
+15. Progress and settings (BE-08): GET /v1/progress counts the answer (and lists
+    the enrolled DSA track); PATCH /v1/settings round trip (theme, desired
+    retention, daily cap, data retention, time zone) and the model status block;
+    POST /v1/export and download the bundle from its signed URL
+16. Revoke the MCP token (/mcp then refuses it); sign in a second device and
     sign the first out (/v1 then refuses its token); DELETE /v1/me deletes the
     throwaway user (its last token then gets 401)
 
@@ -53,7 +66,7 @@ Local run with no Azure (the in-memory blob fake serves the upload URL when
 PUBLIC_BASE_URL is set):
 
     STORAGE_MODE=memory DEV_AUTH_ENABLED=true PUBLIC_BASE_URL=http://localhost:8000 \\
-        uvicorn jolt.main:app --port 8000
+        DSA_SEED_FROM=../Jolt uvicorn jolt.main:app --port 8000
     python scripts/smoke.py --base-url http://localhost:8000
 
 **Public mode** (`--public`, BE-10) is for production, where dev sign-in is off
@@ -113,6 +126,8 @@ EXPECTED_TOOLS = {
     "jolt_list_sources",
     "jolt_get_source_content",
     "jolt_diff_extractions",
+    "jolt_get_pending_corrections",
+    "jolt_continue_reconciliation",
 }
 
 # Canned "agent" output: what a real agent would extract from the page.
@@ -217,6 +232,8 @@ async def run(
     expect_version: str | None = None,
     timeout: float = 30,
     dev_auth_secret: str | None = None,
+    skip_dsa: bool = False,
+    require_dsa: bool = False,
 ) -> dict:
     """Run every step; raise on the first failure. Returns ids for the record."""
     base_url = base_url.rstrip("/")
@@ -442,8 +459,12 @@ async def run(
                         confidence=0.95,
                         model_id="smoke-canned",
                         supersede=True,
+                        concepts=[{"text": CANNED_CONCEPT, "title": "Consistent hashing"}],
                     )
                     check(ext["status"] == "active", f"extraction: {ext}")
+                    rec = ext["reconciliation"] or {}
+                    changes = [d["change"] for d in rec.get("deltas", [])]
+                    check(changes == ["unchanged"], f"reconciliation: {rec}")
                     detail = _json(await http.get(f"/v1/sources/{source_id}"))
                     check(detail["processing_status"] == "processed", f"status: {detail}")
                     check(detail["reread_requested"] is None, f"re-read still pending: {detail}")
@@ -569,6 +590,115 @@ async def run(
                     cov = await _tool(mcp, "jolt_get_coverage", track_id=track_id)
                     check(cov["studied_concepts"] == 1, f"coverage: {cov}")
 
+                # ---- BE-07: tracks and concept read models --------------------
+                with rep.step("POST /v1/tracks (outline -> draft) + PATCH rename, archive"):
+                    drafted = _json(
+                        await http.post(
+                            "/v1/tracks",
+                            json={
+                                "name": "Smoke outline",
+                                "kind": "notes",
+                                "outline": "Replication\n  Quorums\nConsistency",
+                            },
+                        )
+                    )
+                    agenda = drafted["agenda"]
+                    check(agenda["status"] == "draft", f"outline agenda: {agenda}")
+                    check(len(agenda["syllabus"]) == 3 and agenda["outline"], f"{agenda}")
+                    renamed = _json(
+                        await http.patch(
+                            f"/v1/tracks/{drafted['id']}", json={"name": "Smoke outline 2"}
+                        )
+                    )
+                    check(renamed["name"] == "Smoke outline 2", f"rename: {renamed}")
+                    archived = _json(
+                        await http.patch(f"/v1/tracks/{drafted['id']}", json={"archived": True})
+                    )
+                    check(archived["archived"] is True, f"archive: {archived}")
+
+                with rep.step("GET /v1/tracks (counts)"):
+                    rows = {t["id"]: t for t in _json(await http.get("/v1/tracks"))}
+                    row = rows[track_id]
+                    counts = (row["concept_count"], row["source_count"])
+                    check(counts == (1, 1), f"track counts: {row}")
+                    check(rows[drafted["id"]]["archived"] is True, "archived flag missing")
+
+                with rep.step("GET /v1/tracks/{id} (Track detail)"):
+                    td = _json(await http.get(f"/v1/tracks/{track_id}"))
+                    item = next(i for i in td["items"] if i["concept_id"] == concept_id)
+                    check(item["question_count"] == 1, f"item: {item}")
+                    check(item["question_version"] == 2, f"item: {item}")
+                    check(item["found_in"]["source_id"] == source_id, f"item: {item}")
+                    check([s["id"] for s in td["recent_sources"]] == [source_id], f"{td}")
+
+                with rep.step("GET /v1/concepts/{id} (Concept)"):
+                    cd = _json(await http.get(f"/v1/concepts/{concept_id}"))
+                    check(cd["summary"] == CANNED_CONCEPT, f"summary: {cd['summary']}")
+                    check(len(cd["timeline"]) >= 1 and cd["timeline"][0]["free_text"], f"{cd}")
+                    check(cd["current_question"]["version"] == 2, f"current: {cd}")
+                    check(cd["adaptive_note"], f"no adaptive note: {cd}")
+                    check(cd["found_in"]["source_id"] == source_id, f"found_in: {cd}")
+
+                with rep.step("POST /v1/concepts/{id}/correction -> jolt_correct_concept"):
+                    queued = _json(
+                        await http.post(
+                            f"/v1/concepts/{concept_id}/correction",
+                            json={"note": "Say 'clockwise' explicitly."},
+                        )
+                    )
+                    check(queued["status"] == "queued", f"correction: {queued}")
+                    plan = await _tool(mcp, "jolt_sync")
+                    check(plan["pending_corrections"] == 1, f"plan: {plan}")
+                    pending = await _tool(mcp, "jolt_get_pending_corrections")
+                    check(
+                        [c["concept_id"] for c in pending["corrections"]] == [concept_id],
+                        f"pending: {pending}",
+                    )
+                    fixed = await _tool(
+                        mcp,
+                        "jolt_correct_concept",
+                        track_id=track_id,
+                        concept_id=concept_id,
+                        text=CANNED_CONCEPT,
+                    )
+                    check(fixed["corrections_cleared"] == 1, f"correct: {fixed}")
+
+                with rep.step("Read again + jolt_store_extraction(supersede, concepts)"):
+                    _json(await http.post(f"/v1/sources/{source_id}/reread", json={}))
+                    claimed = await _tool(mcp, "jolt_get_unprocessed_sources", limit=10)
+                    check(
+                        any(
+                            s["source_id"] == source_id and s["supersede"]
+                            for s in claimed["sources"]
+                        ),
+                        f"read-again not offered: {claimed}",
+                    )
+                    ext2 = await _tool(
+                        mcp,
+                        "jolt_store_extraction",
+                        source_id=source_id,
+                        markdown=CANNED_MARKDOWN + "\n\nVirtual nodes even out the load.",
+                        confidence=0.9,
+                        model_id="smoke-canned",
+                        supersede=True,
+                        concepts=[
+                            {"text": CANNED_CONCEPT, "title": "Consistent hashing"},
+                            {
+                                "text": "Virtual nodes give each server many ring positions.",
+                                "title": "Virtual nodes",
+                                "concept_key": "virtual-nodes",
+                            },
+                        ],
+                    )
+                    rec = ext2["reconciliation"]
+                    check(rec["status"] == "complete", f"reconciliation: {rec}")
+                    changes = [d["change"] for d in rec["deltas"]]
+                    check(changes == ["unchanged", "new"], f"changes: {changes}")
+                    check(rec["concept_ids"][0] == concept_id, f"ids: {rec['concept_ids']}")
+                    again = await _tool(mcp, "jolt_continue_reconciliation", source_id=source_id)
+                    check(again["applied_steps"] == 2, f"continue: {again}")
+                    new_concept_id = rec["concept_ids"][1]
+
                 with rep.step("jolt_sync (done: closes the run)"):
                     final = await _tool(mcp, "jolt_sync")
                     check(final["done"] and final["run_id"] == run_id, f"final plan: {final}")
@@ -583,7 +713,11 @@ async def run(
             check(counts == (1, 1, 1), f"run counts (sources, questions, gradings): {counts}")
             check(
                 [(c["kind"], c["concept_id"]) for c in run["changes"]]
-                == [("concept_added", concept_id), ("question_rewritten", concept_id)],
+                == [
+                    ("concept_added", concept_id),
+                    ("question_rewritten", concept_id),
+                    ("concept_added", new_concept_id),
+                ],
                 f"changes: {run['changes']}",
             )
             runs = _json(await http.get("/v1/sync/runs", params={"limit": 5}))
@@ -595,6 +729,9 @@ async def run(
             check("jolt_sync" in prompt["prompt"], "prompt does not mention jolt_sync")
             check(prompt["schedule_time"] and prompt["version"], f"prompt meta: {prompt}")
             out["prompt_version"] = prompt["version"]
+
+        if not skip_dsa:
+            await _dsa_steps(http, rep, out, required=require_dsa)
 
         with rep.step("MCP with ?token= (URL-only connector)"):
             url = f"{base_url}/mcp/sse?token={mcp_token}"
@@ -624,6 +761,12 @@ async def run(
                 any(t["track_id"] == track_id for t in progress["tracks"]),
                 f"track {track_id} missing from progress: {progress['tracks']}",
             )
+            if out.get("dsa_track_id"):
+                dsa_row = next(
+                    (t for t in progress["tracks"] if t["track_id"] == out["dsa_track_id"]), None
+                )
+                check(dsa_row is not None, f"enrolled DSA track missing: {progress['tracks']}")
+                check(dsa_row["kind"] == "dsa_patterns", f"DSA track kind: {dsa_row}")
 
         with rep.step("PATCH /v1/settings round trip + model status"):
             wanted = {
@@ -658,7 +801,7 @@ async def run(
             check(bundle["user"]["id"] == out["user_id"], "the export is someone else's")
             check(any(t["id"] == track_id for t in bundle["tracks"]), "track missing")
             check(any(c["id"] == concept_id for c in bundle["concepts"]), "concept missing")
-            check(len(bundle["reviews"]) >= 1 and len(bundle["extractions"]) == 2, "reads")
+            check(len(bundle["reviews"]) >= 1 and len(bundle["extractions"]) == 3, "reads")
             check(len(download.content) == export["bytes"], "size does not match `bytes`")
             check(mcp_token not in download.text and app_token not in download.text, "tokens")
             out["export_bytes"] = export["bytes"]
@@ -763,6 +906,66 @@ async def run_public(
     return out
 
 
+async def _dsa_steps(
+    http: httpx.AsyncClient, rep: Reporter, out: dict[str, Any], *, required: bool
+) -> None:
+    """The curated DSA track (BE-09): enrol, read, and answer one pattern_match question."""
+    catalog = _json(await http.get("/v1/tracks/catalog"))
+    dsa = next((t for t in catalog if t["kind"] == "dsa_patterns"), None)
+    if dsa is None and not required:
+        print("[skip] curated DSA steps: no dsa_patterns track in the catalog", flush=True)
+        out["dsa_track_id"] = None
+        return
+    with rep.step("GET /v1/tracks/catalog + POST /v1/tracks/{id}/enrol"):
+        check(dsa is not None, f"no dsa_patterns track in the catalog (import it): {catalog}")
+        check(dsa["origin"] == "jolt" and not dsa["enrolled"], f"catalog entry: {dsa}")
+        enrolled = _json(await http.post(f"/v1/tracks/{dsa['id']}/enrol"))
+        check(enrolled["enrolled"] and enrolled["track_id"] == dsa["id"], f"enrol: {enrolled}")
+        out["dsa_track_id"] = dsa["id"]
+
+    with rep.step("GET /v1/tracks/{id}/library + /decision-tree"):
+        lib = _json(await http.get(f"/v1/tracks/{dsa['id']}/library"))
+        check(len(lib["patterns"]) >= 2, f"library: {len(lib['patterns'])} patterns")
+        check(all(p["library"]["when_to_reach"] for p in lib["patterns"]), "empty library entry")
+        tree = _json(await http.get(f"/v1/tracks/{dsa['id']}/decision-tree"))
+        check(tree["root"] in {n["id"] for n in tree["nodes"]}, "decision tree has no root")
+
+    with rep.step("DSA session + one pattern_match question (title only after stage 2)"):
+        session = _json(
+            await http.post(
+                "/v1/review-sessions",
+                json={"kind": "dsa_patterns", "track_id": dsa["id"], "time_budget_minutes": 10},
+            )
+        )
+        items = session["items"]
+        check(items, f"empty DSA session: {session}")
+        weight = sum(i["pattern_match"]["time_weight"] for i in items)
+        check(weight <= 10, f"session weighs {weight} minutes, budget 10")
+        item = items[0]
+        check(item["question_type"] == "pattern_match", f"item: {item['question_type']}")
+        check(item["concept_id"] == dsa["id"], "the pattern (concept) is not masked")
+        s1 = _json(
+            await http.post(
+                f"/v1/reviews/{item['question_id']}/stage1",
+                json={
+                    "concept_id": item["concept_id"],
+                    "free_text": "smoke",
+                    "session_id": session["id"],
+                },
+            )
+        )
+        options = s1["options"]
+        check(len(options) == len(lib["patterns"]), f"{len(options)} options")
+        s2 = _json(
+            await http.post(f"/v1/reviews/{s1['review_id']}/stage2", json={"selected_index": 0})
+        )
+        title = s2["question_title"]
+        check(s2["match"] in ("correct", "partial", "incorrect"), f"stage 2: {s2}")
+        check(title and title not in json.dumps(session), "title served before stage 2")
+        check(s2["grading"] == "graded", f"pattern_match grading: {s2['grading']}")
+        out["dsa_match"] = s2["match"]
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument(
@@ -795,6 +998,12 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="--public: POST /v1/auth/dev must answer 404",
     )
+    parser.add_argument("--skip-dsa", action="store_true", help="leave out the curated DSA steps")
+    parser.add_argument(
+        "--require-dsa",
+        action="store_true",
+        help="fail when the catalog has no DSA track (default: skip those steps)",
+    )
     args = parser.parse_args(argv)
 
     print(f"Jolt smoke test against {args.base_url}", flush=True)
@@ -815,6 +1024,8 @@ def main(argv: list[str] | None = None) -> int:
                 expect_version=args.expect_version,
                 timeout=args.timeout,
                 dev_auth_secret=args.dev_auth_secret,
+                skip_dsa=args.skip_dsa,
+                require_dsa=args.require_dsa,
             )
         out = asyncio.run(coro)
     except SmokeFailure as exc:

@@ -228,13 +228,31 @@ upload URL → PUT a PNG to Blob → confirm, the sync tool sequence with canned
 extraction and questions, due reviews, stage 1 and stage 2, agent grading,
 coverage, a final `jolt_sync` that closes the sync run, `GET /v1/sync/status` /
 `/v1/sync/runs` / `/v1/sync/prompt`, an MCP connection with the token in the URL
-(`?token=`), then revokes the MCP token and signs out (both refused afterwards).
-Exit code 0 means pass. It needs the dev sign-in secret in `JOLT_DEV_AUTH_SECRET`
-(or `--dev-auth-secret`); `deploy-infra.sh --smoke` and the deploy workflow
-supply it. By hand, with Key Vault data access:
+(`?token=`), progress, the settings round trip and an export, then revokes the
+MCP token, signs one device out and deletes the throwaway user with
+`DELETE /v1/me` (each refused afterwards). When the curated DSA track is
+imported it also enrols, reads the library and decision tree, answers one
+`pattern_match` question (BE-09) and checks the DSA track is in progress;
+without it those steps are skipped with a note (`--require-dsa` makes that a
+failure). Exit code 0 means pass. It needs the dev sign-in secret in
+`JOLT_DEV_AUTH_SECRET` (or `--dev-auth-secret`); `deploy-infra.sh --smoke` and
+the deploy workflow supply it. By hand, with Key Vault data access:
 `export JOLT_DEV_AUTH_SECRET=$(az keyvault secret show --vault-name <kv> -n dev-auth-secret --query value -o tsv)`.
 The first request after idle takes a few seconds (scale from zero); the script
 waits up to `--wait` seconds (default 120) for `/health`.
+
+**Curated DSA track (BE-09, deploy pending).** Import it once per environment
+(dev and prod), and again whenever Jolt's `data/` or DSA content changes (a
+re-run with the same input writes nothing), from a machine with Cosmos data
+access (the same `COSMOS_ENDPOINT` / `AUTH_MODE` settings as the app;
+`AUTH_MODE=managed_identity` uses your `az login`). `DSA_SEED_FROM` is for
+memory mode only; against Cosmos the import is always this script. Account
+deletes and the maintenance sweep never touch the curated content.
+
+```bash
+python scripts/import_dsa.py --from ../Jolt --dry-run
+python scripts/import_dsa.py --from ../Jolt
+```
 
 MCP clients connect to `https://<fqdn>/mcp/sse` (the `mcpServerUrl` output, also
 shown in the app) with header `Authorization: Bearer <MCP token>`, or with

@@ -63,6 +63,34 @@ def score_stage_two(
     )
 
 
+def score_pattern_match(
+    review: Review,
+    question: Question,
+    selected_index: int,
+    latency_ms: Optional[int],
+) -> str:
+    """Score a `pattern_match` answer (BE-09): deterministic and final at once.
+
+    correct (the problem's pattern) → Good, partial (an acceptable pattern) →
+    Hard, incorrect → Again. No semantic grading pass follows: the review is
+    `graded` immediately, with v1's coaching line as its feedback.
+    """
+    from jolt.domain.dsa import MATCH_GRADE, match_feedback, match_verdict
+
+    verdict = match_verdict(selected_index, question.correct_index, question.acceptable_indexes)
+    grade = MATCH_GRADE[verdict]
+    picked = question.options[selected_index] if 0 <= selected_index < len(question.options) else ""
+    review.selected_index = selected_index
+    review.is_correct = verdict == "correct"
+    review.latency_ms = latency_ms
+    review.match = verdict
+    review.provisional_fsrs_grade = grade.value
+    review.final_fsrs_grade = grade.value
+    review.status = ReviewStatus.GRADED
+    review.feedback = match_feedback(verdict, picked, question.expected_answer)
+    return verdict
+
+
 @dataclass
 class QuestionRewrite:
     """A rewritten question proposed with a grading (decision D8, BE-06)."""

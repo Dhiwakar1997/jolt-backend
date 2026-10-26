@@ -160,8 +160,8 @@ class AccountService:
     # -- /v1/me ----------------------------------------------------------------
     async def me(self, user: User) -> Me:
         repos = self._rt.repos
-        # Own tracks only for now; enrolment in curated tracks counts from BE-09.
-        tracks = await repos.tracks.list_for_user(user.id)
+        # An own track, or an enrolment in a curated one (BE-09).
+        tracks = user.enrolments or await repos.tracks.list_for_user(user.id)
         mcp_tokens = await repos.tokens.list_for_user(user.id, TokenKind.MCP)
         api_keys = await repos.api_keys.list_for_user(user.id)
         return Me(

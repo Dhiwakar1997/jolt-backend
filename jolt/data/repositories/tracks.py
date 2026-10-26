@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Optional
 
 from jolt.data.repositories.base import Repository
-from jolt.domain.models import AgendaStatus, Track, TrackOrigin
+from jolt.domain.models import AgendaStatus, Track, TrackContent, TrackOrigin
 
 # Sentinel partition value for curated (user_id=None) tracks.
 CURATED_BUCKET = "__jolt_curated__"
@@ -84,3 +84,23 @@ class TracksRepository(Repository[Track]):
 
     async def get_track(self, track_id: str, user_id: Optional[str]) -> Optional[Track]:
         return await self.get(track_id, partition_value=user_id or CURATED_BUCKET)
+
+
+class TrackContentRepository(Repository[TrackContent]):
+    """Track-level content of curated tracks (BE-09): one document per track in
+    the curated bucket of the `tracks` container (decision D7: same containers).
+    It carries no `origin`, so `TracksRepository.list_curated` never returns it."""
+
+    container_name = "tracks"
+    model = TrackContent
+
+    def _to_doc(self, model: TrackContent) -> dict:
+        doc = super()._to_doc(model)
+        doc["user_id"] = CURATED_BUCKET
+        return doc
+
+    def _from_doc(self, doc: dict) -> TrackContent:
+        return super()._from_doc({k: v for k, v in doc.items() if k != "user_id"})
+
+    async def get_content(self, track_id: str) -> Optional[TrackContent]:
+        return await self.get(TrackContent.id_for(track_id), partition_value=CURATED_BUCKET)

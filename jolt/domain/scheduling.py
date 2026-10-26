@@ -22,6 +22,7 @@ from typing import Iterable
 
 from jolt.config import get_settings
 from jolt.domain.models import ConceptState, FSRSGrade, Review
+from jolt.domain.progress import retrievability
 
 
 def _now() -> datetime:
@@ -151,6 +152,18 @@ def fold_history(
         track_id=state.track_id,
         etag=state.etag,
     )
+    if state.carried is not None:
+        # A successor concept (supersede, BE-07) starts from the card it
+        # inherited, not from a blank one.
+        c = state.carried
+        fresh.stability = c.stability
+        fresh.difficulty = c.difficulty
+        fresh.due_at = c.due_at
+        fresh.last_review_at = c.last_review_at
+        fresh.reps = c.reps
+        fresh.lapses = c.lapses
+        fresh.fsrs_state = c.fsrs_state
+        fresh.step = c.step
     for review in reviews:
         grade_value = review.final_fsrs_grade or review.provisional_fsrs_grade
         if grade_value is None:
@@ -183,6 +196,33 @@ def stability_snapshots(reviews: Iterable[Review]) -> list[tuple[datetime, float
         state = apply_grade(state, FSRSGrade(grade_value), reviewed_at=reviewed_at)
         out.append((reviewed_at, state.stability))
     return out
+
+
+# The fields `fold_history` computes; everything else on a card is carried over
+# unchanged by a recompute (BE-07).
+FOLDED_FIELDS = (
+    "stability",
+    "difficulty",
+    "retrievability",
+    "due_at",
+    "last_review_at",
+    "reps",
+    "lapses",
+    "fsrs_state",
+    "step",
+    "dirty",
+)
+
+
+def predicted_recall(state: ConceptState, now: datetime | None = None) -> float | None:
+    """Probability of recall now (0..1), or None for a card never reviewed.
+
+    The same forgetting curve as progress (`jolt.domain.progress.retrievability`),
+    so the track/concept read models and progress agree.
+    """
+    if not state.last_review_at or state.stability <= 0:
+        return None
+    return retrievability(state.stability, state.last_review_at, now or _now())
 
 
 # TODO(global-reparameterization): if the FSRS default parameters change in a

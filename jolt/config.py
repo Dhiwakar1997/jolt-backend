@@ -43,6 +43,11 @@ class Settings(BaseSettings):
     # fakes from jolt/data/memory.py — tests and cloud-free local runs only;
     # everything is lost on restart).
     storage_mode: Literal["azure", "memory"] = "azure"
+    # Memory mode only: a Jolt checkout to import the curated DSA track from at
+    # startup (BE-09, same import as scripts/import_dsa.py), so a cloud-free
+    # local server (and scripts/smoke.py) has it. Empty -> no curated tracks.
+    dsa_seed_from: str = ""
+    dsa_seed_include_new: bool = False
 
     # ---- Auth (BE-03) ----
     # Two opaque token kinds on one hashing scheme (Argon2 + pepper, plus an
@@ -143,6 +148,12 @@ class Settings(BaseSettings):
     # Good or Easy answer; with the user's `retire_mastered` on it leaves the
     # review queue (BE-06 §5, jolt/domain/mastery.py).
     mastery_stability_days: float = Field(default=21.0, gt=0)
+
+    # ---- Supersede reconciliation (BE-07 §6) ----
+    # The most reconciliation steps (one per proposed or removed concept) one
+    # jolt_store_extraction / jolt_continue_reconciliation call applies; a
+    # larger supersede is checkpointed and resumed by the next call.
+    reconcile_max_concepts: int = Field(default=25, ge=1, le=500)
 
     # ---- Key-backed providers (dormant) ----
     anthropic_api_base: str = "https://api.anthropic.com"

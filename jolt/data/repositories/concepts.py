@@ -69,6 +69,22 @@ class ConceptStatesRepository(Repository[ConceptState]):
     async def all_for_user(self, user_id: str) -> list[ConceptState]:
         return await self._query("SELECT * FROM c", [], partition_value=user_id)
 
+    async def for_track(self, user_id: str, track_id: str) -> list[ConceptState]:
+        """A user's cards on one track (BE-07 Track detail): single-partition."""
+        return await self._query(
+            "SELECT * FROM c WHERE c.track_id = @tid",
+            [{"name": "@tid", "value": track_id}],
+            partition_value=user_id,
+        )
+
+    async def with_corrections(self, user_id: str) -> list[ConceptState]:
+        """Cards with a correction note waiting for the next sync (BE-07 §4)."""
+        return await self._query(
+            "SELECT * FROM c WHERE c.correction_requested_at != @none",
+            [{"name": "@none", "value": None}],
+            partition_value=user_id,
+        )
+
 
 class QuestionsRepository(Repository[Question]):
     container_name = "questions"

@@ -338,10 +338,16 @@ async def test_runs_are_per_token_and_listed_newest_first(api, runtime, mcp_user
 
 
 async def test_an_idle_run_is_closed_as_incomplete(api, runtime, mcp_user):
+    track = (await api.post("/v1/tracks", json={"name": "T"})).json()
     sid = await upload(api, runtime, mcp_user.user_id, "a.png")
     plan = await call("jolt_sync")
     await call("jolt_get_unprocessed_sources")
     await call("jolt_store_extraction", source_id=sid, markdown="m")
+    logged = await call(
+        "jolt_log_session",
+        source_ids=[sid],
+        concepts=[{"text": "x", "track_id": track["id"], "source_id": sid}],
+    )
     # The client goes quiet for longer than SYNC_RUN_IDLE_SECONDS.
     run = await runtime.repos.sync_runs.get(plan["run_id"], mcp_user.user_id)
     quiet_since = datetime.now(UTC) - timedelta(seconds=runtime.settings.sync_run_idle_seconds + 5)
@@ -349,7 +355,7 @@ async def test_an_idle_run_is_closed_as_incomplete(api, runtime, mcp_user):
     await runtime.repos.sync_runs.replace(run)
 
     # Late tool calls no longer count towards it.
-    await call("jolt_create_questions", concept_id="c", questions=[QUESTION])
+    await call("jolt_create_questions", concept_id=logged["concept_ids"][0], questions=[QUESTION])
     status = (await api.get("/v1/sync/status")).json()
     last = status["last_run"]
     assert last["status"] == "incomplete" and last["questions_written"] == 0
@@ -431,6 +437,13 @@ async def test_prompt_route_serves_the_doc(api):
     }
     assert "jolt_sync" in resp["prompt"] and "{{" not in resp["prompt"]
     assert "exactly 4" in resp["prompt"]
+    # BE-07: corrections and supersede reconciliation are part of the night.
+    for tool in (
+        "jolt_get_pending_corrections",
+        "jolt_correct_concept",
+        "jolt_continue_reconciliation",
+    ):
+        assert tool in resp["prompt"], tool
 
 
 def test_prompt_markers_are_required():
@@ -534,3 +547,127 @@ def test_access_log_redacts_query_tokens(caplog):
         f.filter(record)
     assert "jolt_live_secret" not in record.getMessage()
     assert "/mcp/sse?token=[redacted]&x=1" in record.getMessage()
+
+
+# --------------------------------------------------------------------------- #
+# BE-07 on the BE-04 plan: correction notes are sync work, reconciliation and
+# corrections show up in the run's changes.
+# --------------------------------------------------------------------------- #
+async def test_pending_corrections_keep_the_plan_open_until_answered(api, runtime, mcp_user):
+    track = (await api.post("/v1/tracks", json={"name": "T"})).json()
+    sid = await upload(api, runtime, mcp_user.user_id, "a.png")
+    run_id = (await call("jolt_sync"))["run_id"]
+    await call("jolt_get_unprocessed_sources")
+    await call("jolt_store_extraction", source_id=sid, markdown="m")
+    (cid,) = (
+        await call(
+            "jolt_log_session",
+            source_ids=[sid],
+            concepts=[{"text": "old", "title": "Old", "track_id": track["id"], "source_id": sid}],
+        )
+    )["concept_ids"]
+    await call("jolt_create_questions", concept_id=cid, questions=[QUESTION])
+    assert (await call("jolt_sync"))["done"]
+
+    note = await api.post(f"/v1/concepts/{cid}/correction", json={"note": "It is new."})
+    assert note.is_success
+    plan = await call("jolt_sync")
+    assert not plan["done"] and plan["pending_corrections"] == 1
+    # The finished run stays closed: the correction is new work, so a new run.
+    assert plan["run_id"] != run_id
+    tools = [s["tool"] for s in plan["steps"]]
+    assert tools == ["jolt_get_pending_corrections", "jolt_correct_concept", "jolt_sync"]
+    (line,) = plan["tracks"]
+    assert (line["track_id"], line["pending_corrections"]) == (track["id"], 1)
+    assert "1 concept(s) to correct" in plan["next"]
+
+    (pending,) = (await call("jolt_get_pending_corrections"))["corrections"]
+    assert pending["concept_id"] == cid
+    fixed = await call("jolt_correct_concept", track_id=track["id"], concept_id=cid, text="new")
+    assert (fixed["updated"], fixed["corrections_cleared"]) == (True, 1)
+    final = await call("jolt_sync")
+    assert final["done"] and final["pending_corrections"] == 0
+
+    run = (await api.get("/v1/sync/status")).json()["last_run"]
+    assert run["id"] == plan["run_id"] and run["status"] == "finished"
+    assert [(c["kind"], c["concept_id"]) for c in run["changes"]] == [("concept_updated", cid)]
+
+
+async def test_reconfirming_a_concept_clears_notes_without_a_change(api, runtime, mcp_user):
+    track = (await api.post("/v1/tracks", json={"name": "T"})).json()
+    await call("jolt_sync")
+    (cid,) = (
+        await call(
+            "jolt_log_session", source_ids=[], concepts=[{"text": "x", "track_id": track["id"]}]
+        )
+    )["concept_ids"]
+    await api.post(f"/v1/concepts/{cid}/correction", json={"note": "Check this."})
+    fixed = await call("jolt_correct_concept", track_id=track["id"], concept_id=cid, text="x")
+    assert fixed["corrections_cleared"] == 1
+    plan = await call("jolt_sync")
+    assert plan["done"]
+    run = await runtime.repos.sync_runs.get(plan["run_id"], mcp_user.user_id)
+    assert [c.kind.value for c in run.changes] == ["concept_added"]
+
+
+async def test_reconciliation_adds_its_concepts_to_the_run(api, runtime, mcp_user):
+    track = (await api.post("/v1/tracks", json={"name": "T"})).json()
+    sid = await upload(api, runtime, mcp_user.user_id, "a.png")
+    run_id = (await call("jolt_sync"))["run_id"]
+    await call("jolt_get_unprocessed_sources")
+    await call("jolt_store_extraction", source_id=sid, markdown="m")
+    (cid,) = (
+        await call(
+            "jolt_log_session",
+            source_ids=[sid],
+            concepts=[
+                {
+                    "text": "Consistent hashing maps keys and servers onto one ring.",
+                    "title": "Hashing",
+                    "track_id": track["id"],
+                    "source_id": sid,
+                }
+            ],
+        )
+    )["concept_ids"]
+    assert (await api.post(f"/v1/sources/{sid}/reread", json={})).is_success
+    await call("jolt_get_unprocessed_sources")
+    stored = await call(
+        "jolt_store_extraction",
+        source_id=sid,
+        markdown="m2",
+        supersede=True,
+        concepts=[
+            {
+                "text": "Consistent hashing maps keys and servers onto one ring.",
+                "track_id": track["id"],
+            },
+            {
+                "text": "Gossip spreads membership news from peer to peer.",
+                "title": "Gossip",
+                "track_id": track["id"],
+            },
+        ],
+    )
+    rec = stored["reconciliation"]
+    assert [d["change"] for d in rec["deltas"]] == ["unchanged", "new"]
+    new_id = rec["concept_ids"][1]
+    # Resuming a finished reconciliation does not add the same change twice.
+    await call("jolt_continue_reconciliation", source_id=sid)
+    run = await runtime.repos.sync_runs.get(run_id, mcp_user.user_id)
+    assert [(c.kind.value, c.concept_id) for c in run.changes] == [
+        ("concept_added", cid),
+        ("concept_added", new_id),
+    ]
+    assert run.changes[1].source_id == sid
+
+
+async def test_log_session_refuses_another_users_source(api, runtime, mcp_user):
+    track = (await api.post("/v1/tracks", json={"name": "T"})).json()
+    with pytest.raises(Exception, match="source not found"):
+        await call(
+            "jolt_log_session",
+            source_ids=["someone-elses"],
+            concepts=[{"text": "x", "track_id": track["id"]}],
+        )
+    assert await runtime.repos.concept_states.all_for_user(mcp_user.user_id) == []

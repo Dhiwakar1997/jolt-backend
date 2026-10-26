@@ -2,14 +2,18 @@
 store_extraction(supersede) (LLD §4, §7.7).
 
 `diff_extractions` runs the pure reconciliation classifier (domain/reconciliation)
-over an agent-supplied set of proposed concepts vs. the active concepts, so the
-agent can preview a supersede before committing it.
+over an agent-supplied set of proposed concepts vs. the caller's active concepts
+on the track, so the agent can preview a supersede before committing it.
+`continue_reconciliation` resumes a large supersede from its checkpoint (BE-07).
 """
 
 from __future__ import annotations
 
 from jolt.domain.reconciliation import ProposedConcept, reconcile
 from jolt.mcp.context import get_runtime, require_user
+from jolt.mcp.tools.write import reconciliation_dict, record_reconciliation
+from jolt.services.ownership import NotOwned, visible_concepts
+from jolt.services.reconcile import ReconcileError, ReconcileService
 from jolt.services.sync import SyncService
 
 
@@ -55,10 +59,12 @@ async def get_source_content(source_id: str) -> dict:
 
 async def diff_extractions(track_id: str, proposed_concepts: list[dict]) -> dict:
     """Preview the per-concept classification a supersede would produce."""
-    # Auth gate only: concepts are track-partitioned, not user-scoped (see docs/GAPS.md).
-    await require_user()
-    rt = get_runtime()
-    existing = await rt.repos.concepts.list_for_track(track_id)
+    user = await require_user()
+    try:
+        # The caller's concepts on a visible track only (BE-07, A16).
+        existing, _ = await visible_concepts(get_runtime(), user.user_id, track_id)
+    except NotOwned as exc:
+        raise ValueError(str(exc)) from exc
     proposed = [
         ProposedConcept(text=p["text"], title=p.get("title"), syllabus_ref=p.get("syllabus_ref"))
         for p in proposed_concepts
@@ -75,3 +81,17 @@ async def diff_extractions(track_id: str, proposed_concepts: list[dict]) -> dict
             for d in result.deltas
         ]
     }
+
+
+async def continue_reconciliation(source_id: str) -> dict:
+    """Resume a supersede reconciliation from its checkpoint (BE-07 §6)."""
+    user = await require_user()
+    rt = get_runtime()
+    try:
+        view = await ReconcileService(rt).resume(user.user_id, source_id)
+    except ReconcileError as exc:
+        return {"error": str(exc)}
+    except NotOwned as exc:
+        raise ValueError(str(exc)) from exc
+    await record_reconciliation(rt, user, source_id, view)
+    return reconciliation_dict(view)

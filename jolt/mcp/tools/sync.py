@@ -32,6 +32,8 @@ def plan_dict(plan: SyncPlan) -> dict:
         "done": plan.done,
         "unprocessed_sources": plan.unprocessed_sources,
         "pending_gradings": plan.pending_gradings,
+        # BE-07: correction notes waiting (read them with jolt_get_pending_corrections).
+        "pending_corrections": plan.pending_corrections,
         "rereads": plan.rereads,
         "claimed_sources": [
             {
@@ -54,6 +56,7 @@ def plan_dict(plan: SyncPlan) -> dict:
                 "unprocessed_sources": t.unprocessed_sources,
                 "pending_gradings": t.pending_gradings,
                 "rereads": t.rereads,
+                "pending_corrections": t.pending_corrections,
                 "guidance": t.guidance,
             }
             for t in plan.tracks

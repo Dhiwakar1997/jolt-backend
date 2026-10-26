@@ -33,6 +33,7 @@ from jolt.domain.models import (
     TrackOrigin,
 )
 from jolt.domain.sync import (
+    PlanCorrection,
     PlanGrading,
     PlanReread,
     PlanSource,
@@ -43,7 +44,10 @@ from jolt.domain.sync import (
 )
 from jolt.domain.zones import user_zone
 from jolt.runtime import Runtime
+from jolt.services.cards import refresh_card_questions
+from jolt.services.corrections import CorrectionService
 from jolt.services.gradings import GradingService
+from jolt.services.ownership import NotOwned, owned_track, writable_card
 from jolt.services.reviews import ReviewService
 from jolt.services.tracks import TrackError, TrackService
 
@@ -89,6 +93,8 @@ class ConceptInput:
     # optional existing concept_key to nest under when auto-added.
     concept_key: Optional[str] = None
     parent: Optional[str] = None
+    # BE-07: the 1-based page of the source the concept was found on.
+    page: Optional[int] = None
 
     def effective_key(self) -> Optional[str]:
         return self.concept_key or self.syllabus_ref
@@ -149,7 +155,8 @@ class SyncService:
 
         Read-again requests (BE-05) are source work like any other (asking puts
         the source back to `unprocessed`); the ones this caller can take are also
-        listed in `reread_sources` with their preferred model. A source whose
+        listed in `reread_sources` with their preferred model. Concepts with
+        correction notes waiting (BE-07) are work too. A source whose
         lease lapsed `source_max_attempts` times is left out: the next claim marks
         it `failed`.
         """
@@ -192,6 +199,14 @@ class SyncService:
             state = await self._rt.repos.concept_states.for_concept(user_id, review.concept_id)
             gradings.append(PlanGrading(review.id, state.track_id if state else None))
 
+        # BE-07: concepts the learner flagged, waiting for jolt_correct_concept.
+        # The same list jolt_get_pending_corrections returns, so `done` can be
+        # reached by working through it.
+        corrections = [
+            PlanCorrection(p.concept_id, p.track_id)
+            for p in await CorrectionService(self._rt).pending(user_id)
+        ]
+
         tracks = await TrackService(self._rt).list_tracks(user_id)
         zone = await self._user_zone(user_id)
         return build_plan(
@@ -200,6 +215,7 @@ class SyncService:
             in_flight_elsewhere=elsewhere,
             gradings=gradings,
             rereads=rereads,
+            corrections=corrections,
             tracks={t.id: PlanTrackInfo(t.id, t.name, t.agenda.status.value) for t in tracks},
             user_track_ids=[t.id for t in tracks if t.origin == TrackOrigin.USER],
             lease_seconds=self._rt.settings.lease_ttl_seconds,
@@ -296,9 +312,9 @@ class SyncService:
 
         A source has one active read (BE-05): the pointer always moves, so the
         previous active read is marked superseded even when `supersede` is false
-        (before BE-05 it stayed `active` beside the new one). `supersede` is still
-        the agent's statement that this is a re-extraction; concept
-        reconciliation on supersede is not implemented yet (docs/GAPS.md).
+        (before BE-05 it stayed `active` beside the new one). Concept
+        reconciliation runs after this, in `jolt.services.reconcile`, when the
+        agent passes the read's concepts (BE-07).
         """
         source = await self._rt.repos.sources.get_source(source_id, user_id)
         if source is None:
@@ -359,13 +375,20 @@ class SyncService:
         parent). Skipped on locked agendas. Auto-add is keyed on concept_key
         membership, so re-running a sync never duplicates entries.
         """
-        # The caller's sources this call mentions (another user's ids are ignored).
+        # Ownership first (BE-07, A16): every track must be the caller's own and
+        # every source this call mentions theirs, before anything is written.
+        for track_id in dict.fromkeys(c.track_id for c in concepts):
+            try:
+                await owned_track(self._rt, user_id, track_id)
+            except NotOwned as exc:
+                raise SyncError(f"{exc}: {track_id}") from exc
         wanted = list(dict.fromkeys([*source_ids, *(c.source_id for c in concepts if c.source_id)]))
         sources: dict[str, Source] = {}
         for sid in wanted:
             source = await self._rt.repos.sources.get_source(sid, user_id)
-            if source is not None:
-                sources[sid] = source
+            if source is None:
+                raise SyncError(f"source not found: {sid}")
+            sources[sid] = source
 
         zone = await self._user_zone(user_id)
 
@@ -400,6 +423,7 @@ class SyncService:
                 # The concept's coverage key is its agenda concept_key.
                 syllabus_ref=c.effective_key(),
                 status=ConceptStatus.ACTIVE,
+                page=c.page if isinstance(c.page, int) and c.page >= 1 else None,
             )
             concept = await self._rt.repos.concepts.create(concept)
             created_concepts.append(concept)
@@ -419,6 +443,7 @@ class SyncService:
                 concept_id=concept.id,
                 track_id=c.track_id,
                 due_at=_now(),
+                active_question_ids=[],
             )
             await self._rt.repos.concept_states.create(state)
             g = group(day_of(c.source_id) or fallback)
@@ -512,6 +537,12 @@ class SyncService:
     async def create_questions(
         self, user_id: str, concept_id: str, questions: list[QuestionInput]
     ) -> list[Question]:
+        # Only the caller's concepts (they hold its card) on their own tracks:
+        # BE-07, A16; curated concepts are read-only (BE-09).
+        try:
+            await writable_card(self._rt, user_id, concept_id)
+        except NotOwned as exc:
+            raise SyncError(str(exc)) from exc
         created: list[Question] = []
         for q in questions:
             question = Question(
@@ -524,6 +555,7 @@ class SyncService:
             created.append(await self._rt.repos.questions.create(question))
         if created:
             await self._count_questions(user_id, concept_id, len(created))
+            await refresh_card_questions(self._rt, user_id, concept_id)
         return created
 
     async def _count_questions(self, user_id: str, concept_id: str, n: int) -> None:

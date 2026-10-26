@@ -52,6 +52,7 @@ _TOOLS = [
     ("jolt_get_recent_concepts", t_read.get_recent_concepts),
     ("jolt_get_coverage", t_read.get_coverage),
     ("jolt_get_agenda", t_read.get_agenda),
+    ("jolt_get_pending_corrections", t_read.get_pending_corrections),
     ("jolt_request_upload_url", t_write.request_upload_url),
     ("jolt_log_session", t_write.log_session),
     ("jolt_set_agenda", t_write.set_agenda),
@@ -65,6 +66,7 @@ _TOOLS = [
     ("jolt_list_sources", t_extract.list_sources),
     ("jolt_get_source_content", t_extract.get_source_content),
     ("jolt_diff_extractions", t_extract.diff_extractions),
+    ("jolt_continue_reconciliation", t_extract.continue_reconciliation),
 ]
 
 

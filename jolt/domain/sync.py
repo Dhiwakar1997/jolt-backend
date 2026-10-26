@@ -9,6 +9,14 @@ Re-reads (BE-05) are `PlanReread` items: sources the user asked to read again
 re-read is ordinary source work that the claim step hands out with
 `supersede: true`; the plan lists those sources (with the preferred model) in
 `reread_sources` and adds the supersede guidance whenever the list is non-empty.
+A re-read's concepts go to `jolt_store_extraction` (`concepts`), which reconciles
+them against the replaced read (BE-07); a large one returns `partial` and is
+finished with `jolt_continue_reconciliation`.
+
+Corrections (BE-07) are `PlanCorrection` items: concepts whose card holds notes
+the learner left ("Something's wrong with this concept"). They are work like
+sources and gradings: the plan is not done while any wait, and it adds the
+`jolt_get_pending_corrections` -> `jolt_correct_concept` steps.
 """
 
 from __future__ import annotations
@@ -91,6 +99,14 @@ class PlanGrading:
 
 
 @dataclass
+class PlanCorrection:
+    """A concept with correction notes waiting on the caller's card (BE-07)."""
+
+    concept_id: str
+    track_id: Optional[str]
+
+
+@dataclass
 class PlanTrackInfo:
     track_id: str
     name: str
@@ -109,6 +125,7 @@ class TrackLine:
     pending_gradings: int
     rereads: int
     guidance: str
+    pending_corrections: int = 0
 
 
 @dataclass
@@ -147,6 +164,7 @@ class SyncPlan:
     steps: list[PlanStep]
     limits: PlanLimits
     next: str = ""
+    pending_corrections: int = 0
     run_id: Optional[str] = None
 
 
@@ -166,6 +184,7 @@ def build_plan(
     gradings: list[PlanGrading],
     rereads: list[PlanReread],
     tracks: dict[str, PlanTrackInfo],
+    corrections: list[PlanCorrection] | None = None,
     user_track_ids: list[str],
     lease_seconds: int,
     zone: tzinfo | None = None,
@@ -177,13 +196,15 @@ def build_plan(
     holds only show up as `in_flight_elsewhere`: they do not keep the run open.
     `rereads` are the read-again requests among `claimable` and `claimed_by_run`
     (a subset: they are counted as source work too).
+    `corrections` are the caller's concepts with correction notes waiting (BE-07).
     `tracks` maps every track id that may appear to its name and agenda status;
     `user_track_ids` are the caller's own tracks, all listed when some source has
     no track (so the model can pick one).
     """
     limits = PlanLimits(lease_seconds=lease_seconds)
     source_work = claimable + claimed_by_run
-    done = not (source_work or gradings or rereads)
+    corrections = list(corrections or [])
+    done = not (source_work or gradings or rereads or corrections)
 
     # Counts by track, and which tracks the model needs to know about.
     involved: list[str] = []
@@ -192,7 +213,7 @@ def build_plan(
         if track_id and track_id in tracks and track_id not in involved:
             involved.append(track_id)
 
-    for item in [*source_work, *rereads, *gradings]:
+    for item in [*source_work, *rereads, *gradings, *corrections]:
         involve(item.track_id)
     unassigned = sum(1 for s in source_work if not s.track_id)
     if unassigned or any(not r.track_id for r in rereads):
@@ -208,6 +229,7 @@ def build_plan(
             pending_gradings=sum(1 for g in gradings if g.track_id == t),
             rereads=sum(1 for r in rereads if r.track_id == t),
             guidance=AGENDA_GUIDANCE.get(tracks[t].agenda_status, ""),
+            pending_corrections=sum(1 for c in corrections if c.track_id == t),
         )
         for t in involved
     ]
@@ -244,7 +266,10 @@ def build_plan(
             "jolt_store_extraction",
             "Store what you read as markdown, with an honest 0..1 confidence and your "
             "model_id; pass supersede=true when the claim said so. This marks the source "
-            "processed and makes this read the active one.",
+            "processed and makes this read the active one. For a read again, also pass "
+            "the concepts you found (concepts=[...]): the server reconciles them with the "
+            "old read; if reconciliation comes back partial, call "
+            "jolt_continue_reconciliation until it is complete.",
             limit=None,
             repeat="per claimed source",
         )
@@ -279,6 +304,21 @@ def build_plan(
             limit=GRADINGS_PER_SUBMIT,
             repeat="per batch",
         )
+    if corrections:
+        steps.add(
+            "jolt_get_pending_corrections",
+            "Fetch concepts the learner flagged as wrong, with their notes and current text.",
+            limit=None,
+            repeat="once",
+        )
+        steps.add(
+            "jolt_correct_concept",
+            "Rewrite each flagged concept's text so it is right (use the notes and the "
+            "source); this clears its notes. Send the same text to confirm it was already "
+            "right.",
+            limit=None,
+            repeat="per flagged concept",
+        )
     if not done:
         steps.add(
             "jolt_sync",
@@ -298,6 +338,8 @@ def build_plan(
             parts.append(f"{len(source_work)} source(s) to read{again}")
         if gradings:
             parts.append(f"{len(gradings)} answer(s) to grade")
+        if corrections:
+            parts.append(f"{len(corrections)} concept(s) to correct")
         next_hint = "Work left: " + ", ".join(parts) + ". Follow the steps in order."
 
     return SyncPlan(
@@ -314,6 +356,7 @@ def build_plan(
         steps=steps.items,
         limits=limits,
         next=next_hint,
+        pending_corrections=len(corrections),
     )
 
 

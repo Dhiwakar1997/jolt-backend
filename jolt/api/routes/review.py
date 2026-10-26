@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 
 from jolt.api.deps import RuntimeDep, UserDep
 from jolt.api.errors import BAD_REQUEST, CONFLICT, NOT_FOUND, UNAUTHORIZED
+from jolt.services.curated import is_pattern_match, public_concept_id
 from jolt.services.reviews import (
     ReviewConflict,
     ReviewError,
@@ -104,13 +105,27 @@ class StageTwoResponse(BaseModel):
     provisional_grade: int = Field(ge=1, le=4, description="FSRS grade set from the choice")
     interval_days: int = Field(description="Days until the next review, at least 1")
     match: Optional[Literal["correct", "partial", "incorrect"]] = Field(
-        default=None, description="pattern_match questions only (BE-09); null today"
+        default=None,
+        description="pattern_match only: correct (the pattern), partial (an acceptable one), "
+        "incorrect; null for free_text",
     )
     question_title: Optional[str] = Field(
-        default=None, description="pattern_match questions only (BE-09); null today"
+        default=None,
+        description="pattern_match only: the problem's title, revealed now; null for free_text",
     )
     retired: bool = Field(description="The concept is mastered and out of the queue")
-    feedback: Optional[str] = Field(default=None, description="The model's feedback, once graded")
+    feedback: Optional[str] = Field(
+        default=None,
+        description="The model's feedback, once graded (pattern_match: the coaching line, "
+        "graded at once)",
+    )
+    concept_id: Optional[str] = Field(
+        default=None,
+        description="The answered concept (for pattern_match, the pattern the queue item withheld)",
+    )
+    leetcode_url: Optional[str] = Field(
+        default=None, description="pattern_match only: the problem on leetcode.com"
+    )
 
 
 @router.post(
@@ -181,9 +196,12 @@ async def get_review(review_id: str, user: UserDep, rt: RuntimeDep) -> ReviewRes
     except ReviewError as exc:
         _raise(exc, 404)
     graded = grading_of(review) == "graded"
+    concept_id = review.concept_id
+    if is_pattern_match(question) and review.selected_index is None:
+        concept_id = public_concept_id(question, concept_id)  # the answer, until stage 2
     return ReviewResponse(
         review_id=review.id,
-        concept_id=review.concept_id,
+        concept_id=concept_id,
         question_id=review.question_id,
         question_version=question.version if question else review.question_version,
         session_id=review.session_id,
@@ -210,11 +228,32 @@ class StartSessionRequest(BaseModel):
         default=None, description="Practise one concept now, due or not (ignores the rest)"
     )
     kind: Optional[Literal["notes", "dsa_patterns"]] = Field(
-        default=None, description="BE-09: DSA sessions; every track is `notes` today"
+        default=None,
+        description="dsa_patterns: a DSA session drawn by the v1 rules from the caller's "
+        "enrolled DSA tracks (BE-09); notes: due questions without the DSA tracks; "
+        "omitted: every due question",
     )
     time_budget_minutes: Optional[int] = Field(
-        default=None, ge=1, description="BE-09 DSA sessions; accepted and ignored today"
+        default=None,
+        ge=1,
+        le=240,
+        description="DSA sessions: the one continuous clock, in minutes (default 30); "
+        "problems are drawn until their time weights fill it",
     )
+    difficulty_mix: Optional["DifficultyMix"] = Field(
+        default=None, description="DSA sessions: difficulty weights (default 20 / 55 / 25)"
+    )
+
+
+class DifficultyMix(BaseModel):
+    """Relative weights of the difficulties in a DSA draw (need not sum to 100)."""
+
+    easy: float = Field(default=20, ge=0)
+    medium: float = Field(default=55, ge=0)
+    hard: float = Field(default=25, ge=0)
+
+
+StartSessionRequest.model_rebuild()
 
 
 class PatternMatchExample(BaseModel):
@@ -224,18 +263,24 @@ class PatternMatchExample(BaseModel):
 
 
 class PatternMatch(BaseModel):
-    """BE-09 `pattern_match` payload; always null until BE-09."""
+    """A `pattern_match` problem as the queue shows it (BE-09). Never the title or
+    the LeetCode link: both name the problem, and stage 2 reveals them."""
 
     description: str
-    io_contract: str
-    examples: list[PatternMatchExample]
+    io_contract: str = Field(description="`Input: …` and `Output: …` lines")
+    io_input: str = Field(description="What comes in, in words")
+    io_output: str = Field(description="What goes out, in words")
+    examples: list[PatternMatchExample] = Field(description="`note`: the example's explanation")
     difficulty: Literal["Easy", "Medium", "Hard"]
-    time_weight: float
+    time_weight: int = Field(description="Minutes it takes of the session clock (2 / 4 / 7)")
 
 
 class QueueItemResponse(BaseModel):
-    concept_id: str
-    concept_title: str
+    concept_id: str = Field(
+        description="pattern_match: the track id (the pattern is the answer, withheld until "
+        "stage 2); send it back as stage 1's concept_id"
+    )
+    concept_title: str = Field(description='pattern_match: "Pattern match"')
     question_id: str
     question_type: Literal["free_text", "pattern_match"]
     stem: str
@@ -262,7 +307,14 @@ class ReviewSessionResponse(BaseModel):
     capped: bool = Field(
         default=False,
         description="The daily cap cut this queue short: more questions are due than "
-        "what is left of today's cap",
+        "what is left of today's cap. Never set on a DSA session, which is bounded by "
+        "its time budget instead",
+    )
+    time_budget_minutes: Optional[int] = Field(
+        default=None, description="DSA sessions: the session clock (null otherwise)"
+    )
+    time_weight_total: Optional[int] = Field(
+        default=None, description="DSA sessions: minutes the drawn problems weigh (≤ the budget)"
     )
 
 
@@ -307,6 +359,16 @@ async def start_review_session(
             limit=body.limit,
             concept_id=body.concept_id,
             kind=body.kind,
+            time_budget_minutes=body.time_budget_minutes,
+            difficulty_mix=(
+                {
+                    "Easy": body.difficulty_mix.easy,
+                    "Medium": body.difficulty_mix.medium,
+                    "Hard": body.difficulty_mix.hard,
+                }
+                if body.difficulty_mix
+                else None
+            ),
         )
     except ReviewError as exc:
         _raise(exc, 404)
@@ -318,6 +380,8 @@ async def start_review_session(
         done_today=view.done_today,
         daily_review_cap=view.daily_review_cap,
         capped=view.capped,
+        time_budget_minutes=view.time_budget_minutes,
+        time_weight_total=view.time_weight_total,
     )
 
 

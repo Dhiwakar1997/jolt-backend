@@ -245,6 +245,7 @@ async def test_upload_sync_detail_and_read_again(api, runtime, mcp_user):
     plan = await call("jolt_sync")
     assert (plan["unprocessed_sources"], plan["pending_gradings"]) == (1, 0)
     assert (plan["rereads"], plan["reread_sources"]) == (0, [])
+    assert plan["pending_corrections"] == 0
     (claimed,) = (await call("jolt_get_unprocessed_sources"))["sources"]
     assert claimed["source_id"] == sid and claimed["page_count"] == 2
     assert claimed["track_id"] == tid and claimed["title"] == "Lecture 4"

@@ -72,6 +72,9 @@ class ReviewStatus(str, Enum):
     PENDING_GRADING = "pending_grading"
     GRADED = "graded"
     INVALIDATED = "invalidated"
+    # BE-09: a `pattern_match` review between its two stages. Its grade is
+    # deterministic (set at stage 2), so it never waits for the sync's grader.
+    AWAITING_CHOICE = "awaiting_choice"
 
 
 class TrackOrigin(str, Enum):
@@ -158,6 +161,14 @@ class UserSettings(BaseModel):
     time_zone: str = "UTC"
 
 
+class Enrolment(BaseModel):
+    """The learner added a curated track (BE-09). Their cards on it are created
+    lazily, by the first review."""
+
+    track_id: str
+    enrolled_at: datetime = Field(default_factory=_now)
+
+
 class User(DocBase):
     """A Jolt account (BE-03).
 
@@ -178,6 +189,12 @@ class User(DocBase):
     # migrated into `settings.data_retention_days`, written back as None.
     retention_days: Optional[int] = None
     settings: UserSettings = Field(default_factory=UserSettings)
+    # BE-09: curated tracks the learner enrolled in (kept on the user document:
+    # /v1/me, Tracks and the review queue read it with the user, no extra query).
+    enrolments: list[Enrolment] = Field(default_factory=list)
+
+    def enrolled_track_ids(self) -> set[str]:
+        return {e.track_id for e in self.enrolments}
 
     @model_validator(mode="after")
     def _migrate_retention_days(self) -> "User":
@@ -221,6 +238,10 @@ class SyllabusItem(BaseModel):
     concept_key: str
     label: str
     parent: Optional[str] = None
+    # Per-item provenance (BE-07): who added this item — the learner (an outline
+    # or a syllabus at creation), an agent's refine, or auto-add from uploads
+    # (emergent). None on items written before BE-07: read as the agenda's source.
+    source: Optional[AgendaSource] = None
 
 
 class Agenda(BaseModel):
@@ -236,9 +257,21 @@ class Agenda(BaseModel):
     syllabus: list[SyllabusItem] = Field(default_factory=list)
     last_refined_at: Optional[datetime] = None
     refined_from_source_id: Optional[str] = None
+    # BE-07: the learner's rough outline from track creation, kept verbatim for
+    # the next sync to tidy into a refined syllabus (the draft items are a
+    # mechanical first cut of it).
+    outline: Optional[str] = None
 
     def keys(self) -> set[str]:
         return {item.concept_key for item in self.syllabus}
+
+    def item_source(self, item: SyllabusItem) -> AgendaSource:
+        return item.source or self.source
+
+
+class TrackKind(str, Enum):
+    NOTES = "notes"
+    DSA_PATTERNS = "dsa_patterns"  # curated DSA tracks (BE-09)
 
 
 class Track(DocBase):
@@ -247,6 +280,45 @@ class Track(DocBase):
     name: str
     origin: TrackOrigin = TrackOrigin.USER
     agenda: Agenda = Field(default_factory=Agenda)
+    # BE-07: what the track holds, and when the learner archived it (None:
+    # active). An archived track's concepts leave the review queue.
+    kind: TrackKind = TrackKind.NOTES
+    archived_at: Optional[datetime] = None
+    # BE-09: the catalog blurb of a curated track (None on learners' tracks).
+    description: Optional[str] = None
+
+
+class ProblemIndexEntry(BaseModel):
+    """One playable problem of a curated DSA track, in the track content's index:
+    everything the session draw needs, so a draw is one point read (BE-09)."""
+
+    question_id: str
+    concept_id: str
+    leetcode_id: int
+    difficulty: str  # Easy | Medium | Hard
+    time_weight: int  # minutes: Easy 2, Medium 4, Hard 7
+    near_duplicate_of: Optional[int] = None
+
+
+class TrackContent(DocBase):
+    """Track-level content of a curated track (BE-09): the decision tree and the
+    problem index. Stored in the `tracks` container, curated bucket, with id
+    `<track_id>.content`; it has no `origin`, so the catalog query skips it."""
+
+    doc_type: str = "track_content"
+    track_id: str
+    kind: TrackKind = TrackKind.DSA_PATTERNS
+    # The pattern names in answer-grid order (every pattern_match question's options).
+    patterns: list[str] = Field(default_factory=list)
+    decision_tree: dict = Field(default_factory=dict)
+    problems: list[ProblemIndexEntry] = Field(default_factory=list)
+    imported_at: Optional[datetime] = None
+    # Hash of everything above, so an unchanged re-import writes nothing.
+    content_hash: Optional[str] = None
+
+    @staticmethod
+    def id_for(track_id: str) -> str:
+        return f"{track_id}.content"
 
 
 class SourcePage(BaseModel):
@@ -351,6 +423,53 @@ class Extraction(DocBase):
     client_label: Optional[str] = None
     concepts: list[ExtractionConcept] = Field(default_factory=list)
     questions_written: int = 0
+    # BE-07: the supersede reconciliation this read drives, with its checkpoint
+    # (None when the read was stored without `concepts`).
+    reconciliation: Optional["ReconciliationCheckpoint"] = None
+
+
+class ProposedConceptDoc(BaseModel):
+    """A concept a re-read proposes (the `concepts` of jolt_store_extraction)."""
+
+    text: str
+    track_id: str
+    title: Optional[str] = None
+    concept_key: Optional[str] = None
+    parent: Optional[str] = None
+    page: Optional[int] = None
+
+
+class ReconcileStep(BaseModel):
+    """One planned reconciliation change. `concept_id` is fixed when the plan is
+    made (existing id, or a deterministic id for a new or successor concept), so
+    re-applying a step after a crash converges on the same documents."""
+
+    change: str  # unchanged | refined | changed | removed | new
+    index: Optional[int] = None  # position in the proposed list; None for removed
+    existing_concept_id: Optional[str] = None
+    existing_track_id: Optional[str] = None
+    concept_id: Optional[str] = None  # the concept that carries on (None: removed)
+    proposed: Optional[ProposedConceptDoc] = None
+    similarity: float = 0.0
+
+
+class ReconciliationCheckpoint(BaseModel):
+    """Resumable supersede reconciliation (BE-07 §6, LLD §11 atomicity ceiling).
+
+    The whole plan is classified up front and stored on the new read; steps are
+    applied in order, at most `RECONCILE_MAX_CONCEPTS` per call, and `cursor`
+    (steps applied) is saved after each one. `jolt_continue_reconciliation`
+    resumes from the cursor.
+    """
+
+    status: str = "in_progress"  # in_progress | complete
+    previous_extraction_id: Optional[str] = None
+    steps: list[ReconcileStep] = Field(default_factory=list)
+    cursor: int = 0
+    updated_at: datetime = Field(default_factory=_now)
+
+
+Extraction.model_rebuild()
 
 
 class Session(DocBase):
@@ -376,6 +495,52 @@ class Concept(DocBase):
     status: ConceptStatus = ConceptStatus.ACTIVE
     successor_id: Optional[str] = None  # set when superseded
     syllabus_ref: Optional[str] = None  # coverage linkage
+    # BE-07: the 1-based page of the source it was found on ("where found").
+    page: Optional[int] = None
+    superseded_at: Optional[datetime] = None
+    # BE-09: Jolt-authored content on a curated track (shared by every learner,
+    # read-only), and for a DSA pattern its library entry.
+    curated: bool = False
+    library: Optional["PatternLibrary"] = None
+
+
+class PatternLibrary(BaseModel):
+    """A DSA pattern's library entry (v1 `src/tracks/dsa/content/library.ts`)."""
+
+    category: str = ""
+    time: str = ""
+    space: str = ""
+    when_to_reach: str = ""
+    tells: list[str] = Field(default_factory=list)
+    pseudocode: list[str] = Field(default_factory=list)
+    explanation: list[str] = Field(default_factory=list)
+    # The step animation for the pattern (v1 `animations.ts` reel, by slug).
+    animation_id: Optional[str] = None
+
+
+Concept.model_rebuild()
+
+
+class CarriedCard(BaseModel):
+    """The FSRS card a successor concept inherits from the concept it replaced
+    (supersede, change class `changed`). The successor's fold starts from it
+    instead of a blank card, so its schedule carries on."""
+
+    stability: float = 0.0
+    difficulty: float = 0.0
+    due_at: Optional[datetime] = None
+    last_review_at: Optional[datetime] = None
+    reps: int = 0
+    lapses: int = 0
+    fsrs_state: int = 0
+    step: int = 0
+
+
+class CorrectionNote(BaseModel):
+    """ "Something's wrong with this concept": a note for the next sync (BE-07 §4)."""
+
+    note: str
+    created_at: datetime = Field(default_factory=_now)
 
 
 class ConceptState(DocBase):
@@ -407,6 +572,52 @@ class ConceptState(DocBase):
     # `retire_mastered` setting: see `jolt.domain.mastery.is_retired`.
     mastered_at: Optional[datetime] = None
     unretired_at: Optional[datetime] = None
+    # BE-07 read-model denormalisation, so Track detail needs no query per
+    # concept. `active_question_ids` are the concept's active questions in
+    # rotation order (the queue serves `[reps % n]`); None on cards written
+    # before BE-07 (backfilled on first read). `question_version` is the newest
+    # active version. `last_answer` is the free text of the latest folded review.
+    active_question_ids: Optional[list[str]] = None
+    question_version: Optional[int] = None
+    last_answer: Optional[str] = None
+    # Supersede (BE-07): the concept was replaced or removed by a re-read; the
+    # card stays for history but is never due again.
+    superseded_at: Optional[datetime] = None
+    carried: Optional[CarriedCard] = None
+    carried_from: Optional[str] = None
+    # Pending corrections for the next sync; `correction_requested_at` is set
+    # while any are pending (the sync's single-partition query keys on it).
+    corrections: list[CorrectionNote] = Field(default_factory=list)
+    correction_requested_at: Optional[datetime] = None
+
+
+class QuestionType(str, Enum):
+    FREE_TEXT = "free_text"
+    PATTERN_MATCH = "pattern_match"  # a curated DSA problem (BE-09)
+
+
+class ProblemExample(BaseModel):
+    input: str
+    output: str
+    explanation: Optional[str] = None
+
+
+class PatternMatchContent(BaseModel):
+    """What a `pattern_match` question (a v1 DSA problem) carries besides the
+    common fields. `options` are all the patterns, `correct_index` the problem's
+    `algorithm`, `Question.acceptable_indexes` its `acceptableAlgorithms`."""
+
+    track_id: str
+    leetcode_id: int
+    leetcode_url: str
+    description: str
+    io_input: str = ""
+    io_output: str = ""
+    examples: list[ProblemExample] = Field(default_factory=list)
+    difficulty: str  # Easy | Medium | Hard
+    time_weight: int
+    near_duplicate_of: Optional[int] = None
+    batch: Optional[str] = None  # the v1 batch file it came from
 
 
 class Question(DocBase):
@@ -430,6 +641,12 @@ class Question(DocBase):
     rewritten_from_review_id: Optional[str] = None
     superseded_by: Optional[str] = None  # the next version's id
     retired_at: Optional[datetime] = None
+    # BE-09: `pattern_match` questions (curated DSA problems). `title` is the
+    # problem's real name: it is the answer, so it is served only after stage 2.
+    type: QuestionType = QuestionType.FREE_TEXT
+    title: Optional[str] = None
+    acceptable_indexes: list[int] = Field(default_factory=list)  # score partial
+    pattern_match: Optional[PatternMatchContent] = None
 
 
 class Review(DocBase):
@@ -462,6 +679,8 @@ class Review(DocBase):
     feedback: Optional[str] = None
     # The question version a grading's rewrite created from this review.
     rewritten_question_id: Optional[str] = None
+    # BE-09 `pattern_match`: correct | partial | incorrect, set at stage 2.
+    match: Optional[str] = None
 
 
 class ReviewSession(DocBase):
@@ -476,6 +695,9 @@ class ReviewSession(DocBase):
     concept_id: Optional[str] = None
     kind: Optional[str] = None
     limit: int = 0
+    # BE-09 DSA sessions: the one continuous clock and what the queue fills of it.
+    time_budget_minutes: Optional[int] = None
+    time_weight_total: Optional[int] = None
     question_ids: list[str] = Field(default_factory=list)
     concept_ids: list[str] = Field(default_factory=list)
     ended_at: Optional[datetime] = None

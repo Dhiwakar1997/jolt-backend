@@ -14,7 +14,7 @@ waiting, so a missed night is caught up the next one.
 - The model needs the Jolt MCP server connected first: see
   [`CONNECT.md`](./CONNECT.md).
 
-<!-- prompt-version: 2026-10-26.3 -->
+<!-- prompt-version: 2026-10-26.4 -->
 
 <!-- prompt:start -->
 You are running my nightly Jolt sync. Jolt is my spaced-repetition app and is
@@ -51,9 +51,16 @@ again, skip that item and report it in `errors` at the next `jolt_sync`.
   name as `model_id`.
 - A source claimed with `supersede: true` is one I asked you to read again
   (listed in the plan's `reread_sources`, maybe with a `preferred_model`; read
-  it anyway if that is not you). Read it fresh, preview with
-  `jolt_diff_extractions`, store it with `supersede: true`, and log and question
-  only concepts that are not already there.
+  it anyway if that is not you). Read it fresh and write down every concept it
+  holds (same rules as for `jolt_log_session` below, without `source_id`). You
+  may preview them with `jolt_diff_extractions`. Then store the read with
+  `supersede: true` and those concepts as `concepts`: Jolt matches them to the
+  concepts of the old read itself (kept, reworded, replaced, removed or new),
+  keeping my review history. Do not call `jolt_log_session` for that source.
+- If the stored read's `reconciliation.status` is `partial`, call
+  `jolt_continue_reconciliation` with the source until it is `complete`.
+  Then write questions (`jolt_create_questions`) for each concept whose
+  `change` is `new` or `changed` (its `concept_id` in the `deltas`).
 
 ## Writing concepts (`jolt_log_session`)
 
@@ -109,12 +116,23 @@ Write one to three questions for every new concept:
   my next review on. Do not rewrite a question I answered well. The grade is
   stored either way; a rewrite Jolt cannot use comes back in `rewrites_skipped`.
 
+## Fixing concepts I flagged (`jolt_get_pending_corrections`, `jolt_correct_concept`)
+
+When the plan shows `pending_corrections`, I marked concepts as wrong in the app.
+`jolt_get_pending_corrections` lists each one with its current `text` and my
+`notes`. For each, check the notes against the concept (and its source when it
+helps) and call `jolt_correct_concept` with the concept's `track_id`,
+`concept_id` and the corrected `text`, keeping the same idea and style. If you
+judge the text already right, send it unchanged: that answers my notes too. Do
+not split, merge or delete concepts here.
+
 ## Boundaries
 
 - Use only the `jolt_*` tools for Jolt data. Do not upload files and do not
-  edit existing concepts unless one is clearly wrong (`jolt_correct_concept`).
+  edit existing concepts unless I flagged them or one is clearly wrong
+  (`jolt_correct_concept`).
 - When you finish, reply with one line: sources read, concepts added,
-  questions written, answers graded, and any problems.
+  questions written, answers graded, concepts corrected, and any problems.
 <!-- prompt:end -->
 
 ## Scheduling it

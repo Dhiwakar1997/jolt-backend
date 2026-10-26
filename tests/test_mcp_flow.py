@@ -102,6 +102,7 @@ async def test_nightly_loop_across_mcp_and_rest(api, runtime):
     plan = await call("jolt_sync")
     assert (plan["unprocessed_sources"], plan["pending_gradings"], plan["done"]) == (1, 0, False)
     assert (plan["rereads"], plan["reread_sources"]) == (0, [])
+    assert plan["pending_corrections"] == 0
     claimed = await call("jolt_get_unprocessed_sources")
     assert [s["source_id"] for s in claimed["sources"]] == [ticket["source_id"]]
     assert claimed["sources"][0]["lease_expires_at"] is not None
@@ -205,7 +206,7 @@ async def test_nightly_loop_across_mcp_and_rest(api, runtime):
     fixed = await call(
         "jolt_correct_concept", track_id=tid, concept_id=concept_id, text="Corrected text."
     )
-    assert fixed == {"concept_id": concept_id, "updated": True}
+    assert fixed == {"concept_id": concept_id, "updated": True, "corrections_cleared": 0}
     missing = await call("jolt_correct_concept", track_id=tid, concept_id="nope", text="x")
     assert missing == {"error": "concept not found"}
 

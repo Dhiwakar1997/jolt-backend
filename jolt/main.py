@@ -50,6 +50,8 @@ async def lifespan(app: FastAPI):
     runtime = getattr(app.state, "runtime", None) or await Runtime.create(cfg)
     app.state.runtime = runtime
     set_mcp_runtime(runtime)  # share the same gateways with the MCP tools
+    if cfg.storage_mode == "memory" and cfg.dsa_seed_from:
+        await _seed_curated(runtime, cfg)
     install_log_redaction()  # MCP tokens in ?token= never reach the access log
     try:
         yield
@@ -58,12 +60,28 @@ async def lifespan(app: FastAPI):
         logger.info("Stopped jolt-api")
 
 
+async def _seed_curated(runtime: Runtime, cfg: Settings) -> None:
+    """Memory mode: import the curated DSA track from a Jolt checkout (BE-09)."""
+    from jolt.curated.dsa_import import import_dsa
+    from jolt.curated.dsa_source import SourceError, load_bundle
+
+    try:
+        bundle = load_bundle(cfg.dsa_seed_from, include_new=cfg.dsa_seed_include_new)
+        report = await import_dsa(runtime, bundle)
+    except (SourceError, ValueError) as exc:
+        logger.warning("DSA_SEED_FROM: not imported: %s", exc)
+        return
+    logger.info(
+        "DSA_SEED_FROM: imported %d problems, %d patterns", report.playable, len(bundle.patterns)
+    )
+
+
 def create_app(settings: Settings | None = None, runtime: Runtime | None = None) -> FastAPI:
     """Build the app. `settings` / `runtime` are injection points for tests."""
     cfg = settings or get_settings()
     app = FastAPI(
         title="Jolt API",
-        version="0.7.0",
+        version="0.9.0",
         lifespan=lifespan,
         # Stable, readable operationIds (the handler name) for generated clients.
         generate_unique_id_function=lambda route: route.name,

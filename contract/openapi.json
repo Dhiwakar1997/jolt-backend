@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Jolt API",
-    "version": "0.7.0"
+    "version": "0.9.0"
   },
   "paths": {
     "/v1/auth/google": {
@@ -1612,12 +1612,215 @@
         }
       }
     },
+    "/v1/concepts/{concept_id}": {
+      "get": {
+        "tags": [
+          "concepts"
+        ],
+        "summary": "Get Concept",
+        "description": "The Concept screen: summary, where found, answer timeline, question versions\nwith the adaptive note, FSRS state.",
+        "operationId": "get_concept",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "concept_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Concept Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/jolt__api__routes__concepts__ConceptDetailResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, or not owned by the caller",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded (per token, per replica); retry after `Retry-After` seconds",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/concepts/{concept_id}/correction": {
+      "post": {
+        "tags": [
+          "concepts"
+        ],
+        "summary": "Request Correction",
+        "description": "\"Something's wrong with this concept\": queue a note; the next sync reads it\n(jolt_get_pending_corrections) and fixes the concept with jolt_correct_concept.",
+        "operationId": "request_correction",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "concept_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Concept Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CorrectionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CorrectionResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, or not owned by the caller",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicts with an earlier request (e.g. a reused request id)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded (per token, per replica); retry after `Retry-After` seconds",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body larger than REQUEST_MAX_BYTES",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/tracks": {
       "get": {
         "tags": [
           "tracks"
         ],
         "summary": "List Tracks",
+        "description": "The caller's tracks (newest first, archived ones included and flagged), then\ncurated ones, each with its counts.",
         "operationId": "list_tracks",
         "responses": {
           "200": {
@@ -1750,6 +1953,265 @@
             "HTTPBearer": []
           }
         ]
+      }
+    },
+    "/v1/tracks/catalog": {
+      "get": {
+        "tags": [
+          "tracks"
+        ],
+        "summary": "Track Catalog",
+        "description": "Curated tracks anyone can add (BE-09), with `enrolled` for the caller.",
+        "operationId": "track_catalog",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TrackResponse"
+                  },
+                  "type": "array",
+                  "title": "Response Track Catalog"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded (per token, per replica); retry after `Retry-After` seconds",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/v1/tracks/{track_id}": {
+      "get": {
+        "tags": [
+          "tracks"
+        ],
+        "summary": "Get Track",
+        "description": "Track detail: agenda, per-item concept state, due today, recent sources.",
+        "operationId": "get_track",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "track_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Track Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrackDetailResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, or not owned by the caller",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded (per token, per replica); retry after `Retry-After` seconds",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "tracks"
+        ],
+        "summary": "Update Track",
+        "description": "Rename and/or archive one of the caller's own tracks. Archiving pauses it:\nits concepts leave the review queue until it is unarchived.",
+        "operationId": "update_track",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "track_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Track Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateTrackRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrackResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, or not owned by the caller",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicts with an earlier request (e.g. a reused request id)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded (per token, per replica); retry after `Retry-After` seconds",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body larger than REQUEST_MAX_BYTES",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/v1/tracks/{track_id}/agenda/lock": {
@@ -1990,6 +2452,371 @@
           },
           "404": {
             "description": "Not found, or not owned by the caller",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded (per token, per replica); retry after `Retry-After` seconds",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/tracks/{track_id}/enrol": {
+      "post": {
+        "tags": [
+          "tracks"
+        ],
+        "summary": "Enrol Track",
+        "description": "Add a curated track. Idempotent (enrolling again returns the first\n`enrolled_at`). Cards are created lazily, by the first review.",
+        "operationId": "enrol_track",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "track_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Track Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnrolmentResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not a curated track",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicts with an earlier request (e.g. a reused request id)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded (per token, per replica); retry after `Retry-After` seconds",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body larger than REQUEST_MAX_BYTES",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "tracks"
+        ],
+        "summary": "Unenrol Track",
+        "description": "Leave a curated track. Idempotent. The caller's cards and answers stay\n(history) but the track's concepts leave the review queue until they enrol again.",
+        "operationId": "unenrol_track",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "track_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Track Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not a curated track",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicts with an earlier request (e.g. a reused request id)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded (per token, per replica); retry after `Retry-After` seconds",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/tracks/{track_id}/library": {
+      "get": {
+        "tags": [
+          "tracks"
+        ],
+        "summary": "Track Library",
+        "description": "A DSA track's pattern library: when to reach for each pattern, the tells,\npseudocode, a walkthrough and its animation (BE-09). Readable without enrolling.",
+        "operationId": "track_library",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "track_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Track Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not a curated track",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded (per token, per replica); retry after `Retry-After` seconds",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/tracks/{track_id}/decision-tree": {
+      "get": {
+        "tags": [
+          "tracks"
+        ],
+        "summary": "Track Decision Tree",
+        "description": "The DSA decision tree, free (decision D3): yes/no questions that walk to a\npattern (BE-09). Readable without enrolling.",
+        "operationId": "track_decision_tree",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "track_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Track Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DecisionTreeResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not a curated track",
             "content": {
               "application/json": {
                 "schema": {
@@ -2506,7 +3333,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ConceptDetailResponse"
+                  "$ref": "#/components/schemas/jolt__api__routes__progress__ConceptDetailResponse"
                 }
               }
             }
@@ -3447,6 +4274,18 @@
               }
             ],
             "title": "Refined From Source Id"
+          },
+          "outline": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outline",
+            "description": "The learner's outline from track creation, if any"
           }
         },
         "type": "object",
@@ -3511,65 +4350,42 @@
         ],
         "title": "ApiKeyResponse"
       },
-      "ConceptDetailResponse": {
+      "ConceptFoundIn": {
         "properties": {
-          "concept_id": {
+          "source_id": {
             "type": "string",
-            "title": "Concept Id"
+            "title": "Source Id"
           },
-          "stability": {
-            "type": "number",
-            "title": "Stability"
+          "source_title": {
+            "type": "string",
+            "title": "Source Title"
           },
-          "difficulty": {
-            "type": "number",
-            "title": "Difficulty"
-          },
-          "retrievability": {
-            "type": "number",
-            "title": "Retrievability",
-            "description": "Predicted recall now (0-1) from stability and the time since the last review; about 1 right after a review, 0 before the first"
-          },
-          "due_at": {
+          "page": {
             "anyOf": [
               {
-                "type": "string",
-                "format": "date-time"
+                "type": "integer"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Due At"
+            "title": "Page",
+            "description": "1-based page of the source, when the model said"
           },
-          "reps": {
-            "type": "integer",
-            "title": "Reps"
-          },
-          "lapses": {
-            "type": "integer",
-            "title": "Lapses"
-          },
-          "timeline": {
-            "items": {
-              "$ref": "#/components/schemas/ConceptStatePoint"
-            },
-            "type": "array",
-            "title": "Timeline"
+          "uploaded_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Uploaded At"
           }
         },
         "type": "object",
         "required": [
-          "concept_id",
-          "stability",
-          "difficulty",
-          "retrievability",
-          "due_at",
-          "reps",
-          "lapses",
-          "timeline"
+          "source_id",
+          "source_title",
+          "page",
+          "uploaded_at"
         ],
-        "title": "ConceptDetailResponse"
+        "title": "ConceptFoundIn"
       },
       "ConceptRefResponse": {
         "properties": {
@@ -3754,6 +4570,71 @@
         ],
         "title": "ConfirmResponse"
       },
+      "CorrectionNoteResponse": {
+        "properties": {
+          "note": {
+            "type": "string",
+            "title": "Note"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "note",
+          "created_at"
+        ],
+        "title": "CorrectionNoteResponse"
+      },
+      "CorrectionRequest": {
+        "properties": {
+          "note": {
+            "type": "string",
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Note",
+            "description": "What is wrong, in your words"
+          }
+        },
+        "type": "object",
+        "required": [
+          "note"
+        ],
+        "title": "CorrectionRequest"
+      },
+      "CorrectionResponse": {
+        "properties": {
+          "concept_id": {
+            "type": "string",
+            "title": "Concept Id"
+          },
+          "note": {
+            "type": "string",
+            "title": "Note"
+          },
+          "status": {
+            "type": "string",
+            "const": "queued",
+            "title": "Status",
+            "default": "queued"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "concept_id",
+          "note",
+          "created_at"
+        ],
+        "title": "CorrectionResponse"
+      },
       "CoverageResponse": {
         "properties": {
           "track_id": {
@@ -3771,6 +4652,11 @@
           "decaying_concepts": {
             "type": "integer",
             "title": "Decaying Concepts"
+          },
+          "off_plan_concepts": {
+            "type": "integer",
+            "title": "Off Plan Concepts",
+            "description": "On a locked track, outside the syllabus: left out of the other counts"
           },
           "coverage_ratio": {
             "type": "number",
@@ -3797,6 +4683,7 @@
           "total_concepts",
           "studied_concepts",
           "decaying_concepts",
+          "off_plan_concepts",
           "coverage_ratio",
           "by_syllabus",
           "uncovered_syllabus"
@@ -3823,6 +4710,8 @@
         "properties": {
           "name": {
             "type": "string",
+            "maxLength": 120,
+            "minLength": 1,
             "title": "Name"
           },
           "syllabus": {
@@ -3831,7 +4720,28 @@
             },
             "type": "array",
             "title": "Syllabus",
+            "description": "Topic labels: a user-authored, `refined` agenda",
             "default": []
+          },
+          "kind": {
+            "type": "string",
+            "const": "notes",
+            "title": "Kind",
+            "description": "Learners create notes tracks; DSA tracks are curated",
+            "default": "notes"
+          },
+          "outline": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 20000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outline",
+            "description": "A rough outline (one topic per line, indent to nest): a `draft` agenda the model tidies at the next sync"
           }
         },
         "type": "object",
@@ -3908,6 +4818,139 @@
         ],
         "title": "DailyReviews"
       },
+      "DecisionTreeNodeResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "question",
+              "leaf"
+            ],
+            "title": "Kind"
+          },
+          "prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt",
+            "description": "question: asked in the guided walk"
+          },
+          "short": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Short",
+            "description": "question: the flowchart label"
+          },
+          "yes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Yes",
+            "description": "question: node id on yes"
+          },
+          "no": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "No",
+            "description": "question: node id on no"
+          },
+          "pattern": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pattern",
+            "description": "leaf: the pattern it lands on"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note",
+            "description": "leaf: why"
+          },
+          "concept_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Concept Id",
+            "description": "leaf: the pattern's concept on this track, when it is one"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "kind"
+        ],
+        "title": "DecisionTreeNodeResponse"
+      },
+      "DecisionTreeResponse": {
+        "properties": {
+          "track_id": {
+            "type": "string",
+            "title": "Track Id"
+          },
+          "root": {
+            "type": "string",
+            "title": "Root"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/DecisionTreeNodeResponse"
+            },
+            "type": "array",
+            "title": "Nodes",
+            "description": "In authoring order"
+          }
+        },
+        "type": "object",
+        "required": [
+          "track_id",
+          "root",
+          "nodes"
+        ],
+        "title": "DecisionTreeResponse"
+      },
       "DeleteAccountRequest": {
         "properties": {
           "confirm": {
@@ -3949,6 +4992,31 @@
           "email"
         ],
         "title": "DevSignInRequest"
+      },
+      "DifficultyMix": {
+        "properties": {
+          "easy": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Easy",
+            "default": 20
+          },
+          "medium": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Medium",
+            "default": 55
+          },
+          "hard": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Hard",
+            "default": 25
+          }
+        },
+        "type": "object",
+        "title": "DifficultyMix",
+        "description": "Relative weights of the difficulties in a DSA draw (need not sum to 100)."
       },
       "DueItemResponse": {
         "properties": {
@@ -3993,6 +5061,66 @@
           "items"
         ],
         "title": "DueResponse"
+      },
+      "DueTodayResponse": {
+        "properties": {
+          "concept_id": {
+            "type": "string",
+            "title": "Concept Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "question_id": {
+            "type": "string",
+            "title": "Question Id"
+          },
+          "last_answer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Answer"
+          }
+        },
+        "type": "object",
+        "required": [
+          "concept_id",
+          "title",
+          "question_id",
+          "last_answer"
+        ],
+        "title": "DueTodayResponse"
+      },
+      "EnrolmentResponse": {
+        "properties": {
+          "track_id": {
+            "type": "string",
+            "title": "Track Id"
+          },
+          "enrolled": {
+            "type": "boolean",
+            "const": true,
+            "title": "Enrolled",
+            "default": true
+          },
+          "enrolled_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Enrolled At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "track_id",
+          "enrolled_at"
+        ],
+        "title": "EnrolmentResponse"
       },
       "ErrorResponse": {
         "properties": {
@@ -4080,6 +5208,78 @@
         ],
         "title": "ExtractionResponse"
       },
+      "FoundInResponse": {
+        "properties": {
+          "source_id": {
+            "type": "string",
+            "title": "Source Id"
+          },
+          "source_title": {
+            "type": "string",
+            "title": "Source Title"
+          },
+          "uploaded_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Uploaded At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "source_id",
+          "source_title",
+          "uploaded_at"
+        ],
+        "title": "FoundInResponse"
+      },
+      "FsrsResponse": {
+        "properties": {
+          "stability": {
+            "type": "number",
+            "title": "Stability"
+          },
+          "difficulty": {
+            "type": "number",
+            "title": "Difficulty"
+          },
+          "retrievability": {
+            "type": "number",
+            "title": "Retrievability",
+            "description": "Predicted recall now, 0–1 (0 before any review)"
+          },
+          "due_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Due At",
+            "description": "Next review; null when retired or superseded"
+          },
+          "reps": {
+            "type": "integer",
+            "title": "Reps"
+          },
+          "lapses": {
+            "type": "integer",
+            "title": "Lapses"
+          }
+        },
+        "type": "object",
+        "required": [
+          "stability",
+          "difficulty",
+          "retrievability",
+          "due_at",
+          "reps",
+          "lapses"
+        ],
+        "title": "FsrsResponse"
+      },
       "GoogleSignInRequest": {
         "properties": {
           "id_token": {
@@ -4107,6 +5307,63 @@
         },
         "type": "object",
         "title": "HTTPValidationError"
+      },
+      "LibraryPatternResponse": {
+        "properties": {
+          "concept_id": {
+            "type": "string",
+            "title": "Concept Id"
+          },
+          "concept_key": {
+            "type": "string",
+            "title": "Concept Key",
+            "description": "The pattern's slug (the syllabus key)"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "The pattern, as the answer grid shows it"
+          },
+          "problem_count": {
+            "type": "integer",
+            "title": "Problem Count",
+            "description": "Playable problems whose answer is this pattern"
+          },
+          "library": {
+            "$ref": "#/components/schemas/PatternLibraryResponse"
+          }
+        },
+        "type": "object",
+        "required": [
+          "concept_id",
+          "concept_key",
+          "name",
+          "problem_count",
+          "library"
+        ],
+        "title": "LibraryPatternResponse"
+      },
+      "LibraryResponse": {
+        "properties": {
+          "track_id": {
+            "type": "string",
+            "title": "Track Id"
+          },
+          "patterns": {
+            "items": {
+              "$ref": "#/components/schemas/LibraryPatternResponse"
+            },
+            "type": "array",
+            "title": "Patterns",
+            "description": "Syllabus order"
+          }
+        },
+        "type": "object",
+        "required": [
+          "track_id",
+          "patterns"
+        ],
+        "title": "LibraryResponse"
       },
       "McpTokenResponse": {
         "properties": {
@@ -4315,6 +5572,72 @@
         ],
         "title": "OnboardingResponse"
       },
+      "PatternLibraryResponse": {
+        "properties": {
+          "category": {
+            "type": "string",
+            "title": "Category"
+          },
+          "time": {
+            "type": "string",
+            "title": "Time"
+          },
+          "space": {
+            "type": "string",
+            "title": "Space"
+          },
+          "when_to_reach": {
+            "type": "string",
+            "title": "When To Reach"
+          },
+          "tells": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Tells"
+          },
+          "pseudocode": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Pseudocode"
+          },
+          "explanation": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Explanation",
+            "description": "A few short paragraphs: how it works"
+          },
+          "animation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Animation Id",
+            "description": "The step animation (the v1 reel, keyed by this slug); null if none"
+          }
+        },
+        "type": "object",
+        "required": [
+          "category",
+          "time",
+          "space",
+          "when_to_reach",
+          "tells",
+          "pseudocode",
+          "explanation",
+          "animation_id"
+        ],
+        "title": "PatternLibraryResponse"
+      },
       "PatternMatch": {
         "properties": {
           "description": {
@@ -4323,14 +5646,26 @@
           },
           "io_contract": {
             "type": "string",
-            "title": "Io Contract"
+            "title": "Io Contract",
+            "description": "`Input: …` and `Output: …` lines"
+          },
+          "io_input": {
+            "type": "string",
+            "title": "Io Input",
+            "description": "What comes in, in words"
+          },
+          "io_output": {
+            "type": "string",
+            "title": "Io Output",
+            "description": "What goes out, in words"
           },
           "examples": {
             "items": {
               "$ref": "#/components/schemas/PatternMatchExample"
             },
             "type": "array",
-            "title": "Examples"
+            "title": "Examples",
+            "description": "`note`: the example's explanation"
           },
           "difficulty": {
             "type": "string",
@@ -4342,20 +5677,23 @@
             "title": "Difficulty"
           },
           "time_weight": {
-            "type": "number",
-            "title": "Time Weight"
+            "type": "integer",
+            "title": "Time Weight",
+            "description": "Minutes it takes of the session clock (2 / 4 / 7)"
           }
         },
         "type": "object",
         "required": [
           "description",
           "io_contract",
+          "io_input",
+          "io_output",
           "examples",
           "difficulty",
           "time_weight"
         ],
         "title": "PatternMatch",
-        "description": "BE-09 `pattern_match` payload; always null until BE-09."
+        "description": "A `pattern_match` problem as the queue shows it (BE-09). Never the title or\nthe LeetCode link: both name the problem, and stage 2 reveals them."
       },
       "PatternMatchExample": {
         "properties": {
@@ -4569,11 +5907,13 @@
         "properties": {
           "concept_id": {
             "type": "string",
-            "title": "Concept Id"
+            "title": "Concept Id",
+            "description": "pattern_match: the track id (the pattern is the answer, withheld until stage 2); send it back as stage 1's concept_id"
           },
           "concept_title": {
             "type": "string",
-            "title": "Concept Title"
+            "title": "Concept Title",
+            "description": "pattern_match: \"Pattern match\""
           },
           "question_id": {
             "type": "string",
@@ -4742,6 +6082,45 @@
           "concepts"
         ],
         "title": "ReadResponse"
+      },
+      "RecentSourceResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "photos",
+              "pdf",
+              "file"
+            ],
+            "title": "Kind"
+          },
+          "page_count": {
+            "type": "integer",
+            "title": "Page Count"
+          },
+          "uploaded_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Uploaded At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "kind",
+          "page_count",
+          "uploaded_at"
+        ],
+        "title": "RecentSourceResponse"
       },
       "RereadRequest": {
         "properties": {
@@ -5068,8 +6447,32 @@
           "capped": {
             "type": "boolean",
             "title": "Capped",
-            "description": "The daily cap cut this queue short: more questions are due than what is left of today's cap",
+            "description": "The daily cap cut this queue short: more questions are due than what is left of today's cap. Never set on a DSA session, which is bounded by its time budget instead",
             "default": false
+          },
+          "time_budget_minutes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Time Budget Minutes",
+            "description": "DSA sessions: the session clock (null otherwise)"
+          },
+          "time_weight_total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Time Weight Total",
+            "description": "DSA sessions: minutes the drawn problems weigh (≤ the budget)"
           }
         },
         "type": "object",
@@ -5836,7 +7239,7 @@
               }
             ],
             "title": "Match",
-            "description": "pattern_match questions only (BE-09); null today"
+            "description": "pattern_match only: correct (the pattern), partial (an acceptable one), incorrect; null for free_text"
           },
           "question_title": {
             "anyOf": [
@@ -5848,7 +7251,7 @@
               }
             ],
             "title": "Question Title",
-            "description": "pattern_match questions only (BE-09); null today"
+            "description": "pattern_match only: the problem's title, revealed now; null for free_text"
           },
           "retired": {
             "type": "boolean",
@@ -5865,7 +7268,31 @@
               }
             ],
             "title": "Feedback",
-            "description": "The model's feedback, once graded"
+            "description": "The model's feedback, once graded (pattern_match: the coaching line, graded at once)"
+          },
+          "concept_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Concept Id",
+            "description": "The answered concept (for pattern_match, the pattern the queue item withheld)"
+          },
+          "leetcode_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Leetcode Url",
+            "description": "pattern_match only: the problem on leetcode.com"
           }
         },
         "type": "object",
@@ -5929,12 +7356,13 @@
               }
             ],
             "title": "Kind",
-            "description": "BE-09: DSA sessions; every track is `notes` today"
+            "description": "dsa_patterns: a DSA session drawn by the v1 rules from the caller's enrolled DSA tracks (BE-09); notes: due questions without the DSA tracks; omitted: every due question"
           },
           "time_budget_minutes": {
             "anyOf": [
               {
                 "type": "integer",
+                "maximum": 240.0,
                 "minimum": 1.0
               },
               {
@@ -5942,7 +7370,18 @@
               }
             ],
             "title": "Time Budget Minutes",
-            "description": "BE-09 DSA sessions; accepted and ignored today"
+            "description": "DSA sessions: the one continuous clock, in minutes (default 30); problems are drawn until their time weights fill it"
+          },
+          "difficulty_mix": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DifficultyMix"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "DSA sessions: difficulty weights (default 20 / 55 / 25)"
           }
         },
         "type": "object",
@@ -6020,12 +7459,23 @@
               }
             ],
             "title": "Parent"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "agent",
+              "user",
+              "emergent"
+            ],
+            "title": "Source",
+            "description": "Who added the item: the learner, an agent's refine, or auto-add from uploads (emergent)"
           }
         },
         "type": "object",
         "required": [
           "concept_key",
-          "label"
+          "label",
+          "source"
         ],
         "title": "SyllabusItemResponse"
       },
@@ -6254,6 +7704,101 @@
         ],
         "title": "Theme"
       },
+      "TimelineEntryResponse": {
+        "properties": {
+          "review_id": {
+            "type": "string",
+            "title": "Review Id"
+          },
+          "reviewed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Reviewed At"
+          },
+          "free_text": {
+            "type": "string",
+            "title": "Free Text",
+            "description": "The learner's own words (stage 1)"
+          },
+          "is_correct": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Correct"
+          },
+          "grade": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grade",
+            "description": "FSRS 1–4: provisional, then the model's"
+          },
+          "grading": {
+            "type": "string",
+            "enum": [
+              "provisional",
+              "graded"
+            ],
+            "title": "Grading"
+          },
+          "feedback": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Feedback",
+            "description": "The model's feedback, once graded"
+          },
+          "question_id": {
+            "type": "string",
+            "title": "Question Id"
+          },
+          "question_version": {
+            "type": "integer",
+            "title": "Question Version"
+          },
+          "interval_days": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Interval Days",
+            "description": "Days since the previous answer"
+          }
+        },
+        "type": "object",
+        "required": [
+          "review_id",
+          "reviewed_at",
+          "free_text",
+          "is_correct",
+          "grade",
+          "grading",
+          "feedback",
+          "question_id",
+          "question_version",
+          "interval_days"
+        ],
+        "title": "TimelineEntryResponse"
+      },
       "TouchedConcept": {
         "properties": {
           "concept_id": {
@@ -6276,6 +7821,288 @@
           "is_new"
         ],
         "title": "TouchedConcept"
+      },
+      "TrackDetailResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "origin": {
+            "type": "string",
+            "title": "Origin"
+          },
+          "syllabus": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Syllabus"
+          },
+          "agenda": {
+            "$ref": "#/components/schemas/AgendaResponse"
+          },
+          "user_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Id"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "notes",
+              "dsa_patterns"
+            ],
+            "title": "Kind"
+          },
+          "archived": {
+            "type": "boolean",
+            "title": "Archived"
+          },
+          "archived_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archived At"
+          },
+          "concept_count": {
+            "type": "integer",
+            "title": "Concept Count"
+          },
+          "due_count": {
+            "type": "integer",
+            "title": "Due Count",
+            "description": "Concepts in the review queue now (0 when archived)"
+          },
+          "source_count": {
+            "type": "integer",
+            "title": "Source Count",
+            "description": "Confirmed uploads on the track"
+          },
+          "mastered_count": {
+            "type": "integer",
+            "title": "Mastered Count"
+          },
+          "retention": {
+            "type": "number",
+            "title": "Retention",
+            "description": "Mean predicted recall of reviewed concepts, 0–1"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description",
+            "description": "Curated tracks: the catalog blurb; else null"
+          },
+          "enrolled": {
+            "type": "boolean",
+            "title": "Enrolled",
+            "description": "Curated tracks: the caller enrolled in it (always false on their own)"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/TrackItemResponse"
+            },
+            "type": "array",
+            "title": "Items",
+            "description": "Syllabus order: one row per concept on an item (an item with none is `not_covered`), then concepts outside the syllabus"
+          },
+          "due_today": {
+            "items": {
+              "$ref": "#/components/schemas/DueTodayResponse"
+            },
+            "type": "array",
+            "title": "Due Today",
+            "description": "Most overdue first"
+          },
+          "recent_sources": {
+            "items": {
+              "$ref": "#/components/schemas/RecentSourceResponse"
+            },
+            "type": "array",
+            "title": "Recent Sources",
+            "description": "Newest first, up to 5"
+          },
+          "off_plan_count": {
+            "type": "integer",
+            "title": "Off Plan Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "origin",
+          "syllabus",
+          "agenda",
+          "user_id",
+          "kind",
+          "archived",
+          "archived_at",
+          "concept_count",
+          "due_count",
+          "source_count",
+          "mastered_count",
+          "retention",
+          "description",
+          "enrolled",
+          "created_at",
+          "items",
+          "due_today",
+          "recent_sources",
+          "off_plan_count"
+        ],
+        "title": "TrackDetailResponse"
+      },
+      "TrackItemResponse": {
+        "properties": {
+          "concept_key": {
+            "type": "string",
+            "title": "Concept Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "parent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "agent",
+              "user",
+              "emergent"
+            ],
+            "title": "Source"
+          },
+          "off_plan": {
+            "type": "boolean",
+            "title": "Off Plan",
+            "description": "On a locked track, outside the syllabus: kept, not counted in coverage"
+          },
+          "concept_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Concept Id"
+          },
+          "concept_title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Concept Title"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "new",
+              "learning",
+              "due",
+              "mastered",
+              "not_covered"
+            ],
+            "title": "State"
+          },
+          "next_review_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Review At"
+          },
+          "question_count": {
+            "type": "integer",
+            "title": "Question Count"
+          },
+          "question_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Question Version"
+          },
+          "found_in": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FoundInResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "concept_key",
+          "label",
+          "parent",
+          "source",
+          "off_plan",
+          "concept_id",
+          "concept_title",
+          "state",
+          "next_review_at",
+          "question_count",
+          "question_version",
+          "found_in"
+        ],
+        "title": "TrackItemResponse"
       },
       "TrackProgress": {
         "properties": {
@@ -6361,6 +8188,75 @@
               }
             ],
             "title": "User Id"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "notes",
+              "dsa_patterns"
+            ],
+            "title": "Kind"
+          },
+          "archived": {
+            "type": "boolean",
+            "title": "Archived"
+          },
+          "archived_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archived At"
+          },
+          "concept_count": {
+            "type": "integer",
+            "title": "Concept Count"
+          },
+          "due_count": {
+            "type": "integer",
+            "title": "Due Count",
+            "description": "Concepts in the review queue now (0 when archived)"
+          },
+          "source_count": {
+            "type": "integer",
+            "title": "Source Count",
+            "description": "Confirmed uploads on the track"
+          },
+          "mastered_count": {
+            "type": "integer",
+            "title": "Mastered Count"
+          },
+          "retention": {
+            "type": "number",
+            "title": "Retention",
+            "description": "Mean predicted recall of reviewed concepts, 0–1"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description",
+            "description": "Curated tracks: the catalog blurb; else null"
+          },
+          "enrolled": {
+            "type": "boolean",
+            "title": "Enrolled",
+            "description": "Curated tracks: the caller enrolled in it (always false on their own)"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
           }
         },
         "type": "object",
@@ -6370,9 +8266,21 @@
           "origin",
           "syllabus",
           "agenda",
-          "user_id"
+          "user_id",
+          "kind",
+          "archived",
+          "archived_at",
+          "concept_count",
+          "due_count",
+          "source_count",
+          "mastered_count",
+          "retention",
+          "description",
+          "enrolled",
+          "created_at"
         ],
-        "title": "TrackResponse"
+        "title": "TrackResponse",
+        "description": "A track with its counts (the Tracks screen)."
       },
       "UnretireResponse": {
         "properties": {
@@ -6424,6 +8332,36 @@
           "questions"
         ],
         "title": "UpcomingDayResponse"
+      },
+      "UpdateTrackRequest": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "archived": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archived"
+          }
+        },
+        "type": "object",
+        "title": "UpdateTrackRequest"
       },
       "UploadPage": {
         "properties": {
@@ -6711,6 +8649,239 @@
           "retention"
         ],
         "title": "WeeklyRetention"
+      },
+      "jolt__api__routes__concepts__ConceptDetailResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "track_id": {
+            "type": "string",
+            "title": "Track Id"
+          },
+          "track_name": {
+            "type": "string",
+            "title": "Track Name"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "summary": {
+            "type": "string",
+            "title": "Summary",
+            "description": "What the model wrote about the concept"
+          },
+          "concept_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Concept Key"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "new",
+              "learning",
+              "due",
+              "mastered"
+            ],
+            "title": "State"
+          },
+          "retired": {
+            "type": "boolean",
+            "title": "Retired"
+          },
+          "off_plan": {
+            "type": "boolean",
+            "title": "Off Plan"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "superseded"
+            ],
+            "title": "Status",
+            "description": "superseded: a re-read replaced (successor_id) or removed it"
+          },
+          "successor_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Successor Id"
+          },
+          "found_in": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConceptFoundIn"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "timeline": {
+            "items": {
+              "$ref": "#/components/schemas/TimelineEntryResponse"
+            },
+            "type": "array",
+            "title": "Timeline",
+            "description": "Every answer, oldest first"
+          },
+          "current_question": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QuestionVersionResponse"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The version the next session serves"
+          },
+          "question_versions": {
+            "items": {
+              "$ref": "#/components/schemas/QuestionVersionResponse"
+            },
+            "type": "array",
+            "title": "Question Versions",
+            "description": "Oldest first (D8)"
+          },
+          "adaptive_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Adaptive Note",
+            "description": "Why the current version exists (its rewrite reason); null for v1"
+          },
+          "fsrs": {
+            "$ref": "#/components/schemas/FsrsResponse"
+          },
+          "pending_corrections": {
+            "items": {
+              "$ref": "#/components/schemas/CorrectionNoteResponse"
+            },
+            "type": "array",
+            "title": "Pending Corrections",
+            "description": "Notes waiting for the next sync"
+          },
+          "library": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PatternLibraryResponse"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A DSA pattern's library entry (BE-09); null otherwise"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "track_id",
+          "track_name",
+          "title",
+          "summary",
+          "concept_key",
+          "state",
+          "retired",
+          "off_plan",
+          "status",
+          "successor_id",
+          "found_in",
+          "timeline",
+          "current_question",
+          "question_versions",
+          "adaptive_note",
+          "fsrs",
+          "pending_corrections",
+          "created_at"
+        ],
+        "title": "ConceptDetailResponse"
+      },
+      "jolt__api__routes__progress__ConceptDetailResponse": {
+        "properties": {
+          "concept_id": {
+            "type": "string",
+            "title": "Concept Id"
+          },
+          "stability": {
+            "type": "number",
+            "title": "Stability"
+          },
+          "difficulty": {
+            "type": "number",
+            "title": "Difficulty"
+          },
+          "retrievability": {
+            "type": "number",
+            "title": "Retrievability",
+            "description": "Predicted recall now (0-1) from stability and the time since the last review; about 1 right after a review, 0 before the first"
+          },
+          "due_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Due At"
+          },
+          "reps": {
+            "type": "integer",
+            "title": "Reps"
+          },
+          "lapses": {
+            "type": "integer",
+            "title": "Lapses"
+          },
+          "timeline": {
+            "items": {
+              "$ref": "#/components/schemas/ConceptStatePoint"
+            },
+            "type": "array",
+            "title": "Timeline"
+          }
+        },
+        "type": "object",
+        "required": [
+          "concept_id",
+          "stability",
+          "difficulty",
+          "retrievability",
+          "due_at",
+          "reps",
+          "lapses",
+          "timeline"
+        ],
+        "title": "ConceptDetailResponse"
       }
     },
     "securitySchemes": {
