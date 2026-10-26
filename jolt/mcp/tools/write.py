@@ -4,9 +4,17 @@ create_questions, correct_concept (LLD §4, §7.2, §7.7).
 
 from __future__ import annotations
 
-from jolt.domain.models import AgendaSource, ConceptStatus, SyllabusItem
+from jolt.domain.models import (
+    AgendaSource,
+    ConceptStatus,
+    SyllabusItem,
+    SyncChange,
+    SyncChangeKind,
+    SyncRun,
+)
 from jolt.mcp.context import get_runtime, require_user
 from jolt.services.sync import ConceptInput, QuestionInput, SyncService
+from jolt.services.sync_runs import SyncRunService, add_change
 from jolt.services.tracks import AgendaLocked, TrackError, TrackService
 from jolt.services.uploads import UploadService
 
@@ -33,13 +41,50 @@ async def log_session(source_ids: list[str], concepts: list[dict]) -> dict:
         )
         for c in concepts
     ]
-    session, created = await SyncService(get_runtime()).log_session(
-        user.user_id, source_ids, inputs
+    rt = get_runtime()
+    runs = SyncRunService(rt)
+    run = await runs.current(user)
+    logged = await SyncService(rt).log_session(
+        user.user_id, source_ids, inputs, sync_run_id=run.id if run else None
     )
+    if run is not None:
+        # One source in the call: concepts without their own source_id came from it.
+        only_source = source_ids[0] if len(set(source_ids)) == 1 else None
+        changes = []
+        for c_in, concept in zip(inputs, logged.concepts):
+            source_id = concept.source_id or only_source
+            source = logged.sources.get(source_id) if source_id else None
+            key = c_in.effective_key()
+            in_agenda = bool(key) and (concept.track_id, key) in logged.added_to_agenda
+            changes.append(
+                SyncChange(
+                    kind=SyncChangeKind.CONCEPT_ADDED,
+                    concept_id=concept.id,
+                    concept_title=_concept_title(concept),
+                    track_id=concept.track_id,
+                    source_id=source.id if source else None,
+                    source_uploaded_at=source.created_at if source else None,
+                    added_to_syllabus=in_agenda,
+                )
+            )
+
+        def added(r: SyncRun) -> None:
+            for change in changes:
+                add_change(r, change)
+
+        await runs.update(run, added)
     return {
-        "session_id": session.id,
-        "concept_ids": [c.id for c in created],
+        "session_id": logged.sessions[0].id,
+        "session_ids": [s.id for s in logged.sessions],
+        "concept_ids": [c.id for c in logged.concepts],
     }
+
+
+def _concept_title(concept) -> str:
+    if concept.title:
+        return concept.title
+    text = " ".join(concept.text.split())
+    return text if len(text) <= 80 else text[:79].rstrip() + "…"
 
 
 async def store_extraction(
@@ -50,9 +95,16 @@ async def store_extraction(
     supersede: bool = False,
 ) -> dict:
     user = await require_user()
-    extraction = await SyncService(get_runtime()).store_extraction(
+    rt = get_runtime()
+    extraction = await SyncService(rt).store_extraction(
         user.user_id, source_id, markdown, confidence, model_id, supersede=supersede
     )
+
+    def processed(r: SyncRun) -> None:
+        if source_id not in r.processed_source_ids:
+            r.processed_source_ids.append(source_id)
+
+    await SyncRunService(rt).record(user, processed)
     return {"extraction_id": extraction.id, "status": extraction.status.value}
 
 
@@ -67,14 +119,21 @@ async def create_questions(concept_id: str, questions: list[dict]) -> dict:
         )
         for q in questions
     ]
-    created = await SyncService(get_runtime()).create_questions(user.user_id, concept_id, inputs)
+    rt = get_runtime()
+    created = await SyncService(rt).create_questions(user.user_id, concept_id, inputs)
+    if created:
+
+        def written(r: SyncRun) -> None:
+            r.questions_written += len(created)
+
+        await SyncRunService(rt).record(user, written)
     return {"question_ids": [q.id for q in created]}
 
 
 async def correct_concept(track_id: str, concept_id: str, text: str) -> dict:
     """Apply an agent-supplied correction to a concept's text in place."""
     # Auth gate only: concepts are track-partitioned, not user-scoped (see docs/GAPS.md).
-    await require_user()
+    user = await require_user()
     rt = get_runtime()
     concept = await rt.repos.concepts.get_concept(concept_id, track_id)
     if concept is None:
@@ -82,6 +141,21 @@ async def correct_concept(track_id: str, concept_id: str, text: str) -> dict:
     concept.text = text
     concept.status = ConceptStatus.ACTIVE
     updated = await rt.repos.concepts.replace(concept, etag=concept.etag)
+    if updated is not None:
+        source = (
+            await rt.repos.sources.get_source(updated.source_id, user.user_id)
+            if updated.source_id
+            else None
+        )
+        change = SyncChange(
+            kind=SyncChangeKind.CONCEPT_UPDATED,
+            concept_id=concept_id,
+            concept_title=_concept_title(updated),
+            track_id=track_id,
+            source_id=source.id if source else None,
+            source_uploaded_at=source.created_at if source else None,
+        )
+        await SyncRunService(rt).record(user, lambda r: add_change(r, change))
     return {"concept_id": concept_id, "updated": updated is not None}
 
 

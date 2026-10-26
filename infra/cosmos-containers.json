@@ -92,6 +92,11 @@
       "name": "tokens",
       "partitionKey": "/user_id",
       "compositeIndexes": []
+    },
+    {
+      "name": "sync_runs",
+      "partitionKey": "/user_id",
+      "compositeIndexes": []
     }
   ]
 }

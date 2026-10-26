@@ -2,7 +2,7 @@
   "server": "jolt",
   "transport": "sse",
   "endpoint": "/mcp/sse",
-  "auth": "Authorization: Bearer <MCP token> (jolt_live_..., from POST /v1/mcp-tokens). App tokens are refused: opening /mcp/sse answers 401, tool calls fail.",
+  "auth": "Authorization: Bearer <MCP token> (jolt_live_..., from POST /v1/mcp-tokens), or ?token=<MCP token> on /mcp/sse for URL-only connectors (MCP_QUERY_TOKEN_ENABLED). App tokens are refused: opening /mcp/sse answers 401, tool calls fail. See docs/CONNECT.md.",
   "errors": "Tools whose output_schema is a union with {error} return that object for recoverable problems. Any other failure (missing/invalid token, unknown source, invalid grade) is raised and arrives as an MCP tool error (isError: true) with the message as text.",
   "tools": [
     {
@@ -481,7 +481,7 @@
     },
     {
       "name": "jolt_log_session",
-      "description": "Record a study session and create its concepts, each with a fresh, immediately-due FSRS card so it enters the review rotation at once. This is how extracted material becomes reviewable. Call it once per processed source (or batch of sources) after jolt_store_extraction, before jolt_create_questions.\nArguments:\n  source_ids (list[str], required) — the source(s) this session came from; use [] if none. Records provenance for the timeline.\n  concepts (list[dict], required) — one dict per concept to create. Each dict:\n      text (str, required) — the concept statement to be learned; the atom of recall, one idea per concept. Keep it self-contained.\n      track_id (str, required) — the track this concept belongs to (from jolt_get_tracks). Different concepts in one call may target different tracks.\n      title (str, optional) — a short label for the concept.\n      syllabus_ref (str, optional) — legacy alias for `concept_key`; used as the concept_key when `concept_key` is omitted. Drives coverage.\n      concept_key (str, optional) — the agenda key this concept covers. If it is not yet in the track's agenda syllabus it is AUTO-ADDED (as a leaf, or under `parent`), so the agenda grows to fit what's learned. Auto-add is keyed on concept_key membership, so it is idempotent and skipped on a locked agenda. Falls back to `syllabus_ref` if omitted.\n      parent (str, optional) — an existing agenda concept_key to nest this concept under when it is auto-added; ignored if it does not resolve.\n      source_id (str, optional) — the specific source this concept came from.\nReturns: { session_id, concept_ids }. `concept_ids` are returned in the SAME order as the input `concepts`, so map each returned id back to its concept and pass it as `concept_id` to jolt_create_questions. Creating a concept without questions leaves it due but unanswerable, so always follow with jolt_create_questions. Not idempotent — calling twice creates duplicate concepts; check jolt_get_recent_concepts first if retrying.",
+      "description": "Record a study session and create its concepts, each with a fresh, immediately-due FSRS card so it enters the review rotation at once. This is how extracted material becomes reviewable. Call it once per processed source (or batch of sources) after jolt_store_extraction, before jolt_create_questions.\nArguments:\n  source_ids (list[str], required) — the source(s) this session came from; use [] if none. Records provenance for the timeline.\n  concepts (list[dict], required) — one dict per concept to create. Each dict:\n      text (str, required) — the concept statement to be learned; the atom of recall, one idea per concept. Keep it self-contained.\n      track_id (str, required) — the track this concept belongs to (from jolt_get_tracks). Different concepts in one call may target different tracks.\n      title (str, optional) — a short label for the concept.\n      syllabus_ref (str, optional) — legacy alias for `concept_key`; used as the concept_key when `concept_key` is omitted. Drives coverage.\n      concept_key (str, optional) — the agenda key this concept covers. If it is not yet in the track's agenda syllabus it is AUTO-ADDED (as a leaf, or under `parent`), so the agenda grows to fit what's learned. Auto-add is keyed on concept_key membership, so it is idempotent and skipped on a locked agenda. Falls back to `syllabus_ref` if omitted.\n      parent (str, optional) — an existing agenda concept_key to nest this concept under when it is auto-added; ignored if it does not resolve.\n      source_id (str, optional) — the specific source this concept came from.\nSessions follow upload days: each concept is filed in the session of its source's upload date (a concept without source_id goes with the first listed source), so concepts from sources uploaded on different days produce one session per day.\nReturns: { session_id, session_ids, concept_ids }. `session_ids` has one id per upload date, oldest first; `session_id` is the first of them. `concept_ids` are returned in the SAME order as the input `concepts`, so map each returned id back to its concept and pass it as `concept_id` to jolt_create_questions. Creating a concept without questions leaves it due but unanswerable, so always follow with jolt_create_questions. Not idempotent — calling twice creates duplicate concepts; check jolt_get_recent_concepts first if retrying.",
       "input_schema": {
         "properties": {
           "source_ids": {
@@ -513,6 +513,13 @@
             "title": "Session Id",
             "type": "string"
           },
+          "session_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Session Ids",
+            "type": "array"
+          },
           "concept_ids": {
             "items": {
               "type": "string"
@@ -523,6 +530,7 @@
         },
         "required": [
           "session_id",
+          "session_ids",
           "concept_ids"
         ],
         "title": "LogSessionOut",
@@ -752,7 +760,7 @@
     },
     {
       "name": "jolt_create_questions",
-      "description": "Attach review questions to a concept. Every concept needs at least one, or it is due but cannot be reviewed. Call after jolt_log_session, using a `concept_id` it returned.\nArguments:\n  concept_id (str, required) — the concept these questions test.\n  questions (list[dict], required) — one dict per question. Each dict:\n      stem (str, required) — the question prompt shown to the learner.\n      options (list[str], required) — the multiple-choice options for stage 2. Provide at least two; include the correct option among them.\n      correct_index (int, required) — 0-based index into `options` of the correct choice. Must be a valid index into `options`.\n      expected_answer (str, required) — the canonical free-text answer. This is the reference the learner's stage-1 free text is graded against (see jolt_get_pending_gradings), so make it a complete, gradeable answer, not just the option label.\nReturns: { question_ids } in input order. Not idempotent — re-calling adds more questions to the concept.",
+      "description": "Attach review questions to a concept. Every concept needs at least one, or it is due but cannot be reviewed. Call after jolt_log_session, using a `concept_id` it returned.\nArguments:\n  concept_id (str, required) — the concept these questions test.\n  questions (list[dict], required) — one dict per question. Each dict:\n      stem (str, required) — the question prompt shown to the learner.\n      options (list[str], required) — the multiple-choice options for stage 2. Write exactly 4 (the app is designed for 4): one correct, three plausible distractors of similar length.\n      correct_index (int, required) — 0-based index into `options` of the correct choice. Must be a valid index into `options`.\n      expected_answer (str, required) — the canonical free-text answer. This is the reference the learner's stage-1 free text is graded against (see jolt_get_pending_gradings), so make it a complete, gradeable answer, not just the option label.\nReturns: { question_ids } in input order. Not idempotent — re-calling adds more questions to the concept.",
       "input_schema": {
         "properties": {
           "concept_id": {
@@ -866,21 +874,289 @@
     },
     {
       "name": "jolt_sync",
-      "description": "Start of every unattended sync. Returns the plan — how much work is waiting — so you know whether to proceed and with what batch sizes. Does not claim or change anything.\nArguments:\n  limit (int, optional, default 50) — cap on how far to count each queue.\nReturns: { unprocessed_sources, pending_gradings } (counts).\nTypical choreography when counts are non-zero:\n  1. jolt_get_unprocessed_sources { limit } — claim a batch.\n  2. for each claimed source: jolt_get_source_content -> (extract on your own compute) -> jolt_store_extraction -> jolt_log_session -> jolt_create_questions.\n  3. jolt_get_pending_gradings { limit } — claim reviews to grade.\n  4. grade each against its expected_answer using the rubric, then jolt_submit_gradings { gradings }.\nEverything you do runs on the user's own subscription; Jolt only writes rows.",
+      "description": "Start AND end of every sync. Returns the plan: what is waiting, in which tracks, and the ordered steps (tool, purpose, limit) to work through it. Calling it opens a sync run for your connection (or continues the open one); the other tools you call add to that run, and the app shows it as last night's sync. Call it again after the steps: when the plan says done=true the run is closed and you should stop. It claims nothing and changes none of the learner's data.\nArguments:\n  limit (int, optional, default 50) — cap on how far to count each queue.\n  errors (list[str], optional) — problems since your previous jolt_sync that you could not resolve (e.g. 'source <id>: pages 3-4 unreadable'). They are recorded on the sync run so the learner sees them. Omit when there are none.\nReturns: { run_id, done, unprocessed_sources, pending_gradings, rereads, claimed_sources, in_flight_elsewhere, unassigned_sources, upload_dates, tracks, reread_sources, steps, limits, next }:\n  done — true when nothing is left for you: stop.\n  unprocessed_sources / pending_gradings / rereads — counts waiting now (rereads: sources the learner asked to read again).\n  claimed_sources — sources YOU claimed in this run and have not stored yet (finish them before claiming more): [{ source_id, filename, track_id, uploaded_at, lease_expires_at }].\n  in_flight_elsewhere — sources another client holds; not yours, ignore.\n  unassigned_sources — sources with no track: choose the best track from `tracks` for their concepts.\n  upload_dates — the YYYY-MM-DD upload days of the waiting sources. A backlog spanning several days becomes one session per day (the server splits jolt_log_session by each concept's source upload date).\n  tracks — every track involved: [{ track_id, name, agenda_status, unprocessed_sources, pending_gradings, rereads, guidance }]; follow `guidance` for the agenda (e.g. refine a draft, never add keys to a locked one).\n  reread_sources — [{ source_id, filename, track_id, preferred_model, requested_at }].\n  steps — ordered [{ step, tool, purpose, limit, repeat }]; `limit` is the most items per call (null = one item), `repeat` says how often (per batch, per claimed source, per concept, ...). Empty when done.\n  limits — { sources_per_claim, gradings_per_claim, gradings_per_submit, concepts_per_session, questions_per_concept_min, questions_per_concept_max, options_per_question, lease_seconds }.\n  next — a one-line summary of what to do now.\nEverything you do runs on the user's own subscription; Jolt only writes rows.",
       "input_schema": {
         "properties": {
           "limit": {
             "default": 50,
             "title": "Limit",
             "type": "integer"
+          },
+          "errors": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Errors"
           }
         },
         "title": "syncArguments",
         "type": "object"
       },
       "output_schema": {
+        "$defs": {
+          "PlanClaimedSourceOut": {
+            "additionalProperties": false,
+            "properties": {
+              "source_id": {
+                "title": "Source Id",
+                "type": "string"
+              },
+              "filename": {
+                "title": "Filename",
+                "type": "string"
+              },
+              "track_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Track Id"
+              },
+              "uploaded_at": {
+                "title": "Uploaded At",
+                "type": "string"
+              },
+              "lease_expires_at": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Lease Expires At"
+              }
+            },
+            "required": [
+              "source_id",
+              "filename",
+              "track_id",
+              "uploaded_at",
+              "lease_expires_at"
+            ],
+            "title": "PlanClaimedSourceOut",
+            "type": "object"
+          },
+          "PlanLimitsOut": {
+            "additionalProperties": false,
+            "properties": {
+              "sources_per_claim": {
+                "title": "Sources Per Claim",
+                "type": "integer"
+              },
+              "gradings_per_claim": {
+                "title": "Gradings Per Claim",
+                "type": "integer"
+              },
+              "gradings_per_submit": {
+                "title": "Gradings Per Submit",
+                "type": "integer"
+              },
+              "concepts_per_session": {
+                "title": "Concepts Per Session",
+                "type": "integer"
+              },
+              "questions_per_concept_min": {
+                "title": "Questions Per Concept Min",
+                "type": "integer"
+              },
+              "questions_per_concept_max": {
+                "title": "Questions Per Concept Max",
+                "type": "integer"
+              },
+              "options_per_question": {
+                "title": "Options Per Question",
+                "type": "integer"
+              },
+              "lease_seconds": {
+                "title": "Lease Seconds",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "sources_per_claim",
+              "gradings_per_claim",
+              "gradings_per_submit",
+              "concepts_per_session",
+              "questions_per_concept_min",
+              "questions_per_concept_max",
+              "options_per_question",
+              "lease_seconds"
+            ],
+            "title": "PlanLimitsOut",
+            "type": "object"
+          },
+          "PlanRereadOut": {
+            "additionalProperties": false,
+            "properties": {
+              "source_id": {
+                "title": "Source Id",
+                "type": "string"
+              },
+              "filename": {
+                "title": "Filename",
+                "type": "string"
+              },
+              "track_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Track Id"
+              },
+              "preferred_model": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Preferred Model"
+              },
+              "requested_at": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Requested At"
+              }
+            },
+            "required": [
+              "source_id",
+              "filename",
+              "track_id",
+              "preferred_model",
+              "requested_at"
+            ],
+            "title": "PlanRereadOut",
+            "type": "object"
+          },
+          "PlanStepOut": {
+            "additionalProperties": false,
+            "properties": {
+              "step": {
+                "title": "Step",
+                "type": "integer"
+              },
+              "tool": {
+                "title": "Tool",
+                "type": "string"
+              },
+              "purpose": {
+                "title": "Purpose",
+                "type": "string"
+              },
+              "limit": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Limit"
+              },
+              "repeat": {
+                "title": "Repeat",
+                "type": "string"
+              }
+            },
+            "required": [
+              "step",
+              "tool",
+              "purpose",
+              "limit",
+              "repeat"
+            ],
+            "title": "PlanStepOut",
+            "type": "object"
+          },
+          "PlanTrackOut": {
+            "additionalProperties": false,
+            "properties": {
+              "track_id": {
+                "title": "Track Id",
+                "type": "string"
+              },
+              "name": {
+                "title": "Name",
+                "type": "string"
+              },
+              "agenda_status": {
+                "enum": [
+                  "none",
+                  "draft",
+                  "refined",
+                  "locked"
+                ],
+                "title": "Agenda Status",
+                "type": "string"
+              },
+              "unprocessed_sources": {
+                "title": "Unprocessed Sources",
+                "type": "integer"
+              },
+              "pending_gradings": {
+                "title": "Pending Gradings",
+                "type": "integer"
+              },
+              "rereads": {
+                "title": "Rereads",
+                "type": "integer"
+              },
+              "guidance": {
+                "title": "Guidance",
+                "type": "string"
+              }
+            },
+            "required": [
+              "track_id",
+              "name",
+              "agenda_status",
+              "unprocessed_sources",
+              "pending_gradings",
+              "rereads",
+              "guidance"
+            ],
+            "title": "PlanTrackOut",
+            "type": "object"
+          }
+        },
         "additionalProperties": false,
         "properties": {
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "done": {
+            "title": "Done",
+            "type": "boolean"
+          },
           "unprocessed_sources": {
             "title": "Unprocessed Sources",
             "type": "integer"
@@ -888,11 +1164,77 @@
           "pending_gradings": {
             "title": "Pending Gradings",
             "type": "integer"
+          },
+          "rereads": {
+            "title": "Rereads",
+            "type": "integer"
+          },
+          "claimed_sources": {
+            "items": {
+              "$ref": "#/$defs/PlanClaimedSourceOut"
+            },
+            "title": "Claimed Sources",
+            "type": "array"
+          },
+          "in_flight_elsewhere": {
+            "title": "In Flight Elsewhere",
+            "type": "integer"
+          },
+          "unassigned_sources": {
+            "title": "Unassigned Sources",
+            "type": "integer"
+          },
+          "upload_dates": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Upload Dates",
+            "type": "array"
+          },
+          "tracks": {
+            "items": {
+              "$ref": "#/$defs/PlanTrackOut"
+            },
+            "title": "Tracks",
+            "type": "array"
+          },
+          "reread_sources": {
+            "items": {
+              "$ref": "#/$defs/PlanRereadOut"
+            },
+            "title": "Reread Sources",
+            "type": "array"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/$defs/PlanStepOut"
+            },
+            "title": "Steps",
+            "type": "array"
+          },
+          "limits": {
+            "$ref": "#/$defs/PlanLimitsOut"
+          },
+          "next": {
+            "title": "Next",
+            "type": "string"
           }
         },
         "required": [
+          "run_id",
+          "done",
           "unprocessed_sources",
-          "pending_gradings"
+          "pending_gradings",
+          "rereads",
+          "claimed_sources",
+          "in_flight_elsewhere",
+          "unassigned_sources",
+          "upload_dates",
+          "tracks",
+          "reread_sources",
+          "steps",
+          "limits",
+          "next"
         ],
         "title": "SyncOut",
         "type": "object"
@@ -900,7 +1242,7 @@
     },
     {
       "name": "jolt_get_unprocessed_sources",
-      "description": "Claim a batch of unprocessed sources for extraction, marking each 'in_flight' under a time-limited lease (default ~15 min) so a concurrent sync will not pick up the same rows. You must finish each claimed source by calling jolt_store_extraction, which clears its lease and marks it processed.\nArguments:\n  limit (int, optional, default 10) — max sources to claim this call. Match it to how many you can extract before the lease expires.\nReturns: { sources: [ { source_id, filename, content_type, lease_expires_at } ] }. The list may be shorter than `limit` (fewer available, or rows lost to a concurrent claimer). If you crash or the lease expires before you store the extraction, the row becomes claimable again automatically on a later call — no cleanup needed. Next step for each: jolt_get_source_content.",
+      "description": "Claim a batch of unprocessed sources for extraction, marking each 'in_flight' under a time-limited lease (default ~15 min) so a concurrent sync will not pick up the same rows. You must finish each claimed source by calling jolt_store_extraction, which clears its lease and marks it processed.\nArguments:\n  limit (int, optional, default 10) — max sources to claim this call. Match it to how many you can extract before the lease expires.\nReturns: { sources: [ { source_id, filename, content_type, lease_expires_at, uploaded_at } ] }. The list may be shorter than `limit` (fewer available, or rows lost to a concurrent claimer). If you crash or the lease expires before you store the extraction, the row becomes claimable again automatically on a later call — no cleanup needed. Next step for each: jolt_get_source_content.",
       "input_schema": {
         "properties": {
           "limit": {
@@ -939,13 +1281,18 @@
                   }
                 ],
                 "title": "Lease Expires At"
+              },
+              "uploaded_at": {
+                "title": "Uploaded At",
+                "type": "string"
               }
             },
             "required": [
               "source_id",
               "filename",
               "content_type",
-              "lease_expires_at"
+              "lease_expires_at",
+              "uploaded_at"
             ],
             "title": "UnprocessedSourceOut",
             "type": "object"

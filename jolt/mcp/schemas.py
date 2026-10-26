@@ -83,7 +83,8 @@ class RequestUploadUrlOut(_Out):
 
 
 class LogSessionOut(_Out):
-    session_id: str
+    session_id: str  # the first of session_ids
+    session_ids: list[str]  # one per upload date, oldest first (decision D6)
     concept_ids: list[str]
 
 
@@ -102,9 +103,66 @@ class CorrectConceptOut(_Out):
 
 
 # -- sync ------------------------------------------------------------------
-class SyncOut(_Out):
+class PlanClaimedSourceOut(_Out):
+    source_id: str
+    filename: str
+    track_id: Optional[str]
+    uploaded_at: str  # ISO-8601 UTC
+    lease_expires_at: Optional[str]  # ISO-8601 UTC
+
+
+class PlanTrackOut(_Out):
+    track_id: str
+    name: str
+    agenda_status: Literal["none", "draft", "refined", "locked"]
     unprocessed_sources: int
     pending_gradings: int
+    rereads: int
+    guidance: str
+
+
+class PlanRereadOut(_Out):
+    source_id: str
+    filename: str
+    track_id: Optional[str]
+    preferred_model: Optional[str]
+    requested_at: Optional[str]  # ISO-8601 UTC
+
+
+class PlanStepOut(_Out):
+    step: int
+    tool: str
+    purpose: str
+    limit: Optional[int]
+    repeat: str
+
+
+class PlanLimitsOut(_Out):
+    sources_per_claim: int
+    gradings_per_claim: int
+    gradings_per_submit: int
+    concepts_per_session: int
+    questions_per_concept_min: int
+    questions_per_concept_max: int
+    options_per_question: int
+    lease_seconds: int
+
+
+class SyncOut(_Out):
+    run_id: str
+    done: bool
+    unprocessed_sources: int
+    pending_gradings: int
+    rereads: int
+    claimed_sources: list[PlanClaimedSourceOut]
+    in_flight_elsewhere: int
+    unassigned_sources: int
+    upload_dates: list[str]  # YYYY-MM-DD (UTC)
+    tracks: list[PlanTrackOut]
+    reread_sources: list[PlanRereadOut]
+    steps: list[PlanStepOut]
+    limits: PlanLimitsOut
+    next: str
 
 
 class UnprocessedSourceOut(_Out):
@@ -112,6 +170,7 @@ class UnprocessedSourceOut(_Out):
     filename: str
     content_type: str
     lease_expires_at: Optional[str]  # ISO-8601 UTC
+    uploaded_at: str  # ISO-8601 UTC; its date decides the session (D6)
 
 
 class GetUnprocessedSourcesOut(_Out):

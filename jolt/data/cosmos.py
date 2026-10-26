@@ -30,6 +30,7 @@ CONTAINER_PARTITION_KEYS: dict[str, str] = {
     "answer_feedback": "/review_id",
     "api_keys": "/user_id",
     "tokens": "/user_id",  # app + MCP tokens (BE-03); resolved by the indexed `lookup`
+    "sync_runs": "/user_id",  # nightly sync runs (BE-04)
 }
 
 # Composite / range indexes worth declaring for the hot queries (LLD §6 query

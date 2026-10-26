@@ -219,6 +219,12 @@ class Session(DocBase):
     user_id: str
     source_ids: list[str] = Field(default_factory=list)
     concept_ids: list[str] = Field(default_factory=list)
+    # Decision D6 (BE-04): one session per upload date, so the timeline stays per
+    # day when a sync works through a multi-day backlog. YYYY-MM-DD (UTC) of the
+    # session's sources; None when the session has no source.
+    upload_date: Optional[str] = None
+    # The sync run that logged it, when it was logged inside one (BE-04).
+    sync_run_id: Optional[str] = None
 
 
 class Concept(DocBase):
@@ -226,6 +232,8 @@ class Concept(DocBase):
     source_id: Optional[str] = None
     extraction_id: Optional[str] = None
     text: str
+    # Short label from the agent (jolt_log_session `title`), when it gave one.
+    title: Optional[str] = None
     status: ConceptStatus = ConceptStatus.ACTIVE
     successor_id: Optional[str] = None  # set when superseded
     syllabus_ref: Optional[str] = None  # coverage linkage
@@ -298,3 +306,60 @@ class ApiKeyRef(DocBase):
     last4: str
     added_at: datetime = Field(default_factory=_now)
     last_validated_at: Optional[datetime] = None
+
+
+# --------------------------------------------------------------------------- #
+# Nightly sync runs (BE-04)
+# --------------------------------------------------------------------------- #
+class SyncRunStatus(str, Enum):
+    RUNNING = "running"  # opened by jolt_sync, still taking tool calls
+    FINISHED = "finished"  # closed by a jolt_sync that found nothing left
+    INCOMPLETE = "incomplete"  # the client went quiet before a final jolt_sync
+
+
+class SyncChangeKind(str, Enum):
+    CONCEPT_ADDED = "concept_added"  # jolt_log_session created it
+    CONCEPT_UPDATED = "concept_updated"  # jolt_correct_concept rewrote its text
+    QUESTION_REWRITTEN = "question_rewritten"  # reserved for question versions (BE-06)
+
+
+class SyncChange(BaseModel):
+    """One thing a sync run changed, for Today's "New since last sync"."""
+
+    kind: SyncChangeKind
+    concept_id: str
+    concept_title: str
+    track_id: str
+    source_id: Optional[str] = None
+    source_uploaded_at: Optional[datetime] = None
+    added_to_syllabus: bool = False
+
+
+class SyncRun(DocBase):
+    """One nightly sync: opened by `jolt_sync`, fed by the tool calls made with the
+    same MCP token, closed by the `jolt_sync` that finds nothing left (or by going
+    idle). Partitioned by user (BE-04)."""
+
+    user_id: str
+    token_id: str
+    client_label: str
+    status: SyncRunStatus = SyncRunStatus.RUNNING
+    started_at: datetime = Field(default_factory=_now)
+    finished_at: Optional[datetime] = None
+    last_activity_at: datetime = Field(default_factory=_now)
+    # Sources this run claimed; a claimed, unfinished one keeps the run open.
+    claimed_source_ids: list[str] = Field(default_factory=list)
+    processed_source_ids: list[str] = Field(default_factory=list)
+    questions_written: int = 0
+    gradings_submitted: int = 0
+    errors: list[str] = Field(default_factory=list)
+    changes: list[SyncChange] = Field(default_factory=list)
+    plan_calls: int = 0
+
+    @property
+    def sources_processed(self) -> int:
+        return len(self.processed_source_ids)
+
+    @property
+    def did_work(self) -> bool:
+        return bool(self.processed_source_ids or self.questions_written or self.gradings_submitted)

@@ -4,19 +4,37 @@ Built on the official MCP SDK's FastMCP with HTTP+SSE transport so networked age
 and scheduled tasks can reach it. Tools are thin wrappers over the service layer;
 each resolves the connection's bearer token to a user before any data access.
 
-Auth rides the connection as an `Authorization` header. A small ASGI middleware
-copies that header into a contextvar per request (LLD §5, §11), which the tools
-read via `require_user()`.
+Auth rides the connection: an `Authorization: Bearer` header, or (for clients
+whose connector settings take only a URL) `?token=` on the event-stream URL
+(BE-04, docs/CONNECT.md). A small ASGI middleware copies the token into a
+contextvar per request (LLD §5, §11), which the tools read via `require_user()`.
+Tool calls run inside the event-stream request (the SSE transport drives the
+server from it), so the token that opened the stream is the one every tool call
+of that connection sees.
+
+Every tool is wrapped so an exception it raises is also recorded on the caller's
+open sync run (BE-04) before it reaches the agent as an MCP tool error.
 """
 
 from __future__ import annotations
 
+import functools
+import inspect
 import json
+import logging
+import re
+from urllib.parse import parse_qs
 
 from mcp.server.fastmcp import FastMCP
 
 from jolt.auth.context import bearer_from_header
-from jolt.mcp.context import MCPAuthError, authenticate_mcp, set_current_token
+from jolt.mcp.context import (
+    MCPAuthError,
+    authenticate_mcp,
+    get_runtime,
+    require_user,
+    set_current_token,
+)
 from jolt.mcp.descriptions.tools import TOOL_DESCRIPTIONS
 from jolt.mcp.tools import extract as t_extract
 from jolt.mcp.tools import read as t_read
@@ -45,20 +63,94 @@ _TOOLS = [
 ]
 
 
+logger = logging.getLogger("jolt.mcp")
+
+
+def _recording_errors(name: str, func):
+    """Wrap a tool so an exception it raises is noted on the caller's sync run.
+
+    The advertised signature is the tool's own (annotations resolved here, since
+    FastMCP would evaluate string annotations against this module's globals).
+    """
+
+    @functools.wraps(func)
+    async def wrapper(*args, **kwargs):
+        try:
+            return await func(*args, **kwargs)
+        except MCPAuthError:
+            raise  # no user to record it for
+        except Exception as exc:
+            await _record_error(name, exc)
+            raise
+
+    wrapper.__signature__ = inspect.signature(func, eval_str=True)
+    return wrapper
+
+
+async def _record_error(name: str, exc: Exception) -> None:
+    from jolt.services.sync_runs import SyncRunService, add_error
+
+    try:
+        user = await require_user()
+        message = f"{name}: {exc}"
+        await SyncRunService(get_runtime()).record(user, lambda r: add_error(r, message))
+    except Exception:  # never mask the tool's own error
+        logger.debug("could not record %s error on the sync run", name, exc_info=True)
+
+
 def build_mcp() -> FastMCP:
     mcp = FastMCP("jolt")
     for name, func in _TOOLS:
-        mcp.add_tool(func, name=name, description=TOOL_DESCRIPTIONS.get(name))
+        mcp.add_tool(
+            _recording_errors(name, func), name=name, description=TOOL_DESCRIPTIONS.get(name)
+        )
     return mcp
 
 
-class _TokenCaptureMiddleware:
-    """ASGI middleware: lift the Authorization header into the MCP contextvar.
+def _query_token(scope) -> str | None:
+    values = parse_qs(scope.get("query_string", b"").decode()).get("token")
+    return values[0].strip() if values and values[0].strip() else None
 
-    Opening the event stream (`GET /sse`) also checks the token up front, so a
-    missing, revoked or wrong-kind token (an app token) fails the connection with
-    a 401 instead of failing every tool call later. Tools still re-check on each
-    call, so revoking a token cuts off an open connection at its next call.
+
+# `token=<value>` in a logged request line or URL.
+_TOKEN_IN_URL = re.compile(r"([?&]token=)[^&\s\"']+")
+
+
+def redact_token(text: str) -> str:
+    return _TOKEN_IN_URL.sub(r"\1[redacted]", text)
+
+
+class RedactTokenFilter(logging.Filter):
+    """Strip `?token=` values from access-log lines (uvicorn.access)."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.args:
+            record.args = tuple(
+                redact_token(a) if isinstance(a, str) else a
+                for a in (record.args if isinstance(record.args, tuple) else (record.args,))
+            )
+        if isinstance(record.msg, str):
+            record.msg = redact_token(record.msg)
+        return True
+
+
+def install_log_redaction() -> None:
+    """Idempotently add the token filter to Uvicorn's access logger."""
+    access = logging.getLogger("uvicorn.access")
+    if not any(isinstance(f, RedactTokenFilter) for f in access.filters):
+        access.addFilter(RedactTokenFilter())
+
+
+class _TokenCaptureMiddleware:
+    """ASGI middleware: lift the connection's token into the MCP contextvar.
+
+    The token is the `Authorization` header (Bearer, or a bare token), else, on
+    the event stream only and when `MCP_QUERY_TOKEN_ENABLED`, the `token` query
+    parameter. Opening the event stream (`GET /sse`) also checks the token up
+    front, so a missing, revoked or wrong-kind token (an app token) fails the
+    connection with a 401 instead of failing every tool call later. Tools still
+    re-check on each call, so revoking a token cuts off an open connection at its
+    next call.
     """
 
     def __init__(self, app) -> None:
@@ -68,14 +160,26 @@ class _TokenCaptureMiddleware:
         if scope["type"] in ("http", "websocket"):
             headers = {k.decode().lower(): v.decode() for k, v in scope.get("headers", [])}
             token = bearer_from_header(headers.get("authorization"))
+            is_stream = scope["type"] == "http" and scope.get("path", "").rstrip("/").endswith(
+                "/sse"
+            )
+            if token is None and is_stream and _query_tokens_allowed():
+                token = _query_token(scope)
             set_current_token(token)
-            if scope["type"] == "http" and scope.get("path", "").rstrip("/").endswith("/sse"):
+            if is_stream:
                 try:
                     await authenticate_mcp(token)
                 except MCPAuthError as exc:
                     await _unauthorized(send, str(exc))
                     return
         await self._app(scope, receive, send)
+
+
+def _query_tokens_allowed() -> bool:
+    try:
+        return get_runtime().settings.mcp_query_token_enabled
+    except RuntimeError:  # pragma: no cover - runtime not initialised yet
+        return False
 
 
 async def _unauthorized(send, message: str) -> None:

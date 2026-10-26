@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Jolt API",
-    "version": "0.3.0"
+    "version": "0.4.0"
   },
   "paths": {
     "/v1/auth/google": {
@@ -1388,6 +1388,172 @@
           }
         ]
       }
+    },
+    "/v1/sync/status": {
+      "get": {
+        "tags": [
+          "sync"
+        ],
+        "summary": "Get Sync Status",
+        "operationId": "get_sync_status",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "tz",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The user's IANA time zone (e.g. Europe/London) for next_expected_at; default UTC",
+              "title": "Tz"
+            },
+            "description": "The user's IANA time zone (e.g. Europe/London) for next_expected_at; default UTC"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncStatusResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/sync/runs": {
+      "get": {
+        "tags": [
+          "sync"
+        ],
+        "summary": "List Sync Runs",
+        "operationId": "list_sync_runs",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 10,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SyncRunResponse"
+                  },
+                  "title": "Response List Sync Runs"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/sync/prompt": {
+      "get": {
+        "tags": [
+          "sync"
+        ],
+        "summary": "Get Sync Prompt",
+        "operationId": "get_sync_prompt",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncPromptResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -2266,6 +2432,222 @@
           "label"
         ],
         "title": "SyllabusItemResponse"
+      },
+      "SyncChangeResponse": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "concept_added",
+              "concept_updated",
+              "question_rewritten"
+            ],
+            "title": "Kind"
+          },
+          "concept_id": {
+            "type": "string",
+            "title": "Concept Id"
+          },
+          "concept_title": {
+            "type": "string",
+            "title": "Concept Title"
+          },
+          "track_id": {
+            "type": "string",
+            "title": "Track Id"
+          },
+          "source_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Id",
+            "description": "The upload the concept came from"
+          },
+          "source_uploaded_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Uploaded At",
+            "description": "When that upload was made, for \"Found in your 12 Sep notes\""
+          },
+          "added_to_syllabus": {
+            "type": "boolean",
+            "title": "Added To Syllabus",
+            "description": "The concept was also added to the track's agenda"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "concept_id",
+          "concept_title",
+          "track_id",
+          "source_id",
+          "source_uploaded_at",
+          "added_to_syllabus"
+        ],
+        "title": "SyncChangeResponse"
+      },
+      "SyncPromptResponse": {
+        "properties": {
+          "prompt": {
+            "type": "string",
+            "title": "Prompt",
+            "description": "Markdown to paste into a Claude or Codex scheduled task"
+          },
+          "schedule_time": {
+            "type": "string",
+            "title": "Schedule Time",
+            "description": "Recommended local time, \"HH:MM\" (decision D5)"
+          },
+          "version": {
+            "type": "string",
+            "title": "Version"
+          }
+        },
+        "type": "object",
+        "required": [
+          "prompt",
+          "schedule_time",
+          "version"
+        ],
+        "title": "SyncPromptResponse"
+      },
+      "SyncRunResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Started At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At",
+            "description": "null while the run is still going"
+          },
+          "client_label": {
+            "type": "string",
+            "title": "Client Label",
+            "description": "The MCP token's label, e.g. \"Claude Desktop\""
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "running",
+              "finished",
+              "incomplete"
+            ],
+            "title": "Status",
+            "description": "finished: a final jolt_sync found nothing left; incomplete: the client went quiet first"
+          },
+          "sources_processed": {
+            "type": "integer",
+            "title": "Sources Processed"
+          },
+          "questions_written": {
+            "type": "integer",
+            "title": "Questions Written"
+          },
+          "gradings_submitted": {
+            "type": "integer",
+            "title": "Gradings Submitted"
+          },
+          "errors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Errors"
+          },
+          "changes": {
+            "items": {
+              "$ref": "#/components/schemas/SyncChangeResponse"
+            },
+            "type": "array",
+            "title": "Changes",
+            "description": "Concepts this run added or changed, in order"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "started_at",
+          "finished_at",
+          "client_label",
+          "status",
+          "sources_processed",
+          "questions_written",
+          "gradings_submitted",
+          "errors",
+          "changes"
+        ],
+        "title": "SyncRunResponse"
+      },
+      "SyncStatusResponse": {
+        "properties": {
+          "last_run": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SyncRunResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "next_expected_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Expected At",
+            "description": "The next scheduled time (SYNC_SCHEDULE_TIME in `tz`), in UTC"
+          },
+          "health": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "late",
+              "never"
+            ],
+            "title": "Health"
+          }
+        },
+        "type": "object",
+        "required": [
+          "last_run",
+          "next_expected_at",
+          "health"
+        ],
+        "title": "SyncStatusResponse"
       },
       "TrackResponse": {
         "properties": {

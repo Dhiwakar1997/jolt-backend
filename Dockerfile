@@ -11,6 +11,8 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY jolt ./jolt
+# Served by GET /v1/sync/prompt (jolt/services/sync_prompt.py reads it from here).
+COPY docs/NIGHTLY_SYNC_PROMPT.md ./docs/NIGHTLY_SYNC_PROMPT.md
 
 # Build identifier reported by GET /health (CI passes the git SHA).
 ARG APP_VERSION=dev

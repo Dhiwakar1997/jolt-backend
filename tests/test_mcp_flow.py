@@ -93,7 +93,8 @@ async def test_nightly_loop_across_mcp_and_rest(api, runtime):
     assert (await api.post(f"/v1/uploads/{ticket['source_id']}/confirm", json={})).is_success
 
     # Agent: plan, claim, read, extract.
-    assert await call("jolt_sync") == {"unprocessed_sources": 1, "pending_gradings": 0}
+    plan = await call("jolt_sync")
+    assert (plan["unprocessed_sources"], plan["pending_gradings"], plan["done"]) == (1, 0, False)
     claimed = await call("jolt_get_unprocessed_sources")
     assert [s["source_id"] for s in claimed["sources"]] == [ticket["source_id"]]
     assert claimed["sources"][0]["lease_expires_at"] is not None
