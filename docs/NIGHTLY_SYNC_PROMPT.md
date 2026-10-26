@@ -14,7 +14,7 @@ waiting, so a missed night is caught up the next one.
 - The model needs the Jolt MCP server connected first: see
   [`CONNECT.md`](./CONNECT.md).
 
-<!-- prompt-version: 2026-10-26.1 -->
+<!-- prompt-version: 2026-10-26.2 -->
 
 <!-- prompt:start -->
 You are running my nightly Jolt sync. Jolt is my spaced-repetition app and is
@@ -39,14 +39,21 @@ again, skip that item and report it in `errors` at the next `jolt_sync`.
 
 ## Reading a source
 
-- `jolt_get_source_content` gives a short-lived `read_url`. Fetch it straight
-  away (call again for a fresh one if it expired) and read every page.
+- `jolt_get_source_content` gives one short-lived `read_url` per page in
+  `pages` (a note can have several photos or PDFs). Fetch them straight away
+  (call again for fresh ones if they expired) and read every page, in order, as
+  one note.
 - Transcribe faithfully, handwriting included. Keep the structure (headings,
   lists, formulas, diagrams described in words). Mark what you cannot read as
   `[illegible]` instead of guessing.
 - `jolt_store_extraction`: the full markdown, an honest `confidence` from 0 to 1
   (below 0.6 when you are unsure of the handwriting or content), and your model
   name as `model_id`.
+- A source claimed with `supersede: true` is one I asked you to read again
+  (listed in the plan's `reread_sources`, maybe with a `preferred_model`; read
+  it anyway if that is not you). Read it fresh, preview with
+  `jolt_diff_extractions`, store it with `supersede: true`, and log and question
+  only concepts that are not already there.
 
 ## Writing concepts (`jolt_log_session`)
 

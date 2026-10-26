@@ -123,6 +123,7 @@ class PlanTrackOut(_Out):
 
 class PlanRereadOut(_Out):
     source_id: str
+    title: str
     filename: str
     track_id: Optional[str]
     preferred_model: Optional[str]
@@ -171,6 +172,11 @@ class UnprocessedSourceOut(_Out):
     content_type: str
     lease_expires_at: Optional[str]  # ISO-8601 UTC
     uploaded_at: str  # ISO-8601 UTC; its date decides the session (D6)
+    title: str
+    track_id: Optional[str]
+    page_count: int
+    supersede: bool
+    preferred_model: Optional[str]
 
 
 class GetUnprocessedSourcesOut(_Out):
@@ -198,12 +204,21 @@ class SubmitGradingsOut(_Out):
 class ListedSourceOut(_Out):
     source_id: str
     filename: str
-    processing_status: Literal["unprocessed", "in_flight", "processed"]
+    processing_status: Literal["unprocessed", "in_flight", "processed", "failed"]
     active_extraction_id: Optional[str]
+    page_count: int
+    reread_requested: bool
 
 
 class ListSourcesOut(_Out):
     sources: list[ListedSourceOut]
+
+
+class SourcePageOut(_Out):
+    index: int
+    filename: str
+    content_type: str
+    read_url: str
 
 
 class GetSourceContentOut(_Out):
@@ -211,6 +226,8 @@ class GetSourceContentOut(_Out):
     filename: str
     content_type: str
     read_url: str
+    page_count: int
+    pages: list[SourcePageOut]
 
 
 class ExtractionDeltaOut(_Out):
@@ -230,7 +247,7 @@ TOOL_OUTPUTS: dict[str, Any] = {
     "jolt_get_recent_concepts": GetRecentConceptsOut,
     "jolt_get_coverage": GetCoverageOut,
     "jolt_get_agenda": Union[AgendaOut, ToolError],
-    "jolt_request_upload_url": RequestUploadUrlOut,
+    "jolt_request_upload_url": Union[RequestUploadUrlOut, ToolError],
     "jolt_log_session": LogSessionOut,
     "jolt_set_agenda": Union[AgendaOut, ToolError],
     "jolt_store_extraction": StoreExtractionOut,

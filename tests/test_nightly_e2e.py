@@ -175,7 +175,9 @@ async def test_upload_on_day_d_sync_overnight_see_it_on_d_plus_1(app_client, run
         runtime.blob.put(source.blob_path, data, "image/jpeg")
         assert (await api.post(f"/v1/uploads/{source.id}/confirm", json={})).is_success
         source = await runtime.repos.sources.get_source(source.id, mcp_user.user_id)
-        source.created_at = datetime.combine(day_d, time(20 + i, 30), tzinfo=UTC)
+        source.created_at = source.confirmed_at = datetime.combine(
+            day_d, time(20 + i, 30), tzinfo=UTC
+        )
         await runtime.repos.sources.replace(source)
         sources.append(source)
     s1 = (

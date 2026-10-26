@@ -23,8 +23,11 @@ async def list_sources() -> dict:
                 "filename": s.filename,
                 "processing_status": s.processing_status.value,
                 "active_extraction_id": s.active_extraction_id,
+                "page_count": len(s.page_list()),
+                "reread_requested": s.reread_requested_at is not None,
             }
             for s in sources
+            if s.confirmed_at is not None
         ]
     }
 
@@ -37,6 +40,16 @@ async def get_source_content(source_id: str) -> dict:
         "filename": content.filename,
         "content_type": content.content_type,
         "read_url": content.read_url,
+        "page_count": len(content.pages),
+        "pages": [
+            {
+                "index": p.index,
+                "filename": p.filename,
+                "content_type": p.content_type,
+                "read_url": p.read_url,
+            }
+            for p in content.pages
+        ],
     }
 
 

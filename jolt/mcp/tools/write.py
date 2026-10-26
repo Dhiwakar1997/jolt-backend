@@ -16,14 +16,19 @@ from jolt.mcp.context import get_runtime, require_user
 from jolt.services.sync import ConceptInput, QuestionInput, SyncService
 from jolt.services.sync_runs import SyncRunService, add_change
 from jolt.services.tracks import AgendaLocked, TrackError, TrackService
-from jolt.services.uploads import UploadService
+from jolt.services.uploads import PageSpec, UploadInvalid, UploadService
 
 
 async def request_upload_url(filename: str, content_type: str, sha256: str) -> dict:
     user = await require_user()
-    ticket = await UploadService(get_runtime()).request_upload(
-        user.user_id, filename, content_type, sha256
-    )
+    try:
+        ticket = await UploadService(get_runtime()).request_upload(
+            user.user_id,
+            [PageSpec(filename=filename, content_type=content_type, sha256=sha256)],
+            loc_prefix=(),
+        )
+    except UploadInvalid as exc:
+        return {"error": exc.msg}
     return {"source_id": ticket.source_id, "upload_url": ticket.upload_url}
 
 
@@ -63,7 +68,7 @@ async def log_session(source_ids: list[str], concepts: list[dict]) -> dict:
                     concept_title=_concept_title(concept),
                     track_id=concept.track_id,
                     source_id=source.id if source else None,
-                    source_uploaded_at=source.created_at if source else None,
+                    source_uploaded_at=source.uploaded_at if source else None,
                     added_to_syllabus=in_agenda,
                 )
             )
@@ -96,8 +101,15 @@ async def store_extraction(
 ) -> dict:
     user = await require_user()
     rt = get_runtime()
+    # The connected client's name for "Past reads" (the MCP token's label).
     extraction = await SyncService(rt).store_extraction(
-        user.user_id, source_id, markdown, confidence, model_id, supersede=supersede
+        user.user_id,
+        source_id,
+        markdown,
+        confidence,
+        model_id,
+        supersede=supersede,
+        client_label=user.token_label,
     )
 
     def processed(r: SyncRun) -> None:
@@ -153,7 +165,7 @@ async def correct_concept(track_id: str, concept_id: str, text: str) -> dict:
             concept_title=_concept_title(updated),
             track_id=track_id,
             source_id=source.id if source else None,
-            source_uploaded_at=source.created_at if source else None,
+            source_uploaded_at=source.uploaded_at if source else None,
         )
         await SyncRunService(rt).record(user, lambda r: add_change(r, change))
     return {"concept_id": concept_id, "updated": updated is not None}

@@ -57,6 +57,7 @@ def plan_dict(plan: SyncPlan) -> dict:
         "reread_sources": [
             {
                 "source_id": r.source_id,
+                "title": r.title,
                 "filename": r.filename,
                 "track_id": r.track_id,
                 "preferred_model": r.preferred_model,
@@ -135,7 +136,13 @@ async def get_unprocessed_sources(limit: int = 10) -> dict:
                 "filename": s.filename,
                 "content_type": s.content_type,
                 "lease_expires_at": s.lease_expires_at.isoformat() if s.lease_expires_at else None,
-                "uploaded_at": s.created_at.isoformat(),
+                "uploaded_at": s.uploaded_at.isoformat(),
+                "title": s.title or s.filename,
+                "track_id": s.track_id,
+                "page_count": len(s.page_list()),
+                # Read again (BE-05): store this read with supersede=true.
+                "supersede": s.active_extraction_id is not None,
+                "preferred_model": s.reread_preferred_model,
             }
             for s in sources
         ]

@@ -435,7 +435,7 @@
     },
     {
       "name": "jolt_request_upload_url",
-      "description": "Mint a short-TTL SAS URL for uploading one source file straight to Blob storage. Jolt compute never receives the bytes — the holder of the URL PUTs them directly. Call this only when you have a file to store; extraction reads existing sources via jolt_get_source_content instead.\nArguments:\n  filename (str, required) — original filename; becomes part of the blob path.\n  content_type (str, required) — MIME type, e.g. 'application/pdf', 'image/png'.\n  sha256 (str, required) — hex SHA-256 of the exact bytes to be uploaded; it is checked at confirm time, so it must match the file uploaded.\nReturns: { source_id, upload_url }. The upload_url expires (minutes) and is scoped to exactly one blob path — PUT the bytes to it, then the app confirms the upload over REST (POST /v1/uploads/{source_id}/confirm). The source stays 'unprocessed' until a sync claims it. Re-calling mints a new source, not a retry of an old one.",
+      "description": "Mint a short-TTL SAS URL for uploading one source file straight to Blob storage. Jolt compute never receives the bytes — the holder of the URL PUTs them directly. Call this only when you have a file to store; extraction reads existing sources via jolt_get_source_content instead.\nArguments:\n  filename (str, required) — original filename; becomes part of the blob path.\n  content_type (str, required) — MIME type; one of 'image/jpeg', 'image/png', 'image/heic', 'image/webp', 'application/pdf'.\n  sha256 (str, required) — hex SHA-256 (64 hex characters) of the exact bytes to be uploaded; confirm hashes the stored bytes and rejects a mismatch.\nReturns: { source_id, upload_url }, or { error } for an unsupported content_type or a malformed sha256. The upload_url expires (minutes) and is scoped to exactly one blob path — PUT the bytes to it (at most 25 MiB by default), then the app confirms the upload over REST (POST /v1/uploads/{source_id}/confirm); an unconfirmed source is never offered to a sync. The source stays 'unprocessed' until a sync claims it. Re-calling mints a new source, not a retry of an old one.",
       "input_schema": {
         "properties": {
           "filename": {
@@ -460,28 +460,54 @@
         "type": "object"
       },
       "output_schema": {
-        "additionalProperties": false,
-        "properties": {
-          "source_id": {
-            "title": "Source Id",
-            "type": "string"
+        "$defs": {
+          "RequestUploadUrlOut": {
+            "additionalProperties": false,
+            "properties": {
+              "source_id": {
+                "title": "Source Id",
+                "type": "string"
+              },
+              "upload_url": {
+                "title": "Upload Url",
+                "type": "string"
+              }
+            },
+            "required": [
+              "source_id",
+              "upload_url"
+            ],
+            "title": "RequestUploadUrlOut",
+            "type": "object"
           },
-          "upload_url": {
-            "title": "Upload Url",
-            "type": "string"
+          "ToolError": {
+            "additionalProperties": false,
+            "properties": {
+              "error": {
+                "title": "Error",
+                "type": "string"
+              }
+            },
+            "required": [
+              "error"
+            ],
+            "title": "ToolError",
+            "type": "object"
           }
         },
-        "required": [
-          "source_id",
-          "upload_url"
-        ],
-        "title": "RequestUploadUrlOut",
-        "type": "object"
+        "anyOf": [
+          {
+            "$ref": "#/$defs/RequestUploadUrlOut"
+          },
+          {
+            "$ref": "#/$defs/ToolError"
+          }
+        ]
       }
     },
     {
       "name": "jolt_log_session",
-      "description": "Record a study session and create its concepts, each with a fresh, immediately-due FSRS card so it enters the review rotation at once. This is how extracted material becomes reviewable. Call it once per processed source (or batch of sources) after jolt_store_extraction, before jolt_create_questions.\nArguments:\n  source_ids (list[str], required) — the source(s) this session came from; use [] if none. Records provenance for the timeline.\n  concepts (list[dict], required) — one dict per concept to create. Each dict:\n      text (str, required) — the concept statement to be learned; the atom of recall, one idea per concept. Keep it self-contained.\n      track_id (str, required) — the track this concept belongs to (from jolt_get_tracks). Different concepts in one call may target different tracks.\n      title (str, optional) — a short label for the concept.\n      syllabus_ref (str, optional) — legacy alias for `concept_key`; used as the concept_key when `concept_key` is omitted. Drives coverage.\n      concept_key (str, optional) — the agenda key this concept covers. If it is not yet in the track's agenda syllabus it is AUTO-ADDED (as a leaf, or under `parent`), so the agenda grows to fit what's learned. Auto-add is keyed on concept_key membership, so it is idempotent and skipped on a locked agenda. Falls back to `syllabus_ref` if omitted.\n      parent (str, optional) — an existing agenda concept_key to nest this concept under when it is auto-added; ignored if it does not resolve.\n      source_id (str, optional) — the specific source this concept came from.\nSessions follow upload days: each concept is filed in the session of its source's upload date (a concept without source_id goes with the first listed source), so concepts from sources uploaded on different days produce one session per day.\nReturns: { session_id, session_ids, concept_ids }. `session_ids` has one id per upload date, oldest first; `session_id` is the first of them. `concept_ids` are returned in the SAME order as the input `concepts`, so map each returned id back to its concept and pass it as `concept_id` to jolt_create_questions. Creating a concept without questions leaves it due but unanswerable, so always follow with jolt_create_questions. Not idempotent — calling twice creates duplicate concepts; check jolt_get_recent_concepts first if retrying.",
+      "description": "Record a study session and create its concepts, each with a fresh, immediately-due FSRS card so it enters the review rotation at once. This is how extracted material becomes reviewable. Call it once per processed source (or batch of sources) after jolt_store_extraction, before jolt_create_questions.\nArguments:\n  source_ids (list[str], required) — the source(s) this session came from; use [] if none. Records provenance for the timeline.\n  concepts (list[dict], required) — one dict per concept to create. Each dict:\n      text (str, required) — the concept statement to be learned; the atom of recall, one idea per concept. Keep it self-contained.\n      track_id (str, required) — the track this concept belongs to (from jolt_get_tracks). Different concepts in one call may target different tracks.\n      title (str, optional) — a short label for the concept.\n      syllabus_ref (str, optional) — legacy alias for `concept_key`; used as the concept_key when `concept_key` is omitted. Drives coverage.\n      concept_key (str, optional) — the agenda key this concept covers. If it is not yet in the track's agenda syllabus it is AUTO-ADDED (as a leaf, or under `parent`), so the agenda grows to fit what's learned. Auto-add is keyed on concept_key membership, so it is idempotent and skipped on a locked agenda. Falls back to `syllabus_ref` if omitted.\n      parent (str, optional) — an existing agenda concept_key to nest this concept under when it is auto-added; ignored if it does not resolve.\n      source_id (str, optional) — the specific source this concept came from. Give it: the concept is then credited to that source's active extraction (the app's 'Found N concepts' on the source's past reads), and it decides the concept's session.\nSessions follow upload days: each concept is filed in the session of its source's upload date (a concept without source_id goes with the first listed source), so concepts from sources uploaded on different days produce one session per day.\nReturns: { session_id, session_ids, concept_ids }. `session_ids` has one id per upload date, oldest first; `session_id` is the first of them. `concept_ids` are returned in the SAME order as the input `concepts`, so map each returned id back to its concept and pass it as `concept_id` to jolt_create_questions. Creating a concept without questions leaves it due but unanswerable, so always follow with jolt_create_questions. Not idempotent — calling twice creates duplicate concepts; check jolt_get_recent_concepts first if retrying.",
       "input_schema": {
         "properties": {
           "source_ids": {
@@ -693,7 +719,7 @@
     },
     {
       "name": "jolt_store_extraction",
-      "description": "Persist the markdown you extracted from a source and mark the source processed, clearing its sync lease. Call this once per source you claimed via jolt_get_unprocessed_sources, after reading it with jolt_get_source_content and running your own extraction (extraction runs on your compute, not Jolt's).\nArguments:\n  source_id (str, required) — the claimed source this extraction is for.\n  markdown (str, required) — the full extracted text as markdown.\n  confidence (float, optional, default 0.0) — your 0..1 confidence in the extraction's fidelity. Report it honestly: it feeds the silent-misextraction canary metric, so a low value flags a page for human review rather than failing silently.\n  model_id (str, optional) — identifier of the model you extracted with, for provenance.\n  supersede (bool, optional, default false) — false for a source's FIRST extraction. Set true ONLY to replace a source's existing active extraction (a re-extraction). A supersede triggers concept reconciliation and is the most dangerous write path — ALWAYS preview it with jolt_diff_extractions first, and see that tool for what each change class does.\nReturns: { extraction_id, status } where status is 'active'. Safe to retry: a dropped connection can be re-driven; the source ends processed with the new extraction active.",
+      "description": "Persist the markdown you extracted from a source and mark the source processed, clearing its sync lease. Call this once per source you claimed via jolt_get_unprocessed_sources, after reading it with jolt_get_source_content and running your own extraction (extraction runs on your compute, not Jolt's).\nArguments:\n  source_id (str, required) — the claimed source this extraction is for.\n  markdown (str, required) — the full extracted text as markdown.\n  confidence (float, optional, default 0.0) — your 0..1 confidence in the extraction's fidelity. Report it honestly: it feeds the silent-misextraction canary metric, so a low value flags a page for human review rather than failing silently.\n  model_id (str, optional) — identifier of the model you extracted with, for provenance.\n  supersede (bool, optional, default false) — false for a source's FIRST extraction. Set true to replace a source's existing active extraction (a re-extraction) — jolt_get_unprocessed_sources marks those with `supersede: true` (the user asked to read the source again). A supersede triggers concept reconciliation and is the most dangerous write path — ALWAYS preview it with jolt_diff_extractions first, and see that tool for what each change class does.\nA source has one active extraction: whichever flag you pass, the new one becomes active and the previous one is kept as a superseded past read. Then log the concepts you found with jolt_log_session, giving each its `source_id`, so they are credited to this read.\nReturns: { extraction_id, status } where status is 'active'. Safe to retry: a dropped connection can be re-driven; the source ends processed with the new extraction active (a retry is recorded as one more past read).",
       "input_schema": {
         "properties": {
           "source_id": {
@@ -760,7 +786,7 @@
     },
     {
       "name": "jolt_create_questions",
-      "description": "Attach review questions to a concept. Every concept needs at least one, or it is due but cannot be reviewed. Call after jolt_log_session, using a `concept_id` it returned.\nArguments:\n  concept_id (str, required) — the concept these questions test.\n  questions (list[dict], required) — one dict per question. Each dict:\n      stem (str, required) — the question prompt shown to the learner.\n      options (list[str], required) — the multiple-choice options for stage 2. Write exactly 4 (the app is designed for 4): one correct, three plausible distractors of similar length.\n      correct_index (int, required) — 0-based index into `options` of the correct choice. Must be a valid index into `options`.\n      expected_answer (str, required) — the canonical free-text answer. This is the reference the learner's stage-1 free text is graded against (see jolt_get_pending_gradings), so make it a complete, gradeable answer, not just the option label.\nReturns: { question_ids } in input order. Not idempotent — re-calling adds more questions to the concept.",
+      "description": "Attach review questions to a concept. Every concept needs at least one, or it is due but cannot be reviewed. Call after jolt_log_session, using a `concept_id` it returned.\nArguments:\n  concept_id (str, required) — the concept these questions test.\n  questions (list[dict], required) — one dict per question. Each dict:\n      stem (str, required) — the question prompt shown to the learner.\n      options (list[str], required) — the multiple-choice options for stage 2. Write exactly 4 (the app is designed for 4): one correct, three plausible distractors of similar length.\n      correct_index (int, required) — 0-based index into `options` of the correct choice. Must be a valid index into `options`.\n      expected_answer (str, required) — the canonical free-text answer. This is the reference the learner's stage-1 free text is graded against (see jolt_get_pending_gradings), so make it a complete, gradeable answer, not just the option label.\nReturns: { question_ids } in input order. The questions are counted on the read the concept was logged from (the app's 'wrote N questions') and on the current sync run. Not idempotent — re-calling adds more questions to the concept.",
       "input_schema": {
         "properties": {
           "concept_id": {
@@ -874,7 +900,7 @@
     },
     {
       "name": "jolt_sync",
-      "description": "Start AND end of every sync. Returns the plan: what is waiting, in which tracks, and the ordered steps (tool, purpose, limit) to work through it. Calling it opens a sync run for your connection (or continues the open one); the other tools you call add to that run, and the app shows it as last night's sync. Call it again after the steps: when the plan says done=true the run is closed and you should stop. It claims nothing and changes none of the learner's data.\nArguments:\n  limit (int, optional, default 50) — cap on how far to count each queue.\n  errors (list[str], optional) — problems since your previous jolt_sync that you could not resolve (e.g. 'source <id>: pages 3-4 unreadable'). They are recorded on the sync run so the learner sees them. Omit when there are none.\nReturns: { run_id, done, unprocessed_sources, pending_gradings, rereads, claimed_sources, in_flight_elsewhere, unassigned_sources, upload_dates, tracks, reread_sources, steps, limits, next }:\n  done — true when nothing is left for you: stop.\n  unprocessed_sources / pending_gradings / rereads — counts waiting now (rereads: sources the learner asked to read again).\n  claimed_sources — sources YOU claimed in this run and have not stored yet (finish them before claiming more): [{ source_id, filename, track_id, uploaded_at, lease_expires_at }].\n  in_flight_elsewhere — sources another client holds; not yours, ignore.\n  unassigned_sources — sources with no track: choose the best track from `tracks` for their concepts.\n  upload_dates — the YYYY-MM-DD upload days of the waiting sources. A backlog spanning several days becomes one session per day (the server splits jolt_log_session by each concept's source upload date).\n  tracks — every track involved: [{ track_id, name, agenda_status, unprocessed_sources, pending_gradings, rereads, guidance }]; follow `guidance` for the agenda (e.g. refine a draft, never add keys to a locked one).\n  reread_sources — [{ source_id, filename, track_id, preferred_model, requested_at }].\n  steps — ordered [{ step, tool, purpose, limit, repeat }]; `limit` is the most items per call (null = one item), `repeat` says how often (per batch, per claimed source, per concept, ...). Empty when done.\n  limits — { sources_per_claim, gradings_per_claim, gradings_per_submit, concepts_per_session, questions_per_concept_min, questions_per_concept_max, options_per_question, lease_seconds }.\n  next — a one-line summary of what to do now.\nEverything you do runs on the user's own subscription; Jolt only writes rows.",
+      "description": "Start AND end of every sync. Returns the plan: what is waiting, in which tracks, and the ordered steps (tool, purpose, limit) to work through it. Calling it opens a sync run for your connection (or continues the open one); the other tools you call add to that run, and the app shows it as last night's sync. Call it again after the steps: when the plan says done=true the run is closed and you should stop. It claims nothing and changes none of the learner's data.\nArguments:\n  limit (int, optional, default 50) — cap on how far to count each queue.\n  errors (list[str], optional) — problems since your previous jolt_sync that you could not resolve (e.g. 'source <id>: pages 3-4 unreadable'). They are recorded on the sync run so the learner sees them. Omit when there are none.\nReturns: { run_id, done, unprocessed_sources, pending_gradings, rereads, claimed_sources, in_flight_elsewhere, unassigned_sources, upload_dates, tracks, reread_sources, steps, limits, next }:\n  done — true when nothing is left for you: stop.\n  unprocessed_sources / pending_gradings / rereads — counts waiting now (rereads: how many of the waiting sources the learner asked to read again; they are already included in unprocessed_sources or claimed_sources).\n  claimed_sources — sources YOU claimed in this run and have not stored yet (finish them before claiming more): [{ source_id, filename, track_id, uploaded_at, lease_expires_at }].\n  in_flight_elsewhere — sources another client holds; not yours, ignore.\n  unassigned_sources — sources with no track: choose the best track from `tracks` for their concepts.\n  upload_dates — the YYYY-MM-DD upload days of the waiting sources. A backlog spanning several days becomes one session per day (the server splits jolt_log_session by each concept's source upload date).\n  tracks — every track involved: [{ track_id, name, agenda_status, unprocessed_sources, pending_gradings, rereads, guidance }]; follow `guidance` for the agenda (e.g. refine a draft, never add keys to a locked one).\n  reread_sources — the read-again requests you can take: [{ source_id, title, filename, track_id, preferred_model, requested_at }]. jolt_get_unprocessed_sources hands each out with supersede=true; store its new read with supersede=true. `preferred_model` is the model family the learner picked (e.g. 'claude', 'codex') or null for any; it is a preference, not a lock: read it anyway if no other client will.\n  steps — ordered [{ step, tool, purpose, limit, repeat }]; `limit` is the most items per call (null = one item), `repeat` says how often (per batch, per claimed source, per concept, ...). Empty when done.\n  limits — { sources_per_claim, gradings_per_claim, gradings_per_submit, concepts_per_session, questions_per_concept_min, questions_per_concept_max, options_per_question, lease_seconds }.\n  next — a one-line summary of what to do now.\nEverything you do runs on the user's own subscription; Jolt only writes rows.",
       "input_schema": {
         "properties": {
           "limit": {
@@ -1007,6 +1033,10 @@
                 "title": "Source Id",
                 "type": "string"
               },
+              "title": {
+                "title": "Title",
+                "type": "string"
+              },
               "filename": {
                 "title": "Filename",
                 "type": "string"
@@ -1047,6 +1077,7 @@
             },
             "required": [
               "source_id",
+              "title",
               "filename",
               "track_id",
               "preferred_model",
@@ -1242,7 +1273,7 @@
     },
     {
       "name": "jolt_get_unprocessed_sources",
-      "description": "Claim a batch of unprocessed sources for extraction, marking each 'in_flight' under a time-limited lease (default ~15 min) so a concurrent sync will not pick up the same rows. You must finish each claimed source by calling jolt_store_extraction, which clears its lease and marks it processed.\nArguments:\n  limit (int, optional, default 10) — max sources to claim this call. Match it to how many you can extract before the lease expires.\nReturns: { sources: [ { source_id, filename, content_type, lease_expires_at, uploaded_at } ] }. The list may be shorter than `limit` (fewer available, or rows lost to a concurrent claimer). If you crash or the lease expires before you store the extraction, the row becomes claimable again automatically on a later call — no cleanup needed. Next step for each: jolt_get_source_content.",
+      "description": "Claim a batch of unprocessed sources for extraction, marking each 'in_flight' under a time-limited lease (default ~15 min) so a concurrent sync will not pick up the same rows. You must finish each claimed source by calling jolt_store_extraction, which clears its lease and marks it processed.\nArguments:\n  limit (int, optional, default 10) — max sources to claim this call. Match it to how many you can extract before the lease expires.\nReturns: { sources: [ { source_id, filename, content_type, lease_expires_at, uploaded_at, title, track_id, page_count, supersede, preferred_model } ] }. `uploaded_at`'s date decides which session the source's concepts go to (one session per upload date). `page_count` is how many files the upload has (a multi-page note is one source; read every page). `track_id` is the track the user added it to (null if none: pick one from jolt_sync's `tracks`). `supersede` true means the source already has an active extraction and the user asked to read it again: store with supersede=true. `preferred_model` is the user's model preference for that re-read, or null. The list may be shorter than `limit` (fewer available, or rows lost to a concurrent claimer). If you crash or the lease expires before you store the extraction, the row becomes claimable again automatically on a later call — no cleanup needed — but after 3 lapsed leases (SOURCE_MAX_ATTEMPTS) the source is marked 'failed' and no longer offered. Next step for each: jolt_get_source_content.",
       "input_schema": {
         "properties": {
           "limit": {
@@ -1285,6 +1316,40 @@
               "uploaded_at": {
                 "title": "Uploaded At",
                 "type": "string"
+              },
+              "title": {
+                "title": "Title",
+                "type": "string"
+              },
+              "track_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Track Id"
+              },
+              "page_count": {
+                "title": "Page Count",
+                "type": "integer"
+              },
+              "supersede": {
+                "title": "Supersede",
+                "type": "boolean"
+              },
+              "preferred_model": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Preferred Model"
               }
             },
             "required": [
@@ -1292,7 +1357,12 @@
               "filename",
               "content_type",
               "lease_expires_at",
-              "uploaded_at"
+              "uploaded_at",
+              "title",
+              "track_id",
+              "page_count",
+              "supersede",
+              "preferred_model"
             ],
             "title": "UnprocessedSourceOut",
             "type": "object"
@@ -1424,7 +1494,7 @@
     },
     {
       "name": "jolt_list_sources",
-      "description": "List all of the caller's sources with their processing status — an overview for deciding what to (re-)extract.\nArguments: none.\nReturns: { sources: [ { source_id, filename, processing_status, active_extraction_id } ] } where processing_status is 'unprocessed', 'in_flight' (claimed by a sync), or 'processed'. `active_extraction_id` is the current canonical extraction, or null if never extracted. Read-only — does not claim anything (use jolt_get_unprocessed_sources to claim for extraction).",
+      "description": "List all of the caller's sources with their processing status — an overview for deciding what to (re-)extract.\nArguments: none.\nReturns: { sources: [ { source_id, filename, processing_status, active_extraction_id, page_count, reread_requested } ] } where processing_status is 'unprocessed', 'in_flight' (claimed by a sync), 'processed', or 'failed' (could not be read after repeated attempts). `active_extraction_id` is the current canonical extraction, or null if never extracted. `reread_requested` is true while the user's read-again request is pending. Uploads that were never confirmed are left out. Read-only — does not claim anything (use jolt_get_unprocessed_sources to claim for extraction).",
       "input_schema": {
         "properties": {},
         "title": "list_sourcesArguments",
@@ -1447,7 +1517,8 @@
                 "enum": [
                   "unprocessed",
                   "in_flight",
-                  "processed"
+                  "processed",
+                  "failed"
                 ],
                 "title": "Processing Status",
                 "type": "string"
@@ -1462,13 +1533,23 @@
                   }
                 ],
                 "title": "Active Extraction Id"
+              },
+              "page_count": {
+                "title": "Page Count",
+                "type": "integer"
+              },
+              "reread_requested": {
+                "title": "Reread Requested",
+                "type": "boolean"
               }
             },
             "required": [
               "source_id",
               "filename",
               "processing_status",
-              "active_extraction_id"
+              "active_extraction_id",
+              "page_count",
+              "reread_requested"
             ],
             "title": "ListedSourceOut",
             "type": "object"
@@ -1493,7 +1574,7 @@
     },
     {
       "name": "jolt_get_source_content",
-      "description": "Get a short-TTL signed GET URL to read a source's original bytes, so you can run extraction on your own compute. Call it for each source you claimed via jolt_get_unprocessed_sources (or any source you want to re-read for a supersede).\nArguments:\n  source_id (str, required) — the source to read.\nReturns: { source_id, filename, content_type, read_url }. The read_url expires in minutes — fetch promptly and re-call for a fresh one if it lapses. Use `content_type` to decide how to parse (PDF vs image vs text). Read-only; does not change the source's processing status.",
+      "description": "Get a short-TTL signed GET URL to read a source's original bytes, so you can run extraction on your own compute. Call it for each source you claimed via jolt_get_unprocessed_sources (or any source you want to re-read for a supersede).\nArguments:\n  source_id (str, required) — the source to read.\nReturns: { source_id, filename, content_type, read_url, page_count, pages: [ { index, filename, content_type, read_url } ] }. A multi-page note is one source with several files: read every entry of `pages`, in `index` order, and extract them together as one note. The top-level filename / content_type / read_url are the first page's. Read URLs expire in minutes — fetch promptly and re-call for fresh ones if they lapse. Use each page's `content_type` to decide how to parse (PDF vs image). Read-only; does not change the source's processing status.",
       "input_schema": {
         "properties": {
           "source_id": {
@@ -1508,6 +1589,37 @@
         "type": "object"
       },
       "output_schema": {
+        "$defs": {
+          "SourcePageOut": {
+            "additionalProperties": false,
+            "properties": {
+              "index": {
+                "title": "Index",
+                "type": "integer"
+              },
+              "filename": {
+                "title": "Filename",
+                "type": "string"
+              },
+              "content_type": {
+                "title": "Content Type",
+                "type": "string"
+              },
+              "read_url": {
+                "title": "Read Url",
+                "type": "string"
+              }
+            },
+            "required": [
+              "index",
+              "filename",
+              "content_type",
+              "read_url"
+            ],
+            "title": "SourcePageOut",
+            "type": "object"
+          }
+        },
         "additionalProperties": false,
         "properties": {
           "source_id": {
@@ -1525,13 +1637,26 @@
           "read_url": {
             "title": "Read Url",
             "type": "string"
+          },
+          "page_count": {
+            "title": "Page Count",
+            "type": "integer"
+          },
+          "pages": {
+            "items": {
+              "$ref": "#/$defs/SourcePageOut"
+            },
+            "title": "Pages",
+            "type": "array"
           }
         },
         "required": [
           "source_id",
           "filename",
           "content_type",
-          "read_url"
+          "read_url",
+          "page_count",
+          "pages"
         ],
         "title": "GetSourceContentOut",
         "type": "object"

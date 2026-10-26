@@ -10,7 +10,7 @@ which is what lets a retroactive semantic grade correct an earlier provisional o
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -22,6 +22,7 @@ from jolt.domain.models import (
     ConceptState,
     ConceptStatus,
     Extraction,
+    ExtractionConcept,
     ExtractionStatus,
     ProcessingStatus,
     Question,
@@ -56,11 +57,21 @@ class SyncError(Exception):
 # DTOs crossing the MCP boundary
 # --------------------------------------------------------------------------- #
 @dataclass
+@dataclass
+class PageContent:
+    index: int
+    filename: str
+    content_type: str
+    read_url: str
+
+
+@dataclass
 class SourceContent:
     source_id: str
     filename: str
     content_type: str
     read_url: str
+    pages: list[PageContent] = field(default_factory=list)
 
 
 @dataclass
@@ -100,15 +111,6 @@ class LoggedSession:
     sources: dict[str, Source]
 
 
-def _field(info, name: str):
-    """Read `name` from a dict or an object (re-read requests, BE-05)."""
-    if info is None:
-        return None
-    if isinstance(info, dict):
-        return info.get(name)
-    return getattr(info, name, None)
-
-
 @dataclass
 class PendingGrading:
     review_id: str
@@ -133,25 +135,47 @@ class SyncService:
     ) -> SyncPlan:
         """The `jolt_sync` plan (BE-04). `claimed_ids` are the sources the caller's
         sync run already claimed: still-leased ones keep the run open, while
-        sources leased by another client do not."""
+        sources leased by another client do not.
+
+        Read-again requests (BE-05) are source work like any other (asking puts
+        the source back to `unprocessed`); the ones this caller can take are also
+        listed in `reread_sources` with their preferred model. A source whose
+        lease lapsed `source_max_attempts` times is left out: the next claim marks
+        it `failed`.
+        """
         rows = await self._rt.repos.sources.list_unprocessed(user_id, limit)
         claimable: list[PlanSource] = []
         mine: list[PlanSource] = []
+        rereads: list[PlanReread] = []
         elsewhere = 0
         for source in rows:
             item = PlanSource(
                 source_id=source.id,
                 filename=source.filename,
-                track_id=getattr(source, "track_id", None),  # BE-05 adds track_id
-                uploaded_at=source.created_at,
+                track_id=source.track_id,
+                uploaded_at=source.uploaded_at,
                 lease_expires_at=source.lease_expires_at,
             )
             if self._is_claimable(source):
+                if self._exhausted(source):
+                    continue
                 claimable.append(item)
             elif source.id in claimed_ids:
                 mine.append(item)
             else:
                 elsewhere += 1
+                continue
+            if source.reread_requested_at is not None:
+                rereads.append(
+                    PlanReread(
+                        source_id=source.id,
+                        title=source.title or source.filename,
+                        filename=source.filename,
+                        track_id=source.track_id,
+                        preferred_model=source.reread_preferred_model,
+                        requested_at=source.reread_requested_at,
+                    )
+                )
 
         gradings: list[PlanGrading] = []
         for review in await self._rt.repos.reviews.list_pending_gradings(user_id, limit):
@@ -164,36 +188,11 @@ class SyncService:
             claimed_by_run=mine,
             in_flight_elsewhere=elsewhere,
             gradings=gradings,
-            rereads=await self.rereads(user_id),
+            rereads=rereads,
             tracks={t.id: PlanTrackInfo(t.id, t.name, t.agenda.status.value) for t in tracks},
             user_track_ids=[t.id for t in tracks if t.origin == TrackOrigin.USER],
             lease_seconds=self._rt.settings.lease_ttl_seconds,
         )
-
-    async def rereads(self, user_id: str) -> list[PlanReread]:
-        """Sources the user asked to read again.
-
-        Plug-in point for BE-05: once `SourcesRepository.list_reread_requested(
-        user_id)` exists (returning sources whose `reread_requested` carries
-        `preferred_model` and `requested_at`, as an object or a dict), the plan
-        lists them and adds the re-read steps. Until then there are none.
-        """
-        finder = getattr(self._rt.repos.sources, "list_reread_requested", None)
-        if finder is None:
-            return []
-        out: list[PlanReread] = []
-        for source in await finder(user_id):
-            info = getattr(source, "reread_requested", None)
-            out.append(
-                PlanReread(
-                    source_id=source.id,
-                    filename=source.filename,
-                    track_id=getattr(source, "track_id", None),
-                    preferred_model=_field(info, "preferred_model"),
-                    requested_at=_field(info, "requested_at"),
-                )
-            )
-        return out
 
     @staticmethod
     def _is_claimable(source: Source) -> bool:
@@ -205,6 +204,21 @@ class SyncService:
             and source.lease_expires_at <= _now()
         )
 
+    def _exhausted(self, source: Source) -> bool:
+        """A lapsed lease on a source already claimed the maximum number of times."""
+        return (
+            source.processing_status == ProcessingStatus.IN_FLIGHT
+            and source.claim_count >= self._rt.settings.source_max_attempts
+        )
+
+    async def _mark_failed(self, source: Source) -> None:
+        source.processing_status = ProcessingStatus.FAILED
+        source.lease_expires_at = None
+        source.failed_reason = (
+            f"not read: the sync lease lapsed {source.claim_count} times without an extraction"
+        )
+        await self._rt.repos.sources.replace(source, etag=source.etag)
+
     # -- source intake ------------------------------------------------------
     async def get_unprocessed_sources(self, user_id: str, limit: int = 10) -> list[Source]:
         """Claim up to `limit` sources under a lease (LLD §6). Losers are skipped."""
@@ -212,6 +226,9 @@ class SyncService:
         claimed: list[Source] = []
         for source in candidates:
             if not self._is_claimable(source):
+                continue
+            if self._exhausted(source):
+                await self._mark_failed(source)  # BE-05: `failed` instead of a retry loop
                 continue
             leased = await self._source_leases.claim(source)
             if leased is not None:  # None => lost the etag race to another sync
@@ -222,12 +239,21 @@ class SyncService:
         source = await self._rt.repos.sources.get_source(source_id, user_id)
         if source is None:
             raise SyncError("source not found")
-        read_url = await self._rt.blob.read_url(source.blob_path)
+        pages = [
+            PageContent(
+                index=p.index,
+                filename=p.filename,
+                content_type=p.content_type,
+                read_url=await self._rt.blob.read_url(p.blob_path),
+            )
+            for p in source.page_list()
+        ]
         return SourceContent(
             source_id=source.id,
             filename=source.filename,
             content_type=source.content_type,
-            read_url=read_url,
+            read_url=pages[0].read_url,
+            pages=pages,
         )
 
     async def store_extraction(
@@ -238,13 +264,20 @@ class SyncService:
         confidence: float,
         model_id: str | None = None,
         supersede: bool = False,
+        client_label: str | None = None,
     ) -> Extraction:
         """Persist an extraction and move the source's active pointer (LLD §7.7).
 
-        Stamp-before-move ordering: the new extraction is written, then (on
-        supersede) the previous active one is marked superseded, then the source's
-        pointer moves. A crash between steps leaves the old active extraction
-        canonical and replayable.
+        Stamp-before-move ordering: the new extraction is written, then the
+        previous active one is marked superseded, then the source's pointer
+        moves. A crash between steps leaves the old active extraction canonical
+        and replayable.
+
+        A source has one active read (BE-05): the pointer always moves, so the
+        previous active read is marked superseded even when `supersede` is false
+        (before BE-05 it stayed `active` beside the new one). `supersede` is still
+        the agent's statement that this is a re-extraction; concept
+        reconciliation on supersede is not implemented yet (docs/GAPS.md).
         """
         source = await self._rt.repos.sources.get_source(source_id, user_id)
         if source is None:
@@ -256,17 +289,25 @@ class SyncService:
             confidence=confidence,
             model_id=model_id,
             status=ExtractionStatus.ACTIVE,
+            client_label=client_label,
         )
         extraction = await self._rt.repos.extractions.create(extraction)
 
-        if supersede:
-            previous = await self._rt.repos.extractions.active_for_source(source_id)
-            if previous and previous.id != extraction.id:
+        history = await self._rt.repos.extractions.history_for_source(source_id)
+        for previous in history:
+            if previous.id != extraction.id and previous.status == ExtractionStatus.ACTIVE:
                 previous.status = ExtractionStatus.SUPERSEDED
                 previous.superseded_by = extraction.id
                 await self._rt.repos.extractions.replace(previous, etag=previous.etag)
 
-        await self._source_leases.release_processed(source, extraction.id)
+        # Retry on a lost etag race (e.g. the app asked to read again meanwhile)
+        # so the pointer always moves to the new read.
+        for _ in range(5):
+            if await self._source_leases.release_processed(source, extraction.id) is not None:
+                break
+            source = await self._rt.repos.sources.get_source(source_id, user_id)
+            if source is None:
+                break
         return extraction
 
     # -- session / concepts / questions ------------------------------------
@@ -302,7 +343,7 @@ class SyncService:
 
         def day_of(sid: Optional[str]) -> Optional[str]:
             source = sources.get(sid) if sid else None
-            return upload_day(source.created_at) if source else None
+            return upload_day(source.uploaded_at) if source else None
 
         fallback = next((d for d in map(day_of, source_ids) if d), None)
         groups: dict[Optional[str], dict[str, list[str]]] = {}
@@ -316,10 +357,16 @@ class SyncService:
                 g["source_ids"].append(sid)
 
         created_concepts: list[Concept] = []
+        # BE-05: a concept logged from a source is credited to that source's
+        # active read (Past reads: "Found N concepts").
+        touched: dict[tuple[str, str], list[ExtractionConcept]] = {}
         for c in concepts:
+            source = sources.get(c.source_id) if c.source_id else None
+            extraction_id = source.active_extraction_id if source else None
             concept = Concept(
                 track_id=c.track_id,
                 source_id=c.source_id,
+                extraction_id=extraction_id,
                 text=c.text,
                 title=c.title,
                 # The concept's coverage key is its agenda concept_key.
@@ -328,6 +375,16 @@ class SyncService:
             )
             concept = await self._rt.repos.concepts.create(concept)
             created_concepts.append(concept)
+            if c.source_id and extraction_id:
+                touched.setdefault((c.source_id, extraction_id), []).append(
+                    ExtractionConcept(
+                        concept_id=concept.id,
+                        title=(c.title or c.text).strip()[:120],
+                        # Every logged concept is new until supersede reconciles
+                        # against the previous read (docs/GAPS.md).
+                        is_new=True,
+                    )
+                )
             # New card: due now so the material enters the review rotation.
             state = ConceptState(
                 user_id=user_id,
@@ -340,6 +397,11 @@ class SyncService:
             g["concept_ids"].append(concept.id)
             if c.source_id and c.source_id not in g["source_ids"]:
                 g["source_ids"].append(c.source_id)
+
+        for (source_id, extraction_id), items in touched.items():
+            await self._update_read(
+                source_id, extraction_id, lambda e, items=items: e.concepts.extend(items)
+            )
 
         added = await self._auto_add_agenda(user_id, concepts)
 
@@ -432,7 +494,38 @@ class SyncService:
                 expected_answer=q.expected_answer,
             )
             created.append(await self._rt.repos.questions.create(question))
+        if created:
+            await self._count_questions(user_id, concept_id, len(created))
         return created
+
+    async def _count_questions(self, user_id: str, concept_id: str, n: int) -> None:
+        """Add `n` to `questions_written` on the read the concept came from.
+
+        The concept is found through the caller's card (user partition), which
+        names its track (the concepts partition); a concept with no card, or not
+        logged from a read, counts nowhere.
+        """
+        state = await self._rt.repos.concept_states.for_concept(user_id, concept_id)
+        if state is None or not state.track_id:
+            return
+        concept = await self._rt.repos.concepts.get_concept(concept_id, state.track_id)
+        if concept is None or not concept.source_id or not concept.extraction_id:
+            return
+
+        def bump(e: Extraction) -> None:
+            e.questions_written += n
+
+        await self._update_read(concept.source_id, concept.extraction_id, bump)
+
+    async def _update_read(self, source_id: str, extraction_id: str, change) -> None:
+        """Etag-guarded read-modify-write of one extraction's counters."""
+        for _ in range(5):
+            read = await self._rt.repos.extractions.get_extraction(extraction_id, source_id)
+            if read is None:
+                return
+            change(read)
+            if await self._rt.repos.extractions.replace(read, etag=read.etag) is not None:
+                return
 
     # -- gradings -----------------------------------------------------------
     async def get_pending_gradings(self, user_id: str, limit: int = 10) -> list[PendingGrading]:

@@ -2,7 +2,7 @@
 
 Each screen in the Jolt 2.0 design (Figma prototype, frames listed in
 `Jolt/design/frames/index.json`; screens per pass in `Jolt/docs/v2/PLAN.md` §5 and
-the FE pass briefs) compared with the API as of BE-04 ([`API.md`](./API.md)). For
+the FE pass briefs) compared with the API as of BE-05 ([`API.md`](./API.md)). For
 each gap, the backend pass whose brief covers it.
 
 Status: **ready** (today's endpoints are enough) · **partial** (some data
@@ -29,9 +29,9 @@ Frame numbers are phone / web / tablet.
 | Sync line | 5 / 22 / 37 | Last sync time, client, late / never | `GET /v1/sync/status`: `last_run` (`started_at`, `finished_at`, `client_label`, counts), `health`, `next_expected_at` (pass `?tz=`) | ready | — |
 | Stats | 5 / 22 / 37 | Streak, retention, reviews this week | — | missing | BE-08 (`GET /v1/progress`) |
 | Tracks | 5 / 22 / 37 | Concepts, due and sources count per track | `GET /v1/tracks` has no counts | partial | BE-07 |
-| Tonight's uploads | 5 / 22 / 37 | Unprocessed sources with their track | `GET /v1/sources` (filter on the client; no `track_id`) | partial | BE-05 |
+| Tonight's uploads | 5 / 22 / 37 | Unprocessed sources with their track | `GET /v1/sources?status=unprocessed` with `track_id`, `track_name`, `title`, `page_count` (BE-05) | ready | — |
 | What's new | 5 / 22 / 37 | Concepts added by the last sync, with the source date ("Found in your 12 Sep notes") | `changes[]` on each sync run (`GET /v1/sync/status` → `last_run`, `GET /v1/sync/runs`): `concept_added` / `concept_updated` with `concept_title`, `track_id`, `source_id`, `source_uploaded_at`, `added_to_syllabus` (decision A25, BE-04) | ready | — |
-| Empty / first-run states | — | Same data as above, plus `GET /v1/me` | `GET /v1/me` (BE-03), sync status (BE-04); due, stats and track counts still partial (rows above) | partial | BE-05, BE-07, BE-08 |
+| Empty / first-run states | — | Same data as above, plus `GET /v1/me` | `GET /v1/me` (BE-03), sync status (BE-04), `GET /v1/sources` (BE-05); due, stats and track counts still partial (rows above) | partial | BE-07, BE-08 |
 
 ## Review (FE-06)
 
@@ -62,14 +62,41 @@ Frame numbers are phone / web / tablet.
 
 | Screen | Frames | Needs | Today | Status | Covered by |
 |---|---|---|---|---|---|
-| Add to Jolt sheet | 52 | Upload N pages to a track as one source (decision A7), with size and hash checks; accepted types and size limit | `POST /v1/uploads/request` + `confirm`: one file per source, no `track_id`, no size, no type allow-list | partial | BE-05 |
-| Sources list / table | 14 / 31 / 45 | Title, track, page count, uploaded at, status incl. `failed`, concepts found, questions written, `low_confidence`; filters by track and status | `GET /v1/sources`: filename, status (no `failed`), active extraction id, created at | partial | BE-05 |
-| Source · Original | 15 | Signed GET URL per page | Only via MCP `jolt_get_source_content`; no REST route | missing | BE-05 (`GET /v1/sources/{id}`) |
-| Source · What it found | 16 / 32 / 46 | Active extraction markdown | `GET /v1/sources/{id}/extractions` omits the markdown | missing | BE-05 |
-| Source · Past reads | 17 / 33 / 47 | Every read: model, time, concepts found, questions written | `GET /v1/sources/{id}/extractions`: model, confidence, time, status; no counts | partial | BE-05 |
-| Read again sheet | 53 | Queue a re-read with an optional preferred model; the next `jolt_sync` plan lists it | The plan side is built (BE-04): `reread_sources` and re-read steps appear once `SourcesRepository.list_reread_requested(user_id)` exists; no way to request one yet | partial | BE-05 (`POST /v1/sources/{id}/reread`, `list_reread_requested`, clearing the flag on the superseding `jolt_store_extraction`) |
-| Reader | 18 / 34 / 48 | Page URLs; screen-size images first, full size on zoom; thumbnails on web | — | missing | BE-05 (page URLs). **Resized renditions and thumbnails are in no brief**: BE-05 should decide (originals only, or renditions) |
+| Add to Jolt sheet | 52 | Upload N pages to a track as one source (decision A7), with size and hash checks; accepted types and size limit | `POST /v1/uploads/request` with `track_id`, `title`, `pages[]` → one PUT URL per page, `max_bytes_per_file`, `accepted_types`; `confirm` checks each page's size and SHA-256 (BE-05) | ready | — |
+| Sources list / table | 14 / 31 / 45 | Title, track, page count, uploaded at, status incl. `failed`, concepts found, questions written, `low_confidence`; filters by track and status | `GET /v1/sources?track_id=&status=` (BE-05) | ready | — |
+| Source · Original | 15 | Signed GET URL per page | `GET /v1/sources/{id}` `pages[].url` (BE-05) | ready | — |
+| Source · What it found | 16 / 32 / 46 | Active extraction markdown | `GET /v1/sources/{id}` `active_read.markdown`, `concepts` (BE-05) | ready | — |
+| Source · Past reads | 17 / 33 / 47 | Every read: model, time, concepts found, questions written | `GET /v1/sources/{id}` `reads[]`: number, model, client label, time, confidence, concepts found, questions written (BE-05) | ready | — |
+| Read again sheet | 53 | Queue a re-read with an optional preferred model; the next `jolt_sync` plan lists it | `POST /v1/sources/{id}/reread` (BE-05); the next `jolt_sync` plan lists it in `reread_sources` with `preferred_model` (BE-04 plan), and `jolt_get_unprocessed_sources` hands it out with `supersede: true`; the superseding `jolt_store_extraction` clears the request | ready | — |
+| Reader | 18 / 34 / 48 | Page URLs; screen-size images first, full size on zoom; thumbnails on web | `GET /v1/sources/{id}` `pages[].url`: the **originals** (BE-05 decision, below) | partial | Renditions: no pass (see below) |
 | Toasts | 56, 57 | — | — | client | — |
+
+**BE-05 decisions and follow-ups for the sources screens**
+
+- **Reader renditions: originals only.** The Reader gets a signed GET of each
+  uploaded file. No server-side resizing or thumbnails: that needs an image
+  pipeline (decode HEIC/PDF, write renditions) and a background job, which the
+  single-service design avoids, and Jolt compute never reads uploads except to
+  hash them at confirm. Consequences for the front end: phone photos are a few MB
+  each, so lazy-load pages and use the browser's own scaling; **HEIC does not
+  display outside Safari**, so the app should convert HEIC to JPEG before upload
+  (or show a "preview not available" tile); a PDF is one page entry
+  (`content_type: application/pdf`) that the Reader renders itself. Revisit with
+  a rendition step (e.g. an Azure Function on blob-created) if the Reader is slow
+  on mobile data.
+- **A PDF counts as one page.** `page_count` is the number of uploaded files; the
+  server does not parse PDFs.
+- **Abandoned uploads are not cleaned up.** A requested but never confirmed
+  source keeps its row (hidden from every view and from syncs) and any bytes that
+  were PUT. A Blob lifecycle rule or a cleanup on the next request would fix it.
+  → BE-10 (data hygiene) or BE-08 (data retention).
+- **Failure is detected, not reported.** `failed` comes from lapsed sync leases
+  (`SOURCE_MAX_ATTEMPTS`); an agent can only note "this file is unreadable" in
+  `jolt_sync errors=[...]` (recorded on the sync run, BE-04), which does not mark
+  the source. A `jolt_report_source_failure` tool would make it immediate. → a
+  later sync pass (BE-10 or its own).
+- **`preferred_model` is a hint.** Any connected client may answer a read-again
+  request; the plan shows the preference.
 
 ## Progress and settings (FE-09)
 
@@ -80,7 +107,7 @@ Frame numbers are phone / web / tablet.
 | Settings · API key + sheet | 20 / 36 / 50, 51, 58 | Add, list (`added_at`), remove | `POST`, `GET` (no `added_at`), `DELETE /v1/settings/api-key` | partial | BE-08 |
 | Settings · Appearance | 20 / 36 / 50 | Theme | — | missing | BE-08 (`GET/PATCH /v1/settings`) |
 | Settings · Reviews | 20 / 36 / 50 | Desired retention (FSRS), daily cap, retire mastered, allow question rewrite | — (`FSRS_DESIRED_RETENTION` is a server-wide setting) | missing | BE-08 (settings), BE-06 (behaviour) |
-| Settings · Data | 20 / 36 / 50, 59 | Storage used, export, delete account | `PUT /v1/settings/retention` stores a data-retention preference in days that nothing uses yet | missing | BE-05 (storage figure), BE-08 (export, `DELETE /v1/me`) |
+| Settings · Data | 20 / 36 / 50, 59 | Storage used, export, delete account | `GET /v1/storage` `{bytes_used, source_count, page_count}` (BE-05); `PUT /v1/settings/retention` stores a data-retention preference in days that nothing uses yet | partial | BE-08 (export, `DELETE /v1/me`) |
 
 ## After the MVP (FE-12)
 
@@ -107,7 +134,8 @@ To fix in the pass named, or sooner.
 2. **Supersede does not reconcile concepts.** `jolt_store_extraction(supersede=true)`
    only marks the previous extraction `superseded`. The tool description promises
    concept reconciliation (refined / changed / removed / new), which runs only
-   as a preview in `jolt_diff_extractions`. → BE-07 (its reconciliation-ceiling item).
+   as a preview in `jolt_diff_extractions`. Until it lands, every concept a read
+   logs shows `is_new: true` in Past reads (BE-05). → BE-07 (its reconciliation-ceiling item).
 3. **`jolt_correct_concept` description vs behaviour.** The description says a
    missing concept gives `updated: false`; the tool returns
    `{error: "concept not found"}`. The output schema in the contract describes

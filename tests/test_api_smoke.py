@@ -7,6 +7,8 @@ Cosmos, Blob and Key Vault are replaced by `jolt/data/memory.py`.
 
 from __future__ import annotations
 
+import hashlib
+
 from jolt.credentials import providers
 from jolt.credentials.providers import ValidationResult
 from tests.conftest import dev_sign_in
@@ -65,9 +67,11 @@ def test_unknown_track_coverage_is_404(client, auth):
 
 
 def test_upload_request_confirm_and_list(client, auth, runtime):
+    data = b"\xff\xd8 page bytes"
+    sha = hashlib.sha256(data).hexdigest()
     req = client.post(
         "/v1/uploads/request",
-        json={"filename": "notes.jpg", "content_type": "image/jpeg", "sha256": "abc"},
+        json={"filename": "notes.jpg", "content_type": "image/jpeg", "sha256": sha},
         headers=auth,
     )
     assert req.status_code == 200, req.text
@@ -80,13 +84,13 @@ def test_upload_request_confirm_and_list(client, auth, runtime):
 
     # Simulate the client's direct PUT to Blob, then confirm.
     source_doc = runtime.cosmos.container("sources").all_items()[0]
-    runtime.blob.put(source_doc["blob_path"], b"\xff\xd8 page bytes", "image/jpeg")
+    runtime.blob.put(source_doc["blob_path"], data, "image/jpeg")
     mismatch = client.post(
-        f"/v1/uploads/{ticket['source_id']}/confirm", json={"sha256": "zzz"}, headers=auth
+        f"/v1/uploads/{ticket['source_id']}/confirm", json={"sha256": "0" * 64}, headers=auth
     )
     assert mismatch.status_code == 400
     ok = client.post(
-        f"/v1/uploads/{ticket['source_id']}/confirm", json={"sha256": "abc"}, headers=auth
+        f"/v1/uploads/{ticket['source_id']}/confirm", json={"sha256": sha}, headers=auth
     )
     assert ok.json() == {"status": "ready"}
 

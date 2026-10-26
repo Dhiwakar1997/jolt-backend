@@ -4,9 +4,11 @@ day used for session boundaries (decision D6), and sync health.
 Pure: no I/O, no FastAPI, no Azure. The service layer gathers the rows and calls
 `build_plan`; the MCP tool turns the result into JSON.
 
-Re-reads (BE-05) plug in as `PlanReread` items: the service asks the sources
-repository for them if it can (`list_reread_requested`), and the plan gets
-re-read steps whenever the list is non-empty.
+Re-reads (BE-05) are `PlanReread` items: sources the user asked to read again
+(POST /v1/sources/{id}/reread). Asking puts the source back to `unprocessed`, so a
+re-read is ordinary source work that the claim step hands out with
+`supersede: true`; the plan lists those sources (with the preferred model) in
+`reread_sources` and adds the supersede guidance whenever the list is non-empty.
 """
 
 from __future__ import annotations
@@ -70,9 +72,11 @@ class PlanSource:
 
 @dataclass
 class PlanReread:
-    """A source the user asked to read again (BE-05)."""
+    """A source the user asked to read again (BE-05). It is also one of the
+    plan's claimable or claimed sources."""
 
     source_id: str
+    title: str
     filename: str
     track_id: Optional[str]
     preferred_model: Optional[str]
@@ -169,6 +173,8 @@ def build_plan(
     `claimable` are sources nobody holds; `claimed_by_run` are sources this run
     claimed and has not stored yet (their lease is live). Sources another client
     holds only show up as `in_flight_elsewhere`: they do not keep the run open.
+    `rereads` are the read-again requests among `claimable` and `claimed_by_run`
+    (a subset: they are counted as source work too).
     `tracks` maps every track id that may appear to its name and agenda status;
     `user_track_ids` are the caller's own tracks, all listed when some source has
     no track (so the model can pick one).
@@ -209,21 +215,34 @@ def build_plan(
         steps.add(
             "jolt_get_unprocessed_sources",
             "Claim a batch of sources (each is leased to you for lease_seconds). Call again "
-            "after finishing a batch, until it returns no sources.",
+            "after finishing a batch, until it returns no sources. A source marked "
+            "supersede=true is a read again (see reread_sources).",
             limit=min(SOURCES_PER_CLAIM, len(claimable)),
             repeat="per batch",
         )
     if source_work:
         steps.add(
             "jolt_get_source_content",
-            "Get a signed read_url for a claimed source and read every page yourself.",
+            "Get signed read URLs for a claimed source (pages[], in order) and read every "
+            "page yourself.",
             limit=None,
             repeat="per claimed source",
         )
+    if rereads:
+        steps.add(
+            "jolt_diff_extractions",
+            "For a read-again source (supersede=true), preview how your new reading's "
+            "concepts line up with the track's existing ones before storing. Use its "
+            "preferred_model if it names you; otherwise read it anyway.",
+            limit=None,
+            repeat="per reread source",
+        )
+    if source_work:
         steps.add(
             "jolt_store_extraction",
             "Store what you read as markdown, with an honest 0..1 confidence and your "
-            "model_id. This marks the source processed.",
+            "model_id; pass supersede=true when the claim said so. This marks the source "
+            "processed and makes this read the active one.",
             limit=None,
             repeat="per claimed source",
         )
@@ -242,27 +261,6 @@ def build_plan(
             f"{OPTIONS_PER_QUESTION} options with one correct (correct_index).",
             limit=QUESTIONS_PER_CONCEPT_MAX,
             repeat="per concept",
-        )
-    if rereads:
-        steps.add(
-            "jolt_get_source_content",
-            "Re-read a source the user asked to read again (see reread_sources; use the "
-            "preferred_model if it names you, otherwise read it anyway).",
-            limit=None,
-            repeat="per reread source",
-        )
-        steps.add(
-            "jolt_diff_extractions",
-            "Preview how the new reading's concepts line up with the existing ones.",
-            limit=None,
-            repeat="per reread source",
-        )
-        steps.add(
-            "jolt_store_extraction",
-            "Store the new reading with supersede=true, then log and question any new "
-            "concepts as above.",
-            limit=None,
-            repeat="per reread source",
         )
     if gradings:
         steps.add(
@@ -294,9 +292,8 @@ def build_plan(
     else:
         parts = []
         if source_work:
-            parts.append(f"{len(source_work)} source(s) to read")
-        if rereads:
-            parts.append(f"{len(rereads)} to read again")
+            again = f" ({len(rereads)} to read again)" if rereads else ""
+            parts.append(f"{len(source_work)} source(s) to read{again}")
         if gradings:
             parts.append(f"{len(gradings)} answer(s) to grade")
         next_hint = "Work left: " + ", ".join(parts) + ". Follow the steps in order."

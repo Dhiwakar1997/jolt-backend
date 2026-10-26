@@ -10,6 +10,8 @@ the written answer. Every tool result is validated against
 
 from __future__ import annotations
 
+import hashlib
+
 import httpx
 import pytest
 
@@ -85,7 +87,11 @@ async def test_nightly_loop_across_mcp_and_rest(api, runtime):
     ticket = (
         await api.post(
             "/v1/uploads/request",
-            json={"filename": "p1.png", "content_type": "image/png", "sha256": "h"},
+            json={
+                "filename": "p1.png",
+                "content_type": "image/png",
+                "sha256": hashlib.sha256(b"png").hexdigest(),
+            },
         )
     ).json()
     blob_path = runtime.cosmos.container("sources").all_items()[0]["blob_path"]
@@ -95,6 +101,7 @@ async def test_nightly_loop_across_mcp_and_rest(api, runtime):
     # Agent: plan, claim, read, extract.
     plan = await call("jolt_sync")
     assert (plan["unprocessed_sources"], plan["pending_gradings"], plan["done"]) == (1, 0, False)
+    assert (plan["rereads"], plan["reread_sources"]) == (0, [])
     claimed = await call("jolt_get_unprocessed_sources")
     assert [s["source_id"] for s in claimed["sources"]] == [ticket["source_id"]]
     assert claimed["sources"][0]["lease_expires_at"] is not None
@@ -198,6 +205,13 @@ async def test_nightly_loop_across_mcp_and_rest(api, runtime):
     assert missing == {"error": "concept not found"}
 
     url = await call(
-        "jolt_request_upload_url", filename="p2.pdf", content_type="application/pdf", sha256="x"
+        "jolt_request_upload_url",
+        filename="p2.pdf",
+        content_type="application/pdf",
+        sha256="a" * 64,
     )
     assert url["upload_url"].startswith("memory://blob/")
+    bad = await call(
+        "jolt_request_upload_url", filename="p.gif", content_type="image/gif", sha256="a" * 64
+    )
+    assert "unsupported content type" in bad["error"]

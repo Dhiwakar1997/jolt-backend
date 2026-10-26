@@ -43,6 +43,7 @@ from azure.cosmos import exceptions as cosmos_exc
 
 from jolt.config import Settings, get_settings
 from jolt.credentials.vault import secret_name
+from jolt.data.blob import page_blob_path
 from jolt.data.cosmos import CONTAINER_PARTITION_KEYS
 
 # --------------------------------------------------------------------------- #
@@ -291,8 +292,8 @@ class InMemoryBlobGateway:
     signing_key: str = "memory"
     _blobs: dict[str, _StoredBlob] = field(default_factory=dict)
 
-    def blob_path(self, user_id: str, source_id: str, filename: str) -> str:
-        return f"{user_id}/{source_id}/{filename}"
+    def blob_path(self, user_id: str, source_id: str, filename: str, page: int = 0) -> str:
+        return page_blob_path(user_id, source_id, filename, page)
 
     def _sig(self, blob_path: str, perm: str) -> str:
         msg = f"{perm}:{self.container}/{blob_path}".encode()
@@ -320,6 +321,13 @@ class InMemoryBlobGateway:
         if blob is None:
             return None
         return {"size": len(blob.data), "content_type": blob.content_type}
+
+    async def sha256(self, blob_path: str) -> Optional[str]:
+        blob = self._blobs.get(blob_path)
+        return hashlib.sha256(blob.data).hexdigest() if blob is not None else None
+
+    async def delete(self, blob_path: str) -> None:
+        self._blobs.pop(blob_path, None)
 
     def put(self, blob_path: str, data: bytes, content_type: Optional[str] = None) -> None:
         """Store bytes as the client's direct PUT to the upload URL would."""

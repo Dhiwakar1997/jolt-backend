@@ -11,7 +11,6 @@ import hashlib
 import json
 import logging
 from datetime import datetime, timedelta, timezone
-from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -60,7 +59,7 @@ async def upload(api, runtime, user_id: str, name: str, at: datetime | None = No
     assert (await api.post(f"/v1/uploads/{source.id}/confirm", json={})).is_success
     if at is not None:
         source = await runtime.repos.sources.get_source(source.id, user_id)
-        source.created_at = at
+        source.created_at = source.confirmed_at = at
         await runtime.repos.sources.replace(source)
     return source.id
 
@@ -136,39 +135,52 @@ async def test_plan_counts_gradings_by_track_and_adds_grading_steps(api, runtime
     ]
 
 
-async def test_plan_lists_rereads_when_the_sources_repo_offers_them(runtime, mcp_user):
-    """The BE-05 plug-in point: `SourcesRepository.list_reread_requested`."""
-    requested = datetime(2026, 10, 25, 9, 0, tzinfo=UTC)
+async def test_plan_lists_read_again_requests_with_the_preferred_model(api, runtime, mcp_user):
+    """BE-05 read again folds into the plan: the source is source work again
+    (counted in unprocessed_sources) and listed in reread_sources."""
+    track = (await api.post("/v1/tracks", json={"name": "Systems"})).json()
+    sid = await upload(api, runtime, mcp_user.user_id, "notes.png")
+    source = await runtime.repos.sources.get_source(sid, mcp_user.user_id)
+    source.track_id = track["id"]
+    await runtime.repos.sources.replace(source)
+    await call("jolt_get_unprocessed_sources")
+    await call("jolt_store_extraction", source_id=sid, markdown="first", confidence=0.5)
+    assert (await call("jolt_sync"))["done"] is True
 
-    async def list_reread_requested(user_id):
-        assert user_id == mcp_user.user_id
-        return [
-            SimpleNamespace(
-                id="s1",
-                filename="notes.pdf",
-                track_id=None,
-                reread_requested={"preferred_model": "codex", "requested_at": requested},
-            )
-        ]
-
-    runtime.repos.sources.list_reread_requested = list_reread_requested
+    rr = await api.post(f"/v1/sources/{sid}/reread", json={"preferred_model": "codex"})
+    assert rr.status_code == 200, rr.text
     plan = await call("jolt_sync")
-    assert plan["rereads"] == 1 and plan["done"] is False
-    assert plan["reread_sources"] == [
-        {
-            "source_id": "s1",
-            "filename": "notes.pdf",
-            "track_id": None,
-            "preferred_model": "codex",
-            "requested_at": requested.isoformat(),
-        }
-    ]
+    assert plan["done"] is False
+    assert (plan["unprocessed_sources"], plan["rereads"]) == (1, 1)
+    (reread,) = plan["reread_sources"]
+    assert {k: reread[k] for k in ("source_id", "title", "track_id", "preferred_model")} == {
+        "source_id": sid,
+        "title": "notes.png",
+        "track_id": track["id"],
+        "preferred_model": "codex",
+    }
+    assert _dt(reread["requested_at"]) <= datetime.now(UTC)
+    assert [(t["track_id"], t["rereads"]) for t in plan["tracks"]] == [(track["id"], 1)]
     assert [s["tool"] for s in plan["steps"]] == [
+        "jolt_get_unprocessed_sources",
         "jolt_get_source_content",
         "jolt_diff_extractions",
         "jolt_store_extraction",
+        "jolt_log_session",
+        "jolt_create_questions",
         "jolt_sync",
     ]
+    assert "1 to read again" in plan["next"]
+
+    (claimed,) = (await call("jolt_get_unprocessed_sources"))["sources"]
+    assert claimed["supersede"] is True and claimed["preferred_model"] == "codex"
+    await call(
+        "jolt_store_extraction", source_id=sid, markdown="second", confidence=0.9, supersede=True
+    )
+    plan = await call("jolt_sync")
+    assert (plan["done"], plan["rereads"], plan["reread_sources"]) == (True, 0, [])
+    source = await runtime.repos.sources.get_source(sid, mcp_user.user_id)
+    assert source.reread_requested_at is None and source.read_count == 2
 
 
 async def test_claimed_sources_keep_the_run_open_but_others_leases_do_not(api, runtime, mcp_user):

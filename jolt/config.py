@@ -77,6 +77,19 @@ class Settings(BaseSettings):
     blob_account_key: str = ""
     blob_sas_ttl_seconds: int = 900
 
+    # ---- Uploads and sources (BE-05) ----
+    # Per-file cap, checked at request (declared size) and at confirm (the size
+    # Blob reports; a SAS URL cannot cap the PUT itself).
+    upload_max_bytes: int = Field(default=25 * 1024 * 1024, ge=1)
+    # Files (pages) in one multi-page upload; all of them become one source.
+    upload_max_pages: int = Field(default=30, ge=1)
+    # A read whose confidence is under this is flagged `low_confidence`
+    # ("Unsure about the handwriting").
+    low_confidence_threshold: float = Field(default=0.6, ge=0.0, le=1.0)
+    # A source whose sync lease lapsed this many times without an extraction is
+    # marked `failed` instead of being claimed again. Read again resets it.
+    source_max_attempts: int = Field(default=3, ge=1)
+
     # ---- Key Vault ----
     keyvault_url: str = ""
 
