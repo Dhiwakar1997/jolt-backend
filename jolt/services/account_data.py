@@ -12,8 +12,14 @@ including abandoned ones, and exports), every Cosmos document under the user
 (each container, including the track-, concept-, source- and review-partitioned
 ones reached through the user's tracks, sources and reviews), the user's tokens,
 then the user document. Tokens and the user go last so a delete that fails half
-way can be retried with the same app token. Curated (shared) tracks and their
-concepts are not the user's and stay. Irreversible.
+way can be retried with the same app token. Irreversible.
+
+Curated (shared, BE-09) content is not the user's and stays: the curated tracks,
+their concepts and questions and the `<track>.content` documents live in the
+curated bucket and in track/concept partitions no user track reaches. What the
+learner did on a curated track goes with the account: the enrolments (on the
+user document), their cards for curated concepts (`concept_states`), their
+answers (`reviews`) and their review sessions.
 """
 
 from __future__ import annotations

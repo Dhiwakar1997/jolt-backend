@@ -28,7 +28,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
 from jolt.domain.mastery import is_retired
-from jolt.domain.models import ConceptState, Review, Track, TrackOrigin
+from jolt.domain.models import ConceptState, Review, Track
 from jolt.domain.progress import (
     local_day,
     local_midnight,
@@ -87,13 +87,6 @@ class Progress:
     tracks: list[TrackRow] = field(default_factory=list)
 
 
-def _track_kind(track: Track) -> str:
-    kind = getattr(track, "kind", None)  # BE-07/BE-09 add `kind` to tracks
-    if kind is None:
-        return "notes"
-    return getattr(kind, "value", kind)
-
-
 def _answered_at(review: Review) -> Optional[datetime]:
     if review.selected_index is None:
         return None
@@ -104,16 +97,20 @@ class ProgressService:
     def __init__(self, rt: Runtime) -> None:
         self._rt = rt
 
-    async def _tracks(self, user_id: str, states: list[ConceptState]) -> list[Track]:
-        """The user's tracks (newest first), then curated tracks they study."""
+    async def _tracks(
+        self, user_id: str, states: list[ConceptState], enrolled: set[str]
+    ) -> list[Track]:
+        """The user's tracks (newest first), then the curated tracks they are
+        enrolled in (BE-09) or have cards on (studied before leaving)."""
         tracks = await self._rt.repos.tracks.list_for_user(user_id)
-        own = {t.id for t in tracks}
-        for track_id in dict.fromkeys(s.track_id for s in states if s.track_id):
-            if track_id in own:
-                continue
-            curated = await self._rt.repos.tracks.get_track(track_id, None)
-            if curated is not None and curated.origin == TrackOrigin.JOLT:
-                tracks.append(curated)
+        seen = {t.id for t in tracks}
+        curated = await self._rt.repos.tracks.list_curated()
+        curated.sort(key=lambda t: (t.created_at, t.id))
+        studied_on = {s.track_id for s in states if s.track_id}
+        for track in curated:
+            if track.id not in seen and (track.id in enrolled or track.id in studied_on):
+                tracks.append(track)
+                seen.add(track.id)
         return tracks
 
     async def progress(
@@ -127,7 +124,8 @@ class ProgressService:
         today = local_day(now, zone)
 
         states = await self._rt.repos.concept_states.all_for_user(user_id)
-        tracks = await self._tracks(user_id, states)
+        enrolled = user.enrolled_track_ids() if user is not None else set()
+        tracks = await self._tracks(user_id, states, enrolled)
         # Only concepts that are still active in their track (a superseded
         # concept's card no longer counts).
         active_ids: set[str] = set()
@@ -160,7 +158,7 @@ class ProgressService:
                 TrackRow(
                     track_id=track.id,
                     name=track.name,
-                    kind=_track_kind(track),
+                    kind=track.kind.value,
                     retention=mean(
                         recall_now.get(s.concept_id, 0.0)
                         for s in mine
