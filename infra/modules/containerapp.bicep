@@ -1,6 +1,7 @@
 // Container Apps environment + the `jolt-api` app: HTTPS ingress on port 8000,
 // /health probes, scale 0..N, pulling from ACR with the app's Managed Identity
-// and reading TOKEN_HASH_PEPPER as a Key Vault secret reference.
+// and reading TOKEN_HASH_PEPPER (and DEV_AUTH_SECRET when dev sign-in is on) as
+// Key Vault secret references.
 
 param location string
 param tags object
@@ -23,6 +24,17 @@ param blobEndpoint string
 param blobContainerName string
 param keyVaultUri string
 param pepperSecretName string
+
+@description('GOOGLE_OAUTH_CLIENT_ID: OAuth client id(s) whose Google ID tokens sign-in accepts. Empty: Google sign-in answers 503.')
+param googleOAuthClientId string = ''
+
+@description('MCP_SERVER_URL shown by GET /v1/me. Empty: https://<this app\'s FQDN>/mcp/sse.')
+param mcpServerUrl string = ''
+
+@description('DEV_AUTH_ENABLED: dev-only sign-in by email (POST /v1/auth/dev), guarded by the Key Vault secret devAuthSecretName. Never in prod.')
+param devAuthEnabled bool = false
+
+param devAuthSecretName string = 'dev-auth-secret'
 
 @description('Comma-separated exact origins for CORS_ORIGINS.')
 param corsOrigins string
@@ -59,6 +71,43 @@ resource managedEnvironment 'Microsoft.App/managedEnvironments@2024-03-01' = {
     zoneRedundant: false
   }
 }
+
+// The app's FQDN is known before the app exists: <name>.<environment domain>.
+var appFqdn = '${containerAppName}.${managedEnvironment.properties.defaultDomain}'
+var effectiveMcpServerUrl = empty(mcpServerUrl) ? 'https://${appFqdn}/mcp/sse' : mcpServerUrl
+
+var pepperSecret = {
+  name: 'token-hash-pepper'
+  keyVaultUrl: '${keyVaultUri}secrets/${pepperSecretName}'
+  identity: appIdentityId
+}
+var devAuthSecret = {
+  name: 'dev-auth-secret'
+  keyVaultUrl: '${keyVaultUri}secrets/${devAuthSecretName}'
+  identity: appIdentityId
+}
+
+var baseEnv = [
+  { name: 'JOLT_ENV', value: environmentName }
+  { name: 'STORAGE_MODE', value: 'azure' }
+  { name: 'AUTH_MODE', value: 'managed_identity' }
+  // DefaultAzureCredential picks the user-assigned identity by client id.
+  { name: 'AZURE_CLIENT_ID', value: appIdentityClientId }
+  { name: 'COSMOS_ENDPOINT', value: cosmosEndpoint }
+  { name: 'COSMOS_DATABASE', value: cosmosDatabaseName }
+  { name: 'BLOB_ACCOUNT_URL', value: blobEndpoint }
+  { name: 'BLOB_CONTAINER', value: blobContainerName }
+  { name: 'KEYVAULT_URL', value: keyVaultUri }
+  { name: 'CORS_ORIGINS', value: corsOrigins }
+  { name: 'CORS_ORIGIN_REGEX', value: corsOriginRegex }
+  { name: 'TOKEN_HASH_PEPPER', secretRef: 'token-hash-pepper' }
+  { name: 'GOOGLE_OAUTH_CLIENT_ID', value: googleOAuthClientId }
+  { name: 'MCP_SERVER_URL', value: effectiveMcpServerUrl }
+  { name: 'DEV_AUTH_ENABLED', value: devAuthEnabled ? 'true' : 'false' }
+]
+var devAuthEnv = devAuthEnabled ? [
+  { name: 'DEV_AUTH_SECRET', secretRef: 'dev-auth-secret' }
+] : []
 
 var healthProbe = {
   path: '/health'
@@ -98,13 +147,7 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
           identity: appIdentityId
         }
       ]
-      secrets: [
-        {
-          name: 'token-hash-pepper'
-          keyVaultUrl: '${keyVaultUri}secrets/${pepperSecretName}'
-          identity: appIdentityId
-        }
-      ]
+      secrets: devAuthEnabled ? [pepperSecret, devAuthSecret] : [pepperSecret]
     }
     template: {
       containers: [
@@ -115,21 +158,7 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
             cpu: json(cpu)
             memory: memory
           }
-          env: [
-            { name: 'JOLT_ENV', value: environmentName }
-            { name: 'STORAGE_MODE', value: 'azure' }
-            { name: 'AUTH_MODE', value: 'managed_identity' }
-            // DefaultAzureCredential picks the user-assigned identity by client id.
-            { name: 'AZURE_CLIENT_ID', value: appIdentityClientId }
-            { name: 'COSMOS_ENDPOINT', value: cosmosEndpoint }
-            { name: 'COSMOS_DATABASE', value: cosmosDatabaseName }
-            { name: 'BLOB_ACCOUNT_URL', value: blobEndpoint }
-            { name: 'BLOB_CONTAINER', value: blobContainerName }
-            { name: 'KEYVAULT_URL', value: keyVaultUri }
-            { name: 'CORS_ORIGINS', value: corsOrigins }
-            { name: 'CORS_ORIGIN_REGEX', value: corsOriginRegex }
-            { name: 'TOKEN_HASH_PEPPER', secretRef: 'token-hash-pepper' }
-          ]
+          env: concat(baseEnv, devAuthEnv)
           probes: [
             {
               type: 'Startup'
@@ -176,4 +205,5 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
 
 output name string = app.name
 output fqdn string = app.properties.configuration.ingress.fqdn
+output mcpServerUrl string = effectiveMcpServerUrl
 output environmentName string = managedEnvironment.name

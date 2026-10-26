@@ -12,7 +12,7 @@
 //   * Cosmos DB for NoSQL, serverless: database + all containers/partition keys/
 //     composite indexes from LLD §6 (infra/cosmos-containers.json)
 //   * Storage account with a private `sources` container and Blob CORS
-//   * Key Vault (RBAC) with the `token-hash-pepper` secret
+//   * Key Vault (RBAC) with the `token-hash-pepper` and `dev-auth-secret` secrets
 //   * Container Apps environment + `jolt-api` app (only when containerImage is set)
 // and the least-privilege role assignments between them. See docs/DEPLOY.md.
 
@@ -73,6 +73,19 @@ param githubEnvironment string = 'dev'
 @secure()
 @description('Initial token-hash pepper. Pass only on first deploy (deploy-infra.sh does); empty keeps the existing secret.')
 param tokenHashPepper string = ''
+
+@description('Google OAuth 2.0 client id(s), comma-separated, whose ID tokens POST /v1/auth/google accepts (GOOGLE_OAUTH_CLIENT_ID). Not a secret. Empty: Google sign-in answers 503.')
+param googleOAuthClientId string = ''
+
+@description('MCP address shown to users by GET /v1/me (MCP_SERVER_URL). Empty: https://<app FQDN>/mcp/sse.')
+param mcpServerUrl string = ''
+
+@description('Dev-only sign-in by email (POST /v1/auth/dev), for the deploy smoke test. Guarded by the Key Vault secret `dev-auth-secret`. Must stay false in prod (the app refuses to start).')
+param devAuthEnabled bool = false
+
+@secure()
+@description('Initial dev sign-in secret. Pass only on first deploy (deploy-infra.sh does); empty keeps the existing secret.')
+param devAuthSecret string = ''
 
 @description('Extra tags.')
 param tags object = {}
@@ -181,6 +194,9 @@ module keyVault 'modules/keyvault.bicep' = {
     appPrincipalId: identity.outputs.appIdentityPrincipalId
     developerPrincipalId: developerPrincipalId
     tokenHashPepper: tokenHashPepper
+    devAuthSecret: devAuthSecret
+    // The deploy workflow reads the dev sign-in secret for its smoke test.
+    devSecretReaderPrincipalId: devAuthEnabled ? identity.outputs.githubIdentityPrincipalId : ''
   }
 }
 
@@ -209,6 +225,10 @@ module app 'modules/containerapp.bicep' = if (!empty(containerImage)) {
     pepperSecretName: keyVault.outputs.pepperSecretName
     corsOrigins: join(browserOrigins, ',')
     corsOriginRegex: corsOriginRegex
+    googleOAuthClientId: googleOAuthClientId
+    mcpServerUrl: mcpServerUrl
+    devAuthEnabled: devAuthEnabled
+    devAuthSecretName: keyVault.outputs.devAuthSecretName
     minReplicas: minReplicas
     maxReplicas: maxReplicas
   }
@@ -228,6 +248,7 @@ output keyVaultUri string = keyVault.outputs.uri
 output appIdentityClientId string = identity.outputs.appIdentityClientId
 output containerAppName string = names.containerApp
 output containerAppFqdn string = empty(containerImage) ? '' : app!.outputs.fqdn
+output mcpServerUrl string = empty(containerImage) ? '' : app!.outputs.mcpServerUrl
 output githubDeployClientId string = identity.outputs.githubIdentityClientId
 output githubFederatedSubject string = identity.outputs.githubSubject
 output tenantId string = tenant().tenantId

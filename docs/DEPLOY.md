@@ -11,6 +11,7 @@ to paste anywhere.
 - [1. Prerequisites](#1-prerequisites)
 - [2. Review the parameters](#2-review-the-parameters)
 - [3. Deploy](#3-deploy)
+- [Google sign-in](#google-sign-in)
 - [4. Verify](#4-verify)
 - [5. Automatic deploys from GitHub](#5-automatic-deploys-from-github)
 - [Configuration and secrets](#configuration-and-secrets)
@@ -31,9 +32,9 @@ globally unique and the same on every run.
 | User-assigned Managed Identity | `id-jolt-dev-github` | GitHub Actions signs in as this (OIDC federated credential, no secret). |
 | Log Analytics workspace | `log-jolt-dev` | Container Apps logs; 30-day retention, 1 GB/day cap. |
 | Container Registry (Basic) | `crjoltdev<sfx>` | Images `jolt-api:<git-sha>`. |
-| Cosmos DB for NoSQL, **serverless** | `cosmos-jolt-dev-<sfx>` | Database `jolt`; the 11 containers, partition keys and composite indexes of LLD §6 (from `infra/cosmos-containers.json`, kept equal to `jolt/data/cosmos.py` by `tests/test_infra.py`). Account keys disabled. Periodic backup every 24 h, kept 48 h. |
+| Cosmos DB for NoSQL, **serverless** | `cosmos-jolt-dev-<sfx>` | Database `jolt`; the 12 containers (`tokens` added by BE-03), partition keys and composite indexes of LLD §6 (from `infra/cosmos-containers.json`, kept equal to `jolt/data/cosmos.py` by `tests/test_infra.py`). Account keys disabled. Periodic backup every 24 h, kept 48 h. |
 | Storage account (StorageV2, LRS, Hot) | `stjoltdev<sfx>` | Private container `sources`; Blob CORS for the app origins; blob and container soft delete 7 days; shared keys disabled (uploads use user-delegation SAS). |
-| Key Vault (RBAC) | `kv-jolt-dev-<sfx8>` | Secret `token-hash-pepper`; per-user provider keys `apikey-*` written by the app. Soft delete 7 days, no purge protection (dev). |
+| Key Vault (RBAC) | `kv-jolt-dev-<sfx8>` | Secrets `token-hash-pepper` and `dev-auth-secret` (dev sign-in, BE-03); per-user provider keys `apikey-*` written by the app. Soft delete 7 days, no purge protection (dev). |
 | Container Apps environment | `cae-jolt-dev` | Consumption plan. |
 | Container App | `jolt-api` | External HTTPS ingress → port 8000, `/health` startup/readiness/liveness probes, scale 0..1, 0.5 vCPU / 1 GiB. |
 
@@ -48,6 +49,7 @@ Role assignments (least privilege):
 | `id-jolt-dev-github` | AcrPush + Reader | registry | Push images; `az acr login` needs to read the registry. |
 | `id-jolt-dev-github` | Container Apps Contributor | resource group | `az containerapp update` (includes joining the environment). |
 | `id-jolt-dev-github` | Managed Identity Operator | `id-jolt-dev-api` | Updating an app re-asserts its identity. |
+| `id-jolt-dev-github` | Key Vault Secrets User | secret `dev-auth-secret` only | The deploy smoke test signs in with the dev route (only when `devAuthEnabled`). |
 | you (optional) | Cosmos Data Contributor, Blob Data Contributor, Secrets Officer | as above | Only if `developerPrincipalId` is set, for local runs against dev. |
 
 **Registry: ACR, not GHCR.** The Container App pulls with its Managed Identity
@@ -69,15 +71,19 @@ costs cents.
 3. Register the resource providers (once per subscription).
 4. Review `infra/main.dev.bicepparam`: region, Netlify origins, optional
    `developerPrincipalId`.
-5. Run `scripts/deploy-infra.sh`.
-6. Check `https://<fqdn>/health` and run the smoke test.
-7. Set six GitHub repository variables (printed by the script, or let it set them
-   with `--set-github-vars`).
-8. In GitHub, restrict the `dev` environment to the `main` branch.
-9. Optional: a budget alert on the subscription (LLD §9).
+5. Create the Google OAuth client id and put it in `googleOAuthClientId`
+   ([Google sign-in](#google-sign-in)). It can also be done after the first
+   deploy (then rerun with `--skip-build`); until then Google sign-in answers 503.
+6. Run `scripts/deploy-infra.sh`.
+7. Check `https://<fqdn>/health` and run the smoke test.
+8. Set seven GitHub repository variables (printed by the script, or let it set
+   them with `--set-github-vars`).
+9. In GitHub, restrict the `dev` environment to the `main` branch.
+10. Optional: a budget alert on the subscription (LLD §9).
 
-Nothing else is manual. The only secret, the token-hash pepper, is generated on
-the first deploy and never leaves Key Vault.
+Nothing else is manual. The two secrets, the token-hash pepper and the dev
+sign-in secret, are generated on the first deploy and never leave Key Vault (the
+deploy workflow reads the dev sign-in secret from there, masked).
 
 ## 1. Prerequisites
 
@@ -110,6 +116,9 @@ with `--local-build`. `gh` only with `--set-github-vars`.
 | `githubRepository` | `Dhiwakar1997/jolt-backend` | The repo allowed to deploy. Empty disables the GitHub identity. |
 | `githubEnvironment` | `dev` | Must match `environment:` in `deploy-dev.yml`. |
 | `maxReplicas` | `1` | Keep 1 while MCP uses SSE (see Troubleshooting). |
+| `googleOAuthClientId` | empty | The Google OAuth client id ([Google sign-in](#google-sign-in)). Comma-separate several (web + mobile). |
+| `mcpServerUrl` | empty | Leave empty for `https://<app FQDN>/mcp/sse`; set it when a custom domain fronts the API. Shown in the app by `GET /v1/me`. |
+| `devAuthEnabled` | `true` | Dev sign-in by email (`POST /v1/auth/dev`) for the deploy smoke test, guarded by `dev-auth-secret`. Must be `false` in any prod parameters file: the app refuses to start with it in prod. |
 
 **Netlify previews.** API CORS accepts the regex, so every deploy preview can call
 `/v1`. Azure Blob CORS only takes exact origins (or `*`), so a preview can upload
@@ -130,9 +139,10 @@ scripts/deploy-infra.sh
 What it does:
 
 1. Reads the resource group and region from `infra/main.dev.bicepparam`.
-2. If Key Vault has no `token-hash-pepper` secret yet (checked through ARM, no
-   data-plane access needed), generates one with `openssl rand` and passes it to
-   the deployment through an environment variable. Later runs never touch it.
+2. If Key Vault has no `token-hash-pepper` or `dev-auth-secret` secret yet
+   (checked through ARM, no data-plane access needed), generates it with
+   `openssl rand` and passes it to the deployment through an environment
+   variable. Later runs never touch them.
 3. On a fresh environment: deploys everything except the Container App (the
    registry has to exist before an image can be pushed).
 4. Builds the image from the current commit in Azure with `az acr build`
@@ -152,9 +162,36 @@ The equivalent raw command, if you prefer to drive it yourself:
 ```bash
 export JOLT_IMAGE=<acr>.azurecr.io/jolt-api:<sha>   # empty: everything but the app
 export JOLT_TOKEN_HASH_PEPPER="$(openssl rand -base64 48)"   # first deploy only, else ""
+export JOLT_DEV_AUTH_SECRET_INIT="$(openssl rand -hex 32)"    # first deploy only, else ""
 az deployment sub create -n jolt-dev -l centralindia \
   -f infra/main.bicep -p infra/main.dev.bicepparam
 ```
+
+## Google sign-in
+
+The app signs people in with Google (decision D4): the browser gets an ID token
+from Google Identity Services and posts it to `POST /v1/auth/google`, which
+verifies it against Google's public keys (fetched from
+`https://www.googleapis.com/oauth2/v3/certs` and cached, so the app needs
+outbound HTTPS to Google, which Container Apps has by default) and checks that
+it was issued to Jolt's client id. No client secret is involved.
+
+1. Google Cloud console → APIs & Services → OAuth consent screen: configure it
+   (External, app name "Jolt", support e-mail; scopes `openid`, `email`,
+   `profile`). While it is in "Testing", add the testers' Google accounts.
+2. APIs & Services → Credentials → Create credentials → OAuth client ID →
+   type **Web application**. Authorized JavaScript origins: every origin the app
+   runs on, exactly as in `appOrigins` / `netlifyOrigins` (e.g.
+   `http://localhost:5173`, `https://jolt-app.netlify.app`). No redirect URI is
+   needed for the ID-token flow. Netlify deploy previews cannot be listed by
+   pattern; use the production or a fixed branch-deploy origin to test sign-in.
+3. Copy the client id (`<number>-<hash>.apps.googleusercontent.com`) into
+   `googleOAuthClientId` in `infra/main.dev.bicepparam` and run
+   `scripts/deploy-infra.sh --skip-build`. The front end needs the same client
+   id in its own configuration.
+
+Check: `POST /v1/auth/google` with a garbage token now answers 401 (it answered
+503 "not configured" before).
 
 ## 4. Verify
 
@@ -165,21 +202,30 @@ pip install -r requirements.txt
 python scripts/smoke.py --base-url https://$FQDN
 ```
 
-The smoke test creates a throwaway user (`smoke <timestamp>`) and walks the whole
-loop: health, MCP handshake and tool list, upload URL → PUT a PNG to Blob →
-confirm, the sync tool sequence with canned extraction and questions, due
-reviews, stage 1 and stage 2, agent grading, coverage. Exit code 0 means pass.
+The smoke test signs in a throwaway user (`smoke-<timestamp>-<random>@smoke.jolt.test`)
+with the dev route and walks the whole loop: health, `GET /v1/me`, create an MCP
+token (and check `/mcp` refuses the app token), MCP handshake and tool list,
+upload URL → PUT a PNG to Blob → confirm, the sync tool sequence with canned
+extraction and questions, due reviews, stage 1 and stage 2, agent grading,
+coverage, then revokes the MCP token and signs out (both refused afterwards).
+Exit code 0 means pass. It needs the dev sign-in secret in `JOLT_DEV_AUTH_SECRET`
+(or `--dev-auth-secret`); `deploy-infra.sh --smoke` and the deploy workflow
+supply it. By hand, with Key Vault data access:
+`export JOLT_DEV_AUTH_SECRET=$(az keyvault secret show --vault-name <kv> -n dev-auth-secret --query value -o tsv)`.
 The first request after idle takes a few seconds (scale from zero); the script
 waits up to `--wait` seconds (default 120) for `/health`.
 
-MCP clients connect to `https://<fqdn>/mcp/sse` with header
-`Authorization: Bearer <token>`.
+MCP clients connect to `https://<fqdn>/mcp/sse` (the `mcpServerUrl` output, also
+shown in the app) with header `Authorization: Bearer <MCP token>`. A person
+creates MCP tokens in the app (`POST /v1/mcp-tokens`); the app's own token is
+refused on `/mcp`.
 
 ## 5. Automatic deploys from GitHub
 
 `.github/workflows/deploy-dev.yml` runs on every push to `main` (and on manual
 dispatch): the CI checks, then build → push to ACR → `az containerapp update` →
-`scripts/smoke.py --expect-version <sha>` (waits until the new revision answers).
+read `dev-auth-secret` from Key Vault (masked) → `scripts/smoke.py --expect-version <sha>`
+(waits until the new revision answers).
 
 Set these **repository variables** (Settings → Secrets and variables → Actions →
 Variables; not secrets, none of them is sensitive). `deploy-infra.sh` prints
@@ -193,6 +239,7 @@ them; `--set-github-vars` sets them with `gh`:
 | `AZURE_RESOURCE_GROUP` | `jolt-dev` |
 | `ACR_NAME` | `crjoltdev<sfx>` (output `registryName`) |
 | `CONTAINER_APP_NAME` | `jolt-api` |
+| `KEYVAULT_NAME` | `kv-jolt-dev-<sfx8>` (output `keyVaultName`); the smoke test reads `dev-auth-secret` from it |
 
 They must be repository variables, not `dev` environment variables: the job's
 `if:` reads `vars.AZURE_CLIENT_ID` before the environment is entered. Until it is
@@ -223,9 +270,13 @@ container by Bicep (`infra/modules/containerapp.bicep`):
 | `CORS_ORIGINS` | `appOrigins` + `netlifyOrigins` | Bicep param | set Netlify origins |
 | `CORS_ORIGIN_REGEX` | `corsOriginRegex` | Bicep param | adjust site name |
 | `TOKEN_HASH_PEPPER` | Key Vault secret `token-hash-pepper` (secret reference via the app identity) | generated once by `deploy-infra.sh` | none; never rotate casually (it invalidates every token) |
+| `GOOGLE_OAUTH_CLIENT_ID` | `googleOAuthClientId` | Bicep param | create the OAuth client ([Google sign-in](#google-sign-in)) |
+| `MCP_SERVER_URL` | `https://<app FQDN>/mcp/sse`, or `mcpServerUrl` | Bicep | — (set `mcpServerUrl` for a custom domain) |
+| `DEV_AUTH_ENABLED` | `true` (from `devAuthEnabled`) | Bicep param | `false` in prod |
+| `DEV_AUTH_SECRET` | Key Vault secret `dev-auth-secret` (secret reference), only when `devAuthEnabled` | generated once by `deploy-infra.sh` | none |
 | `APP_VERSION` | git SHA | Docker build arg | — |
 | `COSMOS_KEY`, `BLOB_*_KEY`, `BLOB_CONNECTION_STRING` | unset | — | — (keys are disabled) |
-| `BLOB_SAS_TTL_SECONDS`, `LEASE_TTL_SECONDS`, `FSRS_DESIRED_RETENTION`, `TOKEN_PREFIX`, `*_API_BASE` | defaults | code | — |
+| `BLOB_SAS_TTL_SECONDS`, `LEASE_TTL_SECONDS`, `FSRS_DESIRED_RETENTION`, `APP_TOKEN_PREFIX`, `MCP_TOKEN_PREFIX`, `*_API_BASE` | defaults | code | — |
 
 To change a value without a code change, edit the Bicep parameter and run
 `scripts/deploy-infra.sh --skip-build`. To rotate the pepper (logs every user
@@ -276,8 +327,9 @@ az keyvault list-deleted --query "[?starts_with(name, 'kv-jolt-dev-')].name" -o 
   | xargs -r -n1 az keyvault purge --name
 ```
 
-Then `scripts/deploy-infra.sh` builds a clean environment again (a new pepper is
-generated, so old tokens die with the old data).
+Then `scripts/deploy-infra.sh` builds a clean environment again (a new pepper and
+dev sign-in secret are generated, so old tokens die with the old data; update
+nothing in GitHub except `KEYVAULT_NAME` if the vault name changed).
 
 ## Running locally against dev
 
@@ -290,12 +342,14 @@ generated, so old tokens die with the old data).
    BLOB_ACCOUNT_URL=<output blobAccountUrl>
    KEYVAULT_URL=<output keyVaultUri>
    TOKEN_HASH_PEPPER=<az keyvault secret show --vault-name <kv> -n token-hash-pepper --query value -o tsv>
+   GOOGLE_OAUTH_CLIENT_ID=<the client id, if you sign in with Google locally>
    ```
 3. `az login`, then `uvicorn jolt.main:app --reload`. DefaultAzureCredential uses
    your CLI login.
 
-Without Azure at all: `STORAGE_MODE=memory PUBLIC_BASE_URL=http://localhost:8000 uvicorn jolt.main:app --port 8000`
-(uploads are served by `/_dev/blob`), and `python scripts/smoke.py --base-url http://localhost:8000`.
+Without Azure at all: `STORAGE_MODE=memory DEV_AUTH_ENABLED=true PUBLIC_BASE_URL=http://localhost:8000 uvicorn jolt.main:app --port 8000`
+(uploads are served by `/_dev/blob`; sign in with `POST /v1/auth/dev {"email": "you@example.com"}`,
+no secret needed in memory mode), and `python scripts/smoke.py --base-url http://localhost:8000`.
 
 ## Troubleshooting
 
@@ -316,6 +370,13 @@ Without Azure at all: `STORAGE_MODE=memory PUBLIC_BASE_URL=http://localhost:8000
 - **Browser upload blocked by CORS:** the page's origin must be in
   `netlifyOrigins`/`appOrigins` exactly (scheme + host + port, no slash);
   redeploy with `--skip-build`.
+- **Google sign-in answers 503 "not configured":** `googleOAuthClientId` is empty;
+  see [Google sign-in](#google-sign-in). **401 "issued for another client":** the
+  front end uses a different client id than `googleOAuthClientId`.
+- **Smoke test fails at `POST /v1/auth/dev` with 403:** wrong or missing
+  `JOLT_DEV_AUTH_SECRET`; with 404: `devAuthEnabled` is false. In the workflow,
+  check the `KEYVAULT_NAME` variable and that the deploy ran Bicep once since
+  BE-03 (it grants the GitHub identity read access to that one secret).
 - **Deploy job skipped in GitHub:** `AZURE_CLIENT_ID` repository variable missing,
   or the run is not on `main`.
 - **`azure/login` fails with "AADSTS70021: No matching federated identity record":**

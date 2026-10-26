@@ -76,21 +76,27 @@ az bicep version >/dev/null 2>&1 || az bicep install
 
 RG_EXISTS="$(az group exists -n "$RG")"
 
-# ---- Token-hash pepper: generate once, only if Key Vault does not hold one ----
-# Checked through ARM (secret metadata, no value), so the deployer needs no
-# Key Vault data-plane role.
+# ---- Secrets: generate once, only if Key Vault does not hold them yet --------
+# token-hash-pepper (TOKEN_HASH_PEPPER) and dev-auth-secret (DEV_AUTH_SECRET,
+# BE-03). Checked through ARM (secret metadata, no value), so the deployer needs
+# no Key Vault data-plane role.
 export JOLT_TOKEN_HASH_PEPPER=""
-NEED_PEPPER=1
+export JOLT_DEV_AUTH_SECRET_INIT=""
+KV_ID=""
 if [[ "$RG_EXISTS" == "true" ]]; then
   KV_ID="$(az keyvault list -g "$RG" --query "[?starts_with(name, 'kv-jolt-${ENV_NAME}-')].id | [0]" -o tsv)"
-  if [[ -n "$KV_ID" ]] && az resource show --ids "${KV_ID}/secrets/token-hash-pepper" >/dev/null 2>&1; then
-    NEED_PEPPER=0
-  fi
 fi
-if [[ "$NEED_PEPPER" == 1 ]]; then
+kv_has_secret() { [[ -n "$KV_ID" ]] && az resource show --ids "${KV_ID}/secrets/$1" >/dev/null 2>&1; }
+if ! kv_has_secret token-hash-pepper; then
   log "Key Vault has no token-hash-pepper yet: generating one (it will live only in Key Vault)"
   JOLT_TOKEN_HASH_PEPPER="$(openssl rand -base64 48 | tr -d '\n')"
 fi
+if ! kv_has_secret dev-auth-secret; then
+  log "Key Vault has no dev-auth-secret yet: generating one (dev sign-in for the smoke test)"
+  JOLT_DEV_AUTH_SECRET_INIT="$(openssl rand -hex 32)"
+fi
+# Kept for --smoke on this run; the deployment writes it to Key Vault only once.
+GENERATED_DEV_AUTH_SECRET="$JOLT_DEV_AUTH_SECRET_INIT"
 
 deploy() {
   # $1 = image ('' = infra only). Prints the deployment outputs as JSON.
@@ -132,8 +138,9 @@ if [[ -z "$IMAGE" ]]; then
     log "phase 1/2: infrastructure without the app (no registry to build into yet)"
     OUTPUTS="$(deploy '')"
     ACR="$(output registryName <<<"$OUTPUTS")"
-    # The pepper secret now exists; do not write it again.
+    # The secrets now exist; do not write them again.
     JOLT_TOKEN_HASH_PEPPER=""
+    JOLT_DEV_AUTH_SECRET_INIT=""
   fi
   LOGIN_SERVER="$(az acr show -n "$ACR" --query loginServer -o tsv)"
   TAG="$(git rev-parse HEAD)"
@@ -158,6 +165,7 @@ log "deploying ${RG} with image ${IMAGE}"
 OUTPUTS="$(deploy "$IMAGE")"
 FQDN="$(output containerAppFqdn <<<"$OUTPUTS")"
 BASE_URL="https://${FQDN}"
+KEYVAULT_NAME="$(output keyVaultName <<<"$OUTPUTS")"
 
 log "waiting for ${BASE_URL}/health"
 for _ in $(seq 1 40); do
@@ -174,7 +182,7 @@ cat >&2 <<EOF
 
 Deployed.
   API:            ${BASE_URL}
-  MCP (SSE):      ${BASE_URL}/mcp/sse
+  MCP (SSE):      $(output mcpServerUrl <<<"$OUTPUTS")
   Image:          ${IMAGE}
   Resource group: ${RG}
 
@@ -185,6 +193,7 @@ GitHub Actions repository variables for .github/workflows/deploy-dev.yml:
   AZURE_RESOURCE_GROUP=${RG}
   ACR_NAME=$(output registryName <<<"$OUTPUTS")
   CONTAINER_APP_NAME=$(output containerAppName <<<"$OUTPUTS")
+  KEYVAULT_NAME=${KEYVAULT_NAME}
 EOF
 
 if [[ "$SET_GH_VARS" == 1 ]]; then
@@ -196,10 +205,20 @@ if [[ "$SET_GH_VARS" == 1 ]]; then
   gh variable set AZURE_RESOURCE_GROUP -b "$RG"
   gh variable set ACR_NAME -b "$(output registryName <<<"$OUTPUTS")"
   gh variable set CONTAINER_APP_NAME -b "$(output containerAppName <<<"$OUTPUTS")"
+  gh variable set KEYVAULT_NAME -b "$KEYVAULT_NAME"
   log "GitHub variables set"
 fi
 
 if [[ "$RUN_SMOKE" == 1 ]]; then
+  # The smoke test signs in with POST /v1/auth/dev, which needs the dev-auth
+  # secret: the one generated on this run, else $JOLT_DEV_AUTH_SECRET, else read
+  # from Key Vault (needs data access, e.g. via developerPrincipalId).
+  export JOLT_DEV_AUTH_SECRET="${GENERATED_DEV_AUTH_SECRET:-${JOLT_DEV_AUTH_SECRET:-}}"
+  if [[ -z "$JOLT_DEV_AUTH_SECRET" ]]; then
+    JOLT_DEV_AUTH_SECRET="$(az keyvault secret show --vault-name "$KEYVAULT_NAME" \
+      -n dev-auth-secret --query value -o tsv 2>/dev/null || true)"
+  fi
+  [[ -n "$JOLT_DEV_AUTH_SECRET" ]] || log "warning: no dev-auth secret; set JOLT_DEV_AUTH_SECRET for the smoke test"
   log "smoke test"
   python3 scripts/smoke.py --base-url "$BASE_URL"
 fi

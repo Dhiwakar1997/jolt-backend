@@ -31,6 +31,23 @@ param netlifyOrigins = [
 // API. Blob CORS cannot take a pattern; see docs/DEPLOY.md, "Netlify previews".
 param corsOriginRegex = '^https://deploy-preview-[0-9]+--jolt-app\\.netlify\\.app$'
 
+// OWNER: Google sign-in. Create an OAuth 2.0 client id of type "Web application"
+// in Google Cloud (APIs & Services > Credentials), with the app's origins
+// (http://localhost:5173 and the Netlify origins) as Authorized JavaScript
+// origins, and paste its client id here, e.g.
+// '1234567890-abc123.apps.googleusercontent.com'. Not a secret. Empty = Google
+// sign-in answers 503 until it is set (docs/DEPLOY.md, "Google sign-in").
+param googleOAuthClientId = ''
+
+// Optional: the MCP address shown in the app. Empty = https://<app FQDN>/mcp/sse.
+param mcpServerUrl = ''
+
+// Dev sign-in by email (POST /v1/auth/dev) for the deploy smoke test. Guarded by
+// the Key Vault secret `dev-auth-secret`, generated once by
+// scripts/deploy-infra.sh; only the app and the GitHub deploy identity can read it.
+param devAuthEnabled = true
+param devAuthSecret = readEnvironmentVariable('JOLT_DEV_AUTH_SECRET_INIT', '')
+
 param cosmosDatabaseName = 'jolt'
 param blobContainerName = 'sources'
 

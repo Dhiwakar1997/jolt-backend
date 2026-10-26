@@ -13,6 +13,8 @@ name: Deploy dev
 #   AZURE_RESOURCE_GROUP   jolt-dev
 #   ACR_NAME               registry name (crjoltdev...)
 #   CONTAINER_APP_NAME     jolt-api
+#   KEYVAULT_NAME          Key Vault name (kv-jolt-dev-...): the smoke test reads
+#                          the dev sign-in secret `dev-auth-secret` from it (BE-03)
 # Until AZURE_CLIENT_ID is set the deploy job is skipped, not failed. It never
 # runs for branches other than main. See docs/DEPLOY.md.
 
@@ -54,6 +56,7 @@ jobs:
       RG: ${{ vars.AZURE_RESOURCE_GROUP }}
       ACR_NAME: ${{ vars.ACR_NAME }}
       APP_NAME: ${{ vars.CONTAINER_APP_NAME }}
+      KEYVAULT_NAME: ${{ vars.KEYVAULT_NAME }}
       TAG: ${{ inputs.image_tag || github.sha }}
       BUILD: ${{ inputs.image_tag == '' }}
     steps:
@@ -110,6 +113,19 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: requirements.txt
+
+      - name: Dev sign-in secret for the smoke test
+        # id-jolt-dev-github may read this one secret (Key Vault Secrets User on
+        # the secret only, from infra/). The value is masked in the logs.
+        run: |
+          if [[ -z "$KEYVAULT_NAME" ]]; then
+            echo "::error::Repository variable KEYVAULT_NAME is not set (see docs/DEPLOY.md)"
+            exit 1
+          fi
+          secret=$(az keyvault secret show --vault-name "$KEYVAULT_NAME" \
+            --name dev-auth-secret --query value -o tsv)
+          echo "::add-mask::${secret}"
+          echo "JOLT_DEV_AUTH_SECRET=${secret}" >> "$GITHUB_ENV"
 
       - name: Smoke test
         run: |

@@ -45,6 +45,8 @@ def test_container_app_env_vars_are_settings():
     bicep = (INFRA / "modules" / "containerapp.bicep").read_text()
     names = set(re.findall(r"\{ name: '([A-Z0-9_]+)'", bicep))
     assert {"COSMOS_ENDPOINT", "TOKEN_HASH_PEPPER", "CORS_ORIGINS", "AZURE_CLIENT_ID"} <= names
+    sign_in = {"GOOGLE_OAUTH_CLIENT_ID", "MCP_SERVER_URL", "DEV_AUTH_ENABLED", "DEV_AUTH_SECRET"}
+    assert sign_in <= names  # BE-03
     fields = {f.upper() for f in Settings.model_fields}
     assert names - SDK_ENV <= fields, names - SDK_ENV - fields
 
