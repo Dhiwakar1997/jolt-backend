@@ -18,19 +18,19 @@ Frame numbers are phone / web / tablet.
 | Splash, Welcome | 1, 2 / 21 | — | — | client | — |
 | Sign in (Google) | 2 / 21 | `POST /v1/auth/google` → app token + user | Only anonymous `POST /v1/accounts` | missing | BE-03 |
 | Connect your model | 3 / 21 | Create an MCP token shown once, MCP server URL, per-client steps, nightly prompt | Token only from account creation, same token for app and MCP | missing | BE-03 (`/v1/mcp-tokens`, `/v1/me`), BE-04 (`docs/CONNECT.md`, `GET /v1/sync/prompt`) |
-| First track | 4 / 21 | Create a notes track with name and optional outline (→ `draft`); or enrol in curated DSA | `POST /v1/tracks {name, syllabus}` gives a `refined` agenda, no outline/`draft`, no `kind` | partial | BE-07 (outline → `draft`, `kind`), BE-09 (catalog, enrol) |
+| First track | 4 / 21 | Create a notes track with name and optional outline (→ `draft`); or enrol in curated DSA | `POST /v1/tracks {name, kind: notes, outline?}` → `draft` agenda with the outline (BE-07) | partial | Curated catalog and enrol: BE-09 |
 | Waiting for first sync | — / 21 | Poll sync status; resume point for a returning user | — | missing | BE-04 (`GET /v1/sync/status`), BE-03 (`GET /v1/me` onboarding state) |
 
 ## Today (FE-04)
 
 | Screen part | Frames | Needs | Today | Status | Covered by |
 |---|---|---|---|---|---|
-| Due card | 5 / 22 / 37 | Due count and per-track breakdown | `POST /v1/review-sessions` items carry `track_id`, `track_name` (BE-06); a per-track count without starting a session is still missing | partial | BE-07 (due per track in `GET /v1/tracks`) |
+| Due card | 5 / 22 / 37 | Due count and per-track breakdown | `GET /v1/tracks` `due_count` per track (BE-07); the total is their sum | ready | — |
 | Sync line | 5 / 22 / 37 | Last sync time, client, late / never | — | missing | BE-04 |
 | Stats | 5 / 22 / 37 | Streak, retention, reviews this week | — | missing | BE-08 (`GET /v1/progress`) |
-| Tracks | 5 / 22 / 37 | Concepts, due and sources count per track | `GET /v1/tracks` has no counts | partial | BE-07 |
+| Tracks | 5 / 22 / 37 | Concepts, due and sources count per track | `GET /v1/tracks` `concept_count`, `due_count`, `source_count` (BE-07) | ready | — |
 | Tonight's uploads | 5 / 22 / 37 | Unprocessed sources with their track | `GET /v1/sources?status=unprocessed` with `track_id`, `track_name`, `title`, `page_count` (BE-05) | ready | — |
-| What's new | 5 / 22 / 37 | Concepts added by the last sync, with the source date ("Found in your 12 Sep notes") | — | missing | **No brief covers it.** Proposal: BE-04 records concept ids per sync run and `GET /v1/sync/runs` returns them, or BE-07 adds `GET /v1/concepts?since=` |
+| What's new | 5 / 22 / 37 | Concepts added by the last sync, with the source date ("Found in your 12 Sep notes") | Track detail items carry `found_in` (BE-07); no "since the last sync" list | missing | **No brief covers it.** BE-07 did not add `GET /v1/concepts?since=` (outside its brief); BE-04's sync runs recording concept ids remains the proposal |
 | Empty / first-run states | — | Same data as above, plus `GET /v1/me` | — | missing | BE-03, BE-04 |
 
 ## Review (FE-06)
@@ -47,15 +47,15 @@ Frame numbers are phone / web / tablet.
 
 | Screen | Frames | Needs | Today | Status | Covered by |
 |---|---|---|---|---|---|
-| Tracks | 10 / 27 / 41 | List with counts, `kind`, curated badge | `GET /v1/tracks` (agenda, origin; no counts, no kind) | partial | BE-07, BE-09 (`kind`) |
-| New track sheet | 10 / 27 / 41 | Name and optional outline → `draft` agenda | `POST /v1/tracks` (labels → `refined`) | partial | BE-07 |
-| Track detail | 11 / 28 / 42 | One call: agenda items with state (new / learning / due / mastered / not covered), next review, question count; due today; recent sources | Agenda via `GET /v1/tracks`; coverage via `GET /v1/tracks/{id}/coverage`; no per-item state, no `GET /v1/tracks/{id}` | partial | BE-07 |
+| Tracks | 10 / 27 / 41 | List with counts, `kind`, curated badge | `GET /v1/tracks`: counts, `kind`, `archived`, `retention`, `origin` (the curated badge); `PATCH` rename / archive (BE-07) | ready | Curated `description`, enrol: BE-09 |
+| New track sheet | 10 / 27 / 41 | Name and optional outline → `draft` agenda | `POST /v1/tracks {name, kind, outline}` (BE-07) | ready | — |
+| Track detail | 11 / 28 / 42 | One call: agenda items with state (new / learning / due / mastered / not covered), next review, question count; due today; recent sources | `GET /v1/tracks/{id}` (BE-07): 4 Cosmos reads, whatever the size | ready | — |
 | Syllabus mode pill and overlay | 11 / 28 / 42, 54 | `agenda.status` | In every `Track` | ready | — |
 | Lock toggle | 11 / 28 / 42 | Lock / unlock | `POST /v1/tracks/{id}/agenda/lock` and `/unlock` | ready | — |
-| "Added to the syllabus from your notes" | 11 / 28 / 42 | Per-item provenance (auto-added vs authored) | Only track-level `agenda.source` | partial | BE-07 (not named in the brief; add a per-item `source`) |
-| Concept | 12 / 29 / 43 | Summary, source and page, answer timeline (date, your words, correct, grade, feedback, question version), adaptive question note, FSRS state | `GET /v1/progress/concepts/{id}`: FSRS state and timeline with grade, correct, `grading`, `feedback`, `question_version` (BE-06); `GET /v1/concepts/{id}/questions`: version chain with `rewrite_reason` (BE-06); `GET /v1/reviews/{id}` has the learner's words; `POST /v1/concepts/{id}/unretire` (BE-06). No summary, source, words in the timeline, or `retired` flag in one call | partial | BE-07 (`GET /v1/concepts/{id}` folds these together) |
+| "Added to the syllabus from your notes" | 11 / 28 / 42 | Per-item provenance (auto-added vs authored) | Per-item `source` on every agenda item and Track detail row (BE-07) | ready | — |
+| Concept | 12 / 29 / 43 | Summary, source and page, answer timeline (date, your words, correct, grade, feedback, question version), adaptive question note, FSRS state | `GET /v1/concepts/{id}` (BE-07); `POST /v1/concepts/{id}/unretire` (BE-06) | ready | `page` is set only when the agent passes it (`jolt_log_session` / reconciliation `page`) |
 | Feedback panel gate | 12 / 29 / 43 | `has_api_key` | `GET /v1/settings/api-key` (works as a stand-in) | partial | BE-08 (`has_api_key` on `/v1/me`); panel content BE-11 |
-| "Something's wrong with this concept" | 12 / 29 / 43 | Store a correction note for the next sync | Agents can call `jolt_correct_concept`; no REST route | missing | BE-07 (`POST /v1/concepts/{id}/correction`) |
+| "Something's wrong with this concept" | 12 / 29 / 43 | Store a correction note for the next sync | `POST /v1/concepts/{id}/correction` → `jolt_sync.pending_corrections`, `jolt_get_pending_corrections`, `jolt_correct_concept` (BE-07) | ready | — |
 | DSA track (placeholder) | 13 / 30 / 44 | Curated track, enrol, patterns as syllabus, `pattern_match` questions, decision tree, library | — | missing | BE-09 |
 
 ## Sources and reader (FE-05, FE-08)
@@ -116,6 +116,38 @@ Frame numbers are phone / web / tablet.
   Today → What's new could list rewrites from BE-04's sync runs.
 - **No daily review cap yet.** → BE-08.
 
+**BE-07 decisions and follow-ups for the tracks and concept screens**
+
+- **Off-plan concepts** (brief §5): kept, reviewed as usual, flagged `off_plan`
+  on Track detail and left out of coverage, only on *locked* tracks (where
+  auto-add is skipped). A concept logged with no key on an unlocked track is
+  listed as an unfiled row, not off-plan.
+- **Archiving pauses a track**: its concepts leave review sessions and
+  `due_count` is 0 until unarchived. The track stays in `GET /v1/tracks`
+  (flagged); the app hides or greys it.
+- **Learners create `notes` tracks only.** `kind: dsa_patterns` is refused
+  (422): DSA tracks are curated (BE-09).
+- **The outline is cut mechanically** into draft items (one per line,
+  indentation nests, keys are slugs) so Track detail has rows at once; the model
+  tidies it at the next sync (`jolt_set_agenda`, `mark_refined`). The backend
+  still never shapes a syllabus.
+- **"No N+1" is a fixed number of reads**, not one: Tracks and Track detail are
+  4 single-partition reads, Concept 6 (besides authentication), tested by
+  counting Cosmos calls at two sizes. Per-concept question data is denormalised
+  on the card. Cards from before BE-07 are backfilled on first read (one query
+  each, once).
+- **Corrections wait on the card.** Up to 20 notes per concept; applying
+  `jolt_correct_concept` (even with unchanged text) clears them all, including
+  a note added after the agent read the list (rare race; the learner can add it
+  again).
+- **Reconciliation keeps old reviews on the old concept.** A `changed` concept's
+  successor inherits the card state but not the reviews (they were answers to
+  the old wording); they are not stamped `invalidated_by_extraction_id` (LLD
+  §7.7) because that would make a step's writes unbounded. A successor's mastery
+  must be re-earned by its own answers.
+- **`enrolled`** is `true` on a curated track where the caller has concepts;
+  BE-09 replaces it with real enrolment.
+
 ## Progress and settings (FE-09)
 
 | Screen part | Frames | Needs | Today | Status | Covered by |
@@ -140,25 +172,22 @@ Frame numbers are phone / web / tablet.
 
 To fix in the pass named, or sooner.
 
-1. **Ownership checks on track- and concept-keyed calls.** Concepts and questions
-   are partitioned by track and concept, not by user, and these paths check only
-   that the caller has *a* valid token, not that the track or concept is theirs:
-   `jolt_get_recent_concepts`, `jolt_diff_extractions`, `jolt_correct_concept`,
-   `jolt_create_questions`, `jolt_log_session` (any `track_id`). (Stage 1 now
-   requires the caller's card for the concept: fixed in BE-06; the new concept
-   routes check the same.) IDs are random
-   32-hex values, so this is not exploitable by guessing, but it breaks the
-   LLD §5 scope rule. → BE-07 (it reworks the concept read models), confirmed in the
-   BE-10 security review.
-2. **Supersede does not reconcile concepts.** `jolt_store_extraction(supersede=true)`
-   only marks the previous extraction `superseded`. The tool description promises
-   concept reconciliation (refined / changed / removed / new), which runs only
-   as a preview in `jolt_diff_extractions`. Until it lands, every concept a read
-   logs shows `is_new: true` in Past reads (BE-05). → BE-07 (its reconciliation-ceiling item).
-3. **`jolt_correct_concept` description vs behaviour.** The description says a
-   missing concept gives `updated: false`; the tool returns
-   `{error: "concept not found"}`. The output schema in the contract describes
-   what the code does. → fix the description in BE-07.
+1. ~~**Ownership checks on track- and concept-keyed calls.**~~ **Fixed in BE-07**
+   (decision A16): every concept-, question-, track- and source-keyed MCP tool
+   and REST route goes through `jolt/services/ownership.py` (a concept is the
+   caller's when they hold its card; writes need the caller's own track, so
+   curated tracks are read-only; curated tracks show each learner only their own
+   concepts). `tests/test_ownership.py` covers every such tool and route. To be
+   confirmed in the BE-10 security review.
+2. ~~**Supersede does not reconcile concepts.**~~ **Fixed in BE-07**:
+   `jolt_store_extraction(concepts=...)` reconciles (unchanged / refined /
+   changed / removed / new) with a documented ceiling of
+   `RECONCILE_MAX_CONCEPTS` (25) steps per call and a resumable checkpoint
+   (`jolt_continue_reconciliation`); Past reads' `is_new` is now meaningful. A
+   supersede *without* `concepts` still only moves the pointer.
+3. ~~**`jolt_correct_concept` description vs behaviour.**~~ **Fixed in BE-07**:
+   the description now says `{error: "concept not found"}`; the tool no longer
+   revives a superseded concept, and clears pending correction notes.
 4. **`PUT /v1/settings/retention` naming.** It stores *data* retention in days,
    which is easy to confuse with FSRS *desired retention* (Settings · Reviews). →
    BE-08 should fold it into `PATCH /v1/settings` with explicit names.
