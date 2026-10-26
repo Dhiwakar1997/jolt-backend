@@ -18,6 +18,7 @@ import uvicorn
 
 from jolt.config import Settings
 from jolt.main import create_app
+from tests import dsa_fixture
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -36,7 +37,7 @@ def _free_port() -> int:
 
 
 @pytest.fixture
-def live_server():
+def live_server(tmp_path):
     port = _free_port()
     base_url = f"http://127.0.0.1:{port}"
     settings = Settings(
@@ -45,6 +46,8 @@ def live_server():
         public_base_url=base_url,
         app_version="smoke-test",
         dev_auth_enabled=True,
+        # BE-09: the curated DSA track, from a synthetic Jolt checkout.
+        dsa_seed_from=str(dsa_fixture.write_repo(tmp_path / "Jolt")),
     )
     server = uvicorn.Server(
         uvicorn.Config(create_app(settings=settings), port=port, log_level="warning")
@@ -63,8 +66,11 @@ def live_server():
 
 async def test_smoke_round_trip(live_server):
     smoke = _load_smoke()
-    out = await smoke.run(live_server, wait_seconds=10, expect_version="smoke-test")
-    assert out["steps_passed"] == 47
+    out = await smoke.run(
+        live_server, wait_seconds=10, expect_version="smoke-test", require_dsa=True
+    )
+    assert out["steps_passed"] == 50
+    assert out["dsa_track_id"] == "dsa" and out["dsa_match"]
     assert out["version"] == "smoke-test"
     assert out["mcp_server_url"] == f"{live_server}/mcp/sse"
 

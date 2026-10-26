@@ -319,6 +319,7 @@ async def test_rest_routes_refuse_another_users_ids(api, world, runtime):
     assert curated["concept_count"] == 0 and curated["enrolled"] is False
     mine = await ok(await api.get(f"/v1/tracks/{w['curated']}"))
     assert [i["concept_id"] for i in mine["items"]] == [w["curated_concept"]]
-    assert mine["enrolled"] is True
+    # BE-09: `enrolled` is a real enrolment now, not "has concepts on it".
+    assert mine["enrolled"] is False
 
     assert await _snapshot(runtime) == before

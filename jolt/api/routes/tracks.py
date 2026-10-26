@@ -1,5 +1,6 @@
 """Track routes — list / create / rename / archive, Track detail, agenda lock,
-coverage (LLD §7.5, BE-07).
+coverage (LLD §7.5, BE-07); the curated catalog, enrolment and track content
+(library, decision tree) (BE-09).
 
 `GET /v1/tracks` and `GET /v1/tracks/{id}` are the Tracks and Track detail
 screens in one call each (`jolt.services.read_models`): a fixed handful of
@@ -11,13 +12,14 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel, Field, model_validator
 
 from jolt.api.deps import RuntimeDep, UserDep
 from jolt.api.errors import CONFLICT, NOT_FOUND, UNAUTHORIZED
 from jolt.domain.agenda import MAX_OUTLINE_CHARS
 from jolt.domain.models import Agenda, TrackKind
+from jolt.services.curated import CuratedError, CuratedNotFound, CuratedService
 from jolt.services.ownership import NotOwned
 from jolt.services.read_models import ReadModelService, TrackDetail, TrackSummary
 from jolt.services.tracks import TrackError, TrackService
@@ -85,8 +87,10 @@ class TrackResponse(BaseModel):
     source_count: int = Field(description="Confirmed uploads on the track")
     mastered_count: int
     retention: float = Field(description="Mean predicted recall of reviewed concepts, 0–1")
-    description: Optional[str] = Field(description="Curated tracks only (BE-09); null")
-    enrolled: bool = Field(description="Curated tracks: the caller has concepts on it")
+    description: Optional[str] = Field(description="Curated tracks: the catalog blurb; else null")
+    enrolled: bool = Field(
+        description="Curated tracks: the caller enrolled in it (always false on their own)"
+    )
     created_at: datetime
 
 
@@ -107,7 +111,7 @@ def _track_response(s: TrackSummary) -> TrackResponse:
         source_count=s.source_count,
         mastered_count=s.mastered_count,
         retention=s.retention,
-        description=None,
+        description=t.description,
         enrolled=s.enrolled,
         created_at=t.created_at,
     )
@@ -257,7 +261,19 @@ class CoverageResponse(BaseModel):
 async def list_tracks(user: UserDep, rt: RuntimeDep) -> list[TrackResponse]:
     """The caller's tracks (newest first, archived ones included and flagged), then
     curated ones, each with its counts."""
-    summaries = await ReadModelService(rt).list_tracks(user.user_id, user.user.settings)
+    summaries = await ReadModelService(rt).list_tracks(
+        user.user_id, user.user.settings, user.user.enrolled_track_ids()
+    )
+    return [_track_response(s) for s in summaries]
+
+
+# Declared before /{track_id} so "catalog" is never taken for a track id.
+@router.get("/catalog", response_model=list[TrackResponse])
+async def track_catalog(user: UserDep, rt: RuntimeDep) -> list[TrackResponse]:
+    """Curated tracks anyone can add (BE-09), with `enrolled` for the caller."""
+    summaries = await ReadModelService(rt).list_tracks(
+        user.user_id, user.user.settings, user.user.enrolled_track_ids(), curated_only=True
+    )
     return [_track_response(s) for s in summaries]
 
 
@@ -273,7 +289,9 @@ async def create_track(body: CreateTrackRequest, user: UserDep, rt: RuntimeDep) 
 async def get_track(track_id: str, user: UserDep, rt: RuntimeDep) -> TrackDetailResponse:
     """Track detail: agenda, per-item concept state, due today, recent sources."""
     try:
-        detail = await ReadModelService(rt).track_detail(user.user_id, track_id, user.user.settings)
+        detail = await ReadModelService(rt).track_detail(
+            user.user_id, track_id, user.user.settings, user.user.enrolled_track_ids()
+        )
     except NotOwned as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     return _detail_response(detail)
@@ -292,7 +310,9 @@ async def update_track(
     except TrackError as exc:
         status = 404 if str(exc) == "track not found" else 409
         raise HTTPException(status_code=status, detail=str(exc))
-    summary = await ReadModelService(rt).track_summary(user.user_id, t, user.user.settings)
+    summary = await ReadModelService(rt).track_summary(
+        user.user_id, t, user.user.settings, user.user.enrolled_track_ids()
+    )
     return _track_response(summary)
 
 
@@ -340,3 +360,154 @@ async def coverage(track_id: str, user: UserDep, rt: RuntimeDep) -> CoverageResp
         ],
         uncovered_syllabus=report.uncovered_syllabus,
     )
+
+
+# --------------------------------------------------------------------------- #
+# Curated tracks: enrolment and content (BE-09)
+# --------------------------------------------------------------------------- #
+CURATED_NOT_FOUND = {404: {**NOT_FOUND[404], "description": "Not a curated track"}}
+
+
+class EnrolmentResponse(BaseModel):
+    track_id: str
+    enrolled: Literal[True] = True
+    enrolled_at: datetime
+
+
+@router.post(
+    "/{track_id}/enrol",
+    response_model=EnrolmentResponse,
+    responses={**CURATED_NOT_FOUND, **CONFLICT},
+)
+async def enrol_track(track_id: str, user: UserDep, rt: RuntimeDep) -> EnrolmentResponse:
+    """Add a curated track. Idempotent (enrolling again returns the first
+    `enrolled_at`). Cards are created lazily, by the first review."""
+    try:
+        e = await CuratedService(rt).enrol(user.user_id, track_id)
+    except CuratedNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except CuratedError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return EnrolmentResponse(track_id=e.track_id, enrolled_at=e.enrolled_at)
+
+
+@router.delete(
+    "/{track_id}/enrol",
+    status_code=204,
+    response_class=Response,
+    responses={**CURATED_NOT_FOUND, **CONFLICT},
+)
+async def unenrol_track(track_id: str, user: UserDep, rt: RuntimeDep) -> Response:
+    """Leave a curated track. Idempotent. The caller's cards and answers stay
+    (history) but the track's concepts leave the review queue until they enrol again."""
+    try:
+        await CuratedService(rt).unenrol(user.user_id, track_id)
+    except CuratedNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except CuratedError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return Response(status_code=204)
+
+
+class PatternLibraryResponse(BaseModel):
+    category: str
+    time: str
+    space: str
+    when_to_reach: str
+    tells: list[str]
+    pseudocode: list[str]
+    explanation: list[str] = Field(description="A few short paragraphs: how it works")
+    animation_id: Optional[str] = Field(
+        description="The step animation (the v1 reel, keyed by this slug); null if none"
+    )
+
+
+class LibraryPatternResponse(BaseModel):
+    concept_id: str
+    concept_key: str = Field(description="The pattern's slug (the syllabus key)")
+    name: str = Field(description="The pattern, as the answer grid shows it")
+    problem_count: int = Field(description="Playable problems whose answer is this pattern")
+    library: PatternLibraryResponse
+
+
+class LibraryResponse(BaseModel):
+    track_id: str
+    patterns: list[LibraryPatternResponse] = Field(description="Syllabus order")
+
+
+@router.get("/{track_id}/library", response_model=LibraryResponse, responses=CURATED_NOT_FOUND)
+async def track_library(track_id: str, user: UserDep, rt: RuntimeDep) -> LibraryResponse:
+    """A DSA track's pattern library: when to reach for each pattern, the tells,
+    pseudocode, a walkthrough and its animation (BE-09). Readable without enrolling."""
+    try:
+        track, concepts, content = await CuratedService(rt).library(track_id)
+    except CuratedNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    counts = CuratedService.problem_counts(content)
+    return LibraryResponse(
+        track_id=track.id,
+        patterns=[
+            LibraryPatternResponse(
+                concept_id=c.id,
+                concept_key=c.syllabus_ref or c.id,
+                name=c.title or c.text,
+                problem_count=counts.get(c.id, 0),
+                library=PatternLibraryResponse(**c.library.model_dump()),
+            )
+            for c in concepts
+            if c.library is not None
+        ],
+    )
+
+
+class DecisionTreeNodeResponse(BaseModel):
+    id: str
+    kind: Literal["question", "leaf"]
+    prompt: Optional[str] = Field(default=None, description="question: asked in the guided walk")
+    short: Optional[str] = Field(default=None, description="question: the flowchart label")
+    yes: Optional[str] = Field(default=None, description="question: node id on yes")
+    no: Optional[str] = Field(default=None, description="question: node id on no")
+    pattern: Optional[str] = Field(default=None, description="leaf: the pattern it lands on")
+    note: Optional[str] = Field(default=None, description="leaf: why")
+    concept_id: Optional[str] = Field(
+        default=None, description="leaf: the pattern's concept on this track, when it is one"
+    )
+
+
+class DecisionTreeResponse(BaseModel):
+    track_id: str
+    root: str
+    nodes: list[DecisionTreeNodeResponse] = Field(description="In authoring order")
+
+
+@router.get(
+    "/{track_id}/decision-tree", response_model=DecisionTreeResponse, responses=CURATED_NOT_FOUND
+)
+async def track_decision_tree(track_id: str, user: UserDep, rt: RuntimeDep) -> DecisionTreeResponse:
+    """The DSA decision tree, free (decision D3): yes/no questions that walk to a
+    pattern (BE-09). Readable without enrolling."""
+    service = CuratedService(rt)
+    try:
+        track, concepts, content = await service.library(track_id)
+    except CuratedNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    by_name = {c.title: c.id for c in concepts if c.title}
+    tree = content.decision_tree or {}
+    nodes = []
+    for node_id, node in (tree.get("nodes") or {}).items():
+        pattern = node.get("pattern")
+        base = pattern.split(" (")[0].strip() if isinstance(pattern, str) else None
+        nodes.append(
+            DecisionTreeNodeResponse(
+                id=node.get("id") or node_id,
+                kind=node.get("kind"),
+                prompt=node.get("prompt"),
+                short=node.get("short"),
+                yes=node.get("yes"),
+                no=node.get("no"),
+                pattern=pattern,
+                note=node.get("note"),
+                concept_id=by_name.get(base) if base else None,
+            )
+        )
+    return DecisionTreeResponse(track_id=track.id, root=tree.get("root") or "", nodes=nodes)

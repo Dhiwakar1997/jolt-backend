@@ -15,7 +15,7 @@ from typing import Optional
 
 from jolt.domain.models import Concept, ConceptState, CorrectionNote
 from jolt.runtime import Runtime
-from jolt.services.ownership import owned_card, owned_concept
+from jolt.services.ownership import owned_concept, writable_card
 from jolt.services.reviews import ReviewService
 
 # Notes kept per concept while waiting for a sync; older ones are dropped.
@@ -57,7 +57,8 @@ class CorrectionService:
         """Queue a note on the caller's card for the next sync."""
         entry = CorrectionNote(note=note.strip())
         for _ in range(5):
-            state = await owned_card(self._rt, user_id, concept_id)
+            # Curated concepts are read-only (BE-09): no notes for the learner's model.
+            state = await writable_card(self._rt, user_id, concept_id)
             state.corrections = [*state.corrections, entry][-MAX_PENDING_NOTES:]
             state.correction_requested_at = state.correction_requested_at or entry.created_at
             if await self._rt.repos.concept_states.replace(state, etag=state.etag) is not None:
@@ -97,6 +98,7 @@ class CorrectionService:
         `track_id`). `updated` is False when the concept write lost a race.
         """
         concept, _state = await owned_concept(self._rt, user_id, concept_id, track_id=track_id)
+        await writable_card(self._rt, user_id, concept_id)  # curated: read-only (BE-09)
         changed = concept.text != text
         if changed:
             concept.text = text

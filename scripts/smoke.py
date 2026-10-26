@@ -1,4 +1,4 @@
-"""End-to-end smoke test against a running Jolt backend (BE-02 to BE-07).
+"""End-to-end smoke test against a running Jolt backend (BE-02 to BE-07, BE-09).
 
     python scripts/smoke.py --base-url https://<dev-host>
     python scripts/smoke.py --base-url http://localhost:8000      # local, see below
@@ -39,8 +39,14 @@ share it, with a fresh test user:
 11. jolt_sync again: done, which closes the sync run; GET /v1/sync/status and
     /v1/sync/runs show it (client label, counts, the question_rewritten change and
     the concept the reconciliation added), GET /v1/sync/prompt
-12. MCP with the token in the URL (?token=, how a URL-only connector connects)
-13. GET /v1/me shows the onboarding progress (incl. first_sync_at); revoke the
+12. Curated DSA track (BE-09): GET /v1/tracks/catalog, POST /v1/tracks/dsa/enrol,
+    GET /v1/tracks/dsa/library and /decision-tree, POST /v1/review-sessions
+    {kind: dsa_patterns, time_budget_minutes} -> one pattern_match question: stage
+    1 (no title anywhere before the answer) -> stage 2 (match, question_title).
+    Skipped, with a note, when the catalog has no DSA track yet (import it with
+    scripts/import_dsa.py); --require-dsa makes that a failure, --skip-dsa skips
+13. MCP with the token in the URL (?token=, how a URL-only connector connects)
+14. GET /v1/me shows the onboarding progress (incl. first_sync_at); revoke the
     MCP token (/mcp then refuses it); sign out (/v1 then refuses the app token)
 
 Exit code 0 when every step passes, 1 otherwise. It leaves the test user and its
@@ -54,7 +60,7 @@ Local run with no Azure (the in-memory blob fake serves the upload URL when
 PUBLIC_BASE_URL is set):
 
     STORAGE_MODE=memory DEV_AUTH_ENABLED=true PUBLIC_BASE_URL=http://localhost:8000 \\
-        uvicorn jolt.main:app --port 8000
+        DSA_SEED_FROM=../Jolt uvicorn jolt.main:app --port 8000
     python scripts/smoke.py --base-url http://localhost:8000
 
 Needs only `httpx` and `mcp` (both in requirements.txt).
@@ -208,6 +214,8 @@ async def run(
     expect_version: str | None = None,
     timeout: float = 30,
     dev_auth_secret: str | None = None,
+    skip_dsa: bool = False,
+    require_dsa: bool = False,
 ) -> dict:
     """Run every step; raise on the first failure. Returns ids for the record."""
     base_url = base_url.rstrip("/")
@@ -704,6 +712,9 @@ async def run(
             check(prompt["schedule_time"] and prompt["version"], f"prompt meta: {prompt}")
             out["prompt_version"] = prompt["version"]
 
+        if not skip_dsa:
+            await _dsa_steps(http, rep, out, required=require_dsa)
+
         with rep.step("MCP with ?token= (URL-only connector)"):
             url = f"{base_url}/mcp/sse?token={mcp_token}"
             async with sse_client(url, timeout=timeout) as streams:
@@ -739,6 +750,66 @@ async def run(
     return out
 
 
+async def _dsa_steps(
+    http: httpx.AsyncClient, rep: Reporter, out: dict[str, Any], *, required: bool
+) -> None:
+    """The curated DSA track (BE-09): enrol, read, and answer one pattern_match question."""
+    catalog = _json(await http.get("/v1/tracks/catalog"))
+    dsa = next((t for t in catalog if t["kind"] == "dsa_patterns"), None)
+    if dsa is None and not required:
+        print("[skip] curated DSA steps: no dsa_patterns track in the catalog", flush=True)
+        out["dsa_track_id"] = None
+        return
+    with rep.step("GET /v1/tracks/catalog + POST /v1/tracks/{id}/enrol"):
+        check(dsa is not None, f"no dsa_patterns track in the catalog (import it): {catalog}")
+        check(dsa["origin"] == "jolt" and not dsa["enrolled"], f"catalog entry: {dsa}")
+        enrolled = _json(await http.post(f"/v1/tracks/{dsa['id']}/enrol"))
+        check(enrolled["enrolled"] and enrolled["track_id"] == dsa["id"], f"enrol: {enrolled}")
+        out["dsa_track_id"] = dsa["id"]
+
+    with rep.step("GET /v1/tracks/{id}/library + /decision-tree"):
+        lib = _json(await http.get(f"/v1/tracks/{dsa['id']}/library"))
+        check(len(lib["patterns"]) >= 2, f"library: {len(lib['patterns'])} patterns")
+        check(all(p["library"]["when_to_reach"] for p in lib["patterns"]), "empty library entry")
+        tree = _json(await http.get(f"/v1/tracks/{dsa['id']}/decision-tree"))
+        check(tree["root"] in {n["id"] for n in tree["nodes"]}, "decision tree has no root")
+
+    with rep.step("DSA session + one pattern_match question (title only after stage 2)"):
+        session = _json(
+            await http.post(
+                "/v1/review-sessions",
+                json={"kind": "dsa_patterns", "track_id": dsa["id"], "time_budget_minutes": 10},
+            )
+        )
+        items = session["items"]
+        check(items, f"empty DSA session: {session}")
+        weight = sum(i["pattern_match"]["time_weight"] for i in items)
+        check(weight <= 10, f"session weighs {weight} minutes, budget 10")
+        item = items[0]
+        check(item["question_type"] == "pattern_match", f"item: {item['question_type']}")
+        check(item["concept_id"] == dsa["id"], "the pattern (concept) is not masked")
+        s1 = _json(
+            await http.post(
+                f"/v1/reviews/{item['question_id']}/stage1",
+                json={
+                    "concept_id": item["concept_id"],
+                    "free_text": "smoke",
+                    "session_id": session["id"],
+                },
+            )
+        )
+        options = s1["options"]
+        check(len(options) == len(lib["patterns"]), f"{len(options)} options")
+        s2 = _json(
+            await http.post(f"/v1/reviews/{s1['review_id']}/stage2", json={"selected_index": 0})
+        )
+        title = s2["question_title"]
+        check(s2["match"] in ("correct", "partial", "incorrect"), f"stage 2: {s2}")
+        check(title and title not in json.dumps(session), "title served before stage 2")
+        check(s2["grading"] == "graded", f"pattern_match grading: {s2['grading']}")
+        out["dsa_match"] = s2["match"]
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument(
@@ -760,6 +831,12 @@ def main(argv: list[str] | None = None) -> int:
         help="the server's DEV_AUTH_SECRET (default: $JOLT_DEV_AUTH_SECRET); "
         "not needed for a memory-mode server without one",
     )
+    parser.add_argument("--skip-dsa", action="store_true", help="leave out the curated DSA steps")
+    parser.add_argument(
+        "--require-dsa",
+        action="store_true",
+        help="fail when the catalog has no DSA track (default: skip those steps)",
+    )
     args = parser.parse_args(argv)
 
     print(f"Jolt smoke test against {args.base_url}", flush=True)
@@ -771,6 +848,8 @@ def main(argv: list[str] | None = None) -> int:
                 expect_version=args.expect_version,
                 timeout=args.timeout,
                 dev_auth_secret=args.dev_auth_secret,
+                skip_dsa=args.skip_dsa,
+                require_dsa=args.require_dsa,
             )
         )
     except SmokeFailure as exc:

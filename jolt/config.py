@@ -43,6 +43,11 @@ class Settings(BaseSettings):
     # fakes from jolt/data/memory.py — tests and cloud-free local runs only;
     # everything is lost on restart).
     storage_mode: Literal["azure", "memory"] = "azure"
+    # Memory mode only: a Jolt checkout to import the curated DSA track from at
+    # startup (BE-09, same import as scripts/import_dsa.py), so a cloud-free
+    # local server (and scripts/smoke.py) has it. Empty -> no curated tracks.
+    dsa_seed_from: str = ""
+    dsa_seed_include_new: bool = False
 
     # ---- Auth (BE-03) ----
     # Two opaque token kinds on one hashing scheme (Argon2 + pepper, plus an

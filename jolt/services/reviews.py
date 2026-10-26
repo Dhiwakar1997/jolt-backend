@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from typing import Callable, Optional
 
-from jolt.domain.grading import score_stage_two
+from jolt.domain.grading import score_pattern_match, score_stage_two
 from jolt.domain.mastery import is_retired, mastered_at
 from jolt.domain.models import (
     Concept,
@@ -32,10 +32,19 @@ from jolt.domain.models import (
     ReviewSession,
     ReviewStatus,
     Track,
+    TrackKind,
+    User,
     UserSettings,
 )
 from jolt.domain.scheduling import FOLDED_FIELDS, fold_history
 from jolt.runtime import Runtime
+from jolt.services.curated import (
+    PATTERN_MATCH_TITLE,
+    CuratedService,
+    is_pattern_match,
+    pattern_match_payload,
+    public_concept_id,
+)
 
 DAY = timedelta(days=1)
 # How many due cards a session start scans before filtering and interleaving.
@@ -122,6 +131,8 @@ class QueueItem:
     interval_days: Optional[int]
     review_number: int
     rewritten: bool
+    # BE-09: the problem to match, for `pattern_match` questions.
+    pattern_match: Optional[dict] = None
 
 
 @dataclass
@@ -131,6 +142,9 @@ class SessionView:
     track_id: Optional[str]
     items: list[QueueItem]
     done_today: int
+    # BE-09 DSA sessions: the clock and how much of it the queue fills.
+    time_budget_minutes: Optional[int] = None
+    time_weight_total: Optional[int] = None
 
 
 @dataclass
@@ -151,6 +165,11 @@ class StageTwoResult:
     interval_days: int
     retired: bool
     feedback: Optional[str]
+    # BE-09 `pattern_match`: the verdict and what stage 2 reveals.
+    match: Optional[str] = None
+    question_title: Optional[str] = None
+    concept_id: Optional[str] = None
+    leetcode_url: Optional[str] = None
 
 
 @dataclass
@@ -193,10 +212,16 @@ class ReviewService:
         self._concepts: dict[str, Optional[Concept]] = {}
         self._tracks: dict[str, Optional[Track]] = {}
         self._questions: dict[str, list[Question]] = {}
+        self._users: dict[str, Optional[User]] = {}
 
     # -- settings and lookups -------------------------------------------------
+    async def user(self, user_id: str) -> Optional[User]:
+        if user_id not in self._users:
+            self._users[user_id] = await self._rt.repos.users.get_user(user_id)
+        return self._users[user_id]
+
     async def user_settings(self, user_id: str) -> UserSettings:
-        user = await self._rt.repos.users.get_user(user_id)
+        user = await self.user(user_id)
         return user.settings if user is not None else UserSettings()
 
     async def _concept(self, state: ConceptState) -> Optional[Concept]:
@@ -257,6 +282,7 @@ class ReviewService:
         *,
         track_id: Optional[str] = None,
         settings: Optional[UserSettings] = None,
+        kind: Optional[str] = None,
     ) -> list[ConceptState]:
         """Due cards, most overdue first, without retired (mastered) concepts."""
         settings = settings or await self.user_settings(user_id)
@@ -265,6 +291,13 @@ class ReviewService:
         archived = {
             t.id for t in await self._rt.repos.tracks.list_for_user(user_id) if t.archived_at
         }
+        # BE-09: so is a curated track the learner is not enrolled in (left it);
+        # a `notes` session leaves the DSA tracks out.
+        user = await self.user(user_id)
+        enrolled = user.enrolled_track_ids() if user else set()
+        for t in await self._rt.repos.tracks.list_curated():
+            if t.id not in enrolled or (kind == "notes" and t.kind == TrackKind.DSA_PATTERNS):
+                archived.add(t.id)
         return [
             s
             for s in states
@@ -278,8 +311,18 @@ class ReviewService:
         """`GET /v1/reviews/due` (LLD §7.5): every active question of each due card."""
         items: list[DueItem] = []
         for state in (await self.due_states(user_id))[: max(0, limit)]:
-            for q in await self._active_questions(state.concept_id):
-                items.append(DueItem(concept_id=q.concept_id, question_id=q.id, stem=q.stem))
+            active = await self._active_questions(state.concept_id)
+            if active and is_pattern_match(active[0]):
+                # A DSA pattern: only the problem a session would serve, masked (BE-09).
+                active = [q for q in [self.pick_question(active, state)] if q is not None]
+            for q in active:
+                items.append(
+                    DueItem(
+                        concept_id=public_concept_id(q, q.concept_id),
+                        question_id=q.id,
+                        stem=q.stem,
+                    )
+                )
         return items
 
     # -- sessions -------------------------------------------------------------
@@ -291,21 +334,40 @@ class ReviewService:
         limit: int = 100,
         concept_id: Optional[str] = None,
         kind: Optional[str] = None,
+        time_budget_minutes: Optional[int] = None,
+        difficulty_mix: Optional[dict[str, float]] = None,
     ) -> SessionView:
         settings = await self.user_settings(user_id)
         if track_id is not None and await self._track(user_id, track_id) is None:
             raise ReviewNotFound("track not found")
 
         picked: list[tuple[ConceptState, Question]] = []
-        if concept_id is not None:
+        draw = None
+        if concept_id is None and kind == "dsa_patterns":
+            # BE-09: drawn by the v1 rules from the learner's enrolled DSA tracks.
+            user = await self.user(user_id)
+            if user is None:
+                raise ReviewNotFound("user not found")
+            if track_id is not None and track_id not in user.enrolled_track_ids():
+                raise ReviewNotFound("not enrolled in this track")
+            draw = await CuratedService(self._rt).draw(
+                user,
+                settings,
+                track_id=track_id,
+                budget_minutes=time_budget_minutes,
+                mix=difficulty_mix,
+                limit=limit,
+            )
+            picked = [(i.state, i.question) for i in draw.items]
+        elif concept_id is not None:
             # "Practise this concept": its next question, due or not, retired or not.
             state = await self.owned_state(user_id, concept_id)
             question = self.pick_question(await self._active_questions(concept_id), state)
             # A concept a re-read superseded has no questions to serve (BE-07).
             if question is not None and state.superseded_at is None:
                 picked.append((state, question))
-        elif kind != "dsa_patterns":  # no DSA tracks before BE-09
-            due = await self.due_states(user_id, track_id=track_id, settings=settings)
+        else:
+            due = await self.due_states(user_id, track_id=track_id, settings=settings, kind=kind)
             for state in interleave(due):
                 if len(picked) >= limit:
                     break
@@ -320,6 +382,8 @@ class ReviewService:
                 concept_id=concept_id,
                 kind=kind,
                 limit=limit,
+                time_budget_minutes=draw.budget_minutes if draw else None,
+                time_weight_total=draw.time_weight_total if draw else None,
                 question_ids=[q.id for _, q in picked],
                 concept_ids=[s.concept_id for s, _ in picked],
             )
@@ -332,6 +396,8 @@ class ReviewService:
             track_id=track_id,
             items=items,
             done_today=await self.done_today(user_id),
+            time_budget_minutes=draw.budget_minutes if draw else None,
+            time_weight_total=draw.time_weight_total if draw else None,
         )
 
     async def _queue_item(
@@ -339,11 +405,13 @@ class ReviewService:
     ) -> QueueItem:
         track = await self._track(user_id, state.track_id) if state.track_id else None
         last = state.last_review_at
+        pm = question.pattern_match
         return QueueItem(
-            concept_id=state.concept_id,
-            concept_title=await self._title(state),
+            # A pattern_match question's concept is its answer: masked (BE-09).
+            concept_id=pm.track_id if pm else state.concept_id,
+            concept_title=PATTERN_MATCH_TITLE if pm else await self._title(state),
             question_id=question.id,
-            question_type="free_text",
+            question_type=question.type.value,
             stem=question.stem,
             track_id=state.track_id or "",
             track_name=track.name if track else "",
@@ -351,6 +419,7 @@ class ReviewService:
             interval_days=max(1, round((now - last) / DAY)) if last else None,
             review_number=state.reps + 1,
             rewritten=question.version > 1 and last is not None and question.created_at > last,
+            pattern_match=pattern_match_payload(question),
         )
 
     async def done_today(self, user_id: str) -> int:
@@ -439,10 +508,20 @@ class ReviewService:
         session_id: Optional[str] = None,
     ) -> StageOneResult:
         question = await self._rt.repos.questions.get_question(question_id, concept_id)
+        user = await self.user(user_id)
+        curated = CuratedService(self._rt)
+        if question is None and user is not None:
+            # BE-09: a pattern_match item names its track, not its (answer) concept.
+            question = await curated.resolve_masked(user, concept_id, question_id)
         if question is None:
             raise ReviewNotFound("question not found")
+        concept_id = question.concept_id
+        if is_pattern_match(question):
+            # Curated: the learner must be enrolled; their card is made on first review.
+            if user is None or await curated.ensure_card(user, question) is None:
+                raise ReviewNotFound("question not found")
         # Only the caller's concepts (they hold a card for it): GAPS issue 1.
-        if await self._rt.repos.concept_states.for_concept(user_id, concept_id) is None:
+        elif await self._rt.repos.concept_states.for_concept(user_id, concept_id) is None:
             raise ReviewNotFound("question not found")
         if session_id is not None:
             if await self._rt.repos.review_sessions.get_session(session_id, user_id) is None:
@@ -454,7 +533,12 @@ class ReviewService:
             concept_id=concept_id,
             free_text=free_text,
             free_text_locked_at=_now(),
-            status=ReviewStatus.PENDING_GRADING,
+            # A pattern_match grade is deterministic: never waits for the sync.
+            status=(
+                ReviewStatus.AWAITING_CHOICE
+                if is_pattern_match(question)
+                else ReviewStatus.PENDING_GRADING
+            ),
             session_id=session_id,
             question_version=question.version,
             stage1_request_id=client_request_id,
@@ -509,7 +593,10 @@ class ReviewService:
 
             settings = await self.user_settings(user_id)
             before = await self._rt.repos.concept_states.for_concept(user_id, review.concept_id)
-            score_stage_two(review, question, selected_index, latency_ms)
+            if is_pattern_match(question):
+                score_pattern_match(review, question, selected_index, latency_ms)
+            else:
+                score_stage_two(review, question, selected_index, latency_ms)
             review.stage2_request_id = client_request_id
             review.stage2_at = _now()
             review.due_before = before.due_at if before else None
@@ -553,6 +640,7 @@ class ReviewService:
     @staticmethod
     def _stage_two_result(review: Review, question: Question, retired: bool) -> StageTwoResult:
         graded = grading_of(review) == "graded"
+        pm = question.pattern_match
         return StageTwoResult(
             correct=bool(review.is_correct),
             expected_answer=question.expected_answer,
@@ -563,6 +651,10 @@ class ReviewService:
             interval_days=interval_days(review.due_after, review.stage2_at or _now()),
             retired=retired,
             feedback=review.feedback if graded else None,
+            match=review.match if pm else None,
+            question_title=question.title if pm else None,
+            concept_id=review.concept_id,
+            leetcode_url=pm.leetcode_url if pm else None,
         )
 
     # -- FSRS -----------------------------------------------------------------
@@ -623,8 +715,12 @@ class ReviewService:
         """Every question version of a concept, oldest first, and the current one."""
         state = await self.owned_state(user_id, concept_id)
         every = await self._rt.repos.questions.list_for_concept(concept_id, active_only=False)
+        # BE-09: a DSA pattern's problems are its answers; sessions serve them,
+        # concept pages never list them.
+        every = [q for q in every if not is_pattern_match(q)]
         every.sort(key=lambda q: (q.created_at, q.version, q.id))
-        current = self.pick_question(await self._active_questions(concept_id), state)
+        active = [q for q in await self._active_questions(concept_id) if not is_pattern_match(q)]
+        current = self.pick_question(active, state)
         return every, current
 
     async def get_review(self, user_id: str, review_id: str) -> tuple[Review, Optional[Question]]:

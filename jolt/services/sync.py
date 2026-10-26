@@ -45,7 +45,7 @@ from jolt.runtime import Runtime
 from jolt.services.cards import refresh_card_questions
 from jolt.services.corrections import CorrectionService
 from jolt.services.gradings import GradingService
-from jolt.services.ownership import NotOwned, owned_card, owned_track
+from jolt.services.ownership import NotOwned, owned_track, writable_card
 from jolt.services.reviews import ReviewService
 from jolt.services.tracks import TrackError, TrackService
 
@@ -517,9 +517,10 @@ class SyncService:
     async def create_questions(
         self, user_id: str, concept_id: str, questions: list[QuestionInput]
     ) -> list[Question]:
-        # Only the caller's concepts (they hold its card): BE-07, A16.
+        # Only the caller's concepts (they hold its card) on their own tracks:
+        # BE-07, A16; curated concepts are read-only (BE-09).
         try:
-            await owned_card(self._rt, user_id, concept_id)
+            await writable_card(self._rt, user_id, concept_id)
         except NotOwned as exc:
             raise SyncError(str(exc)) from exc
         created: list[Question] = []

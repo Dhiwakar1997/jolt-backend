@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 
 from jolt.api.deps import RuntimeDep, UserDep
 from jolt.api.errors import CONFLICT, NOT_FOUND, UNAUTHORIZED
+from jolt.api.routes.tracks import PatternLibraryResponse
 from jolt.domain.models import Question, QuestionStatus
 from jolt.services.corrections import CorrectionConflict, CorrectionService
 from jolt.services.ownership import NotOwned
@@ -152,6 +153,9 @@ class ConceptDetailResponse(BaseModel):
     pending_corrections: list[CorrectionNoteResponse] = Field(
         description="Notes waiting for the next sync"
     )
+    library: Optional[PatternLibraryResponse] = Field(
+        default=None, description="A DSA pattern's library entry (BE-09); null otherwise"
+    )
     created_at: datetime
 
 
@@ -186,6 +190,7 @@ async def get_concept(concept_id: str, user: UserDep, rt: RuntimeDep) -> Concept
             CorrectionNoteResponse(note=n.note, created_at=n.created_at)
             for n in d.pending_corrections
         ],
+        library=PatternLibraryResponse(**d.library.model_dump()) if d.library else None,
         created_at=c.created_at,
     )
 

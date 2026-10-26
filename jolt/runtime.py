@@ -33,7 +33,7 @@ from jolt.data.repositories.reviews import (
 from jolt.data.repositories.sources import ExtractionsRepository, SourcesRepository
 from jolt.data.repositories.sync_runs import SyncRunsRepository
 from jolt.data.repositories.tokens import TokensRepository
-from jolt.data.repositories.tracks import TracksRepository
+from jolt.data.repositories.tracks import TrackContentRepository, TracksRepository
 from jolt.data.repositories.users import UsersRepository
 
 
@@ -53,6 +53,7 @@ class Repositories:
     api_keys: ApiKeyRefRepository
     tokens: TokensRepository
     sync_runs: SyncRunsRepository
+    track_content: TrackContentRepository  # BE-09 curated track content
 
 
 class Runtime:
@@ -82,6 +83,7 @@ class Runtime:
             api_keys=ApiKeyRefRepository(cosmos),
             tokens=TokensRepository(cosmos),
             sync_runs=SyncRunsRepository(cosmos),
+            track_content=TrackContentRepository(cosmos),
         )
         # Google ID token verifier for sign-in (BE-03). Fetches Google's keys
         # lazily, so building it does no I/O; tests swap in one with their own key.

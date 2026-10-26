@@ -31,6 +31,7 @@ from jolt.domain.models import (
     ConceptState,
     ConceptStatus,
     CorrectionNote,
+    PatternLibrary,
     Question,
     QuestionStatus,
     Review,
@@ -42,6 +43,7 @@ from jolt.domain.models import (
 from jolt.domain.scheduling import predicted_recall
 from jolt.runtime import Runtime
 from jolt.services.cards import current_question_id, refresh_card_questions, rotation
+from jolt.services.curated import CuratedService, is_pattern_match
 from jolt.services.ownership import NotOwned, owned_concept, visible_track
 from jolt.services.reviews import ReviewService, grading_of
 
@@ -192,6 +194,8 @@ class ConceptDetail:
     adaptive_note: Optional[str]
     fsrs: FsrsView
     pending_corrections: list[CorrectionNote]
+    # BE-09: a DSA pattern's library entry (None for notes concepts).
+    library: Optional[PatternLibrary] = None
 
 
 def _source_title(source: Source) -> str:
@@ -218,6 +222,13 @@ class ReadModelService:
         # Routes pass the settings of the user document auth already loaded.
         return given if given is not None else await ReviewService(self._rt).user_settings(user_id)
 
+    async def _enrolled(self, user_id: str, given: Optional[set[str]]) -> set[str]:
+        """Curated tracks the caller enrolled in (BE-09); routes pass them from auth."""
+        if given is not None:
+            return given
+        user = await self._rt.repos.users.get_user(user_id)
+        return user.enrolled_track_ids() if user else set()
+
     async def _backfill(self, user_id: str, states: list[ConceptState]) -> list[ConceptState]:
         """Fill the question fields of cards written before BE-07 (once per card)."""
         out: list[ConceptState] = []
@@ -235,9 +246,13 @@ class ReadModelService:
         source_count: int,
         settings: UserSettings,
         now: datetime,
+        enrolled: Optional[set[str]] = None,
     ) -> TrackSummary:
         live = [c for c in cards if c.superseded_at is None]
-        archived = track.archived_at is not None
+        curated = track.origin == TrackOrigin.JOLT
+        is_enrolled = curated and track.id in (enrolled or set())
+        # Archived, or a curated track the caller is not enrolled in: paused.
+        archived = track.archived_at is not None or (curated and not is_enrolled)
         return TrackSummary(
             track=track,
             concept_count=len(live),
@@ -246,15 +261,24 @@ class ReadModelService:
             source_count=source_count,
             mastered_count=sum(1 for c in live if c.mastered_at is not None),
             retention=mean_recall(live, now),
-            enrolled=track.origin == TrackOrigin.JOLT and bool(live),
+            enrolled=is_enrolled,
         )
 
     async def list_tracks(
-        self, user_id: str, settings: Optional[UserSettings] = None
+        self,
+        user_id: str,
+        settings: Optional[UserSettings] = None,
+        enrolled: Optional[set[str]] = None,
+        *,
+        curated_only: bool = False,
     ) -> list[TrackSummary]:
-        own = await self._rt.repos.tracks.list_for_user(user_id)
+        own = [] if curated_only else await self._rt.repos.tracks.list_for_user(user_id)
         curated = await self._rt.repos.tracks.list_curated()
+        if curated_only:
+            curated = [t for t in curated if t.archived_at is None]
+            curated.sort(key=lambda t: (t.created_at, t.id))
         settings = await self._settings(user_id, settings)
+        enrolled = await self._enrolled(user_id, enrolled)
         cards = await self._rt.repos.concept_states.all_for_user(user_id)
         sources = await self._rt.repos.sources.list_confirmed(user_id)
         now = _now()
@@ -266,24 +290,36 @@ class ReadModelService:
             if s.track_id:
                 source_counts[s.track_id] = source_counts.get(s.track_id, 0) + 1
         return [
-            self.summarise(t, by_track.get(t.id, []), source_counts.get(t.id, 0), settings, now)
+            self.summarise(
+                t, by_track.get(t.id, []), source_counts.get(t.id, 0), settings, now, enrolled
+            )
             for t in own + curated
         ]
 
     async def track_summary(
-        self, user_id: str, track: Track, settings: Optional[UserSettings] = None
+        self,
+        user_id: str,
+        track: Track,
+        settings: Optional[UserSettings] = None,
+        enrolled: Optional[set[str]] = None,
     ) -> TrackSummary:
         settings = await self._settings(user_id, settings)
+        enrolled = await self._enrolled(user_id, enrolled)
         cards = await self._rt.repos.concept_states.for_track(user_id, track.id)
         sources = await self._rt.repos.sources.list_confirmed(user_id, track_id=track.id)
-        return self.summarise(track, cards, len(sources), settings, _now())
+        return self.summarise(track, cards, len(sources), settings, _now(), enrolled)
 
     # -- Track detail ---------------------------------------------------------
     async def track_detail(
-        self, user_id: str, track_id: str, settings: Optional[UserSettings] = None
+        self,
+        user_id: str,
+        track_id: str,
+        settings: Optional[UserSettings] = None,
+        enrolled: Optional[set[str]] = None,
     ) -> TrackDetail:
         track = await visible_track(self._rt, user_id, track_id)
         settings = await self._settings(user_id, settings)
+        enrolled = await self._enrolled(user_id, enrolled)
         cards = await self._rt.repos.concept_states.for_track(user_id, track.id)
         concepts = await self._rt.repos.concepts.list_for_track(track.id)
         all_sources = await self._rt.repos.sources.list_confirmed(user_id)
@@ -295,11 +331,47 @@ class ReadModelService:
         sources = {s.id: s for s in all_sources}
         track_sources = [s for s in all_sources if s.track_id == track.id]  # newest first
 
-        summary = self.summarise(track, cards, len(track_sources), settings, now)
+        summary = self.summarise(track, cards, len(track_sources), settings, now, enrolled)
         detail = TrackDetail(**summary.__dict__)
 
+        # BE-09: a curated track lists Jolt's concepts to everyone; one the caller
+        # has not reviewed yet is `new` (their card comes with the first review).
+        problems: dict[str, int] = {}
+        unseen: set[str] = set()
+        if track.origin == TrackOrigin.JOLT:
+            problems = CuratedService.problem_counts(
+                await self._rt.repos.track_content.get_content(track.id)
+            )
+            for concept in concepts:
+                if concept.curated and concept.id not in state_of:
+                    unseen.add(concept.id)
+            mine = sorted(
+                (c for c in concepts if c.id in state_of or c.id in unseen),
+                key=lambda c: (c.created_at, c.id),
+            )
+
         def row(concept: Concept, *, key: str, label: str, parent, source: str) -> TrackItem:
+            if concept.id in unseen:
+                return TrackItem(
+                    concept_key=key,
+                    label=label,
+                    parent=parent,
+                    source=source,
+                    off_plan=False,
+                    concept_id=concept.id,
+                    concept_title=ReviewService.concept_title(concept, concept.id),
+                    state="new",
+                    next_review_at=None,
+                    question_count=problems.get(concept.id, 0),
+                    question_version=1 if problems.get(concept.id) else None,
+                    found_in=None,
+                )
             state = state_of[concept.id]
+            count = (
+                problems[concept.id]
+                if concept.id in problems
+                else len(state.active_question_ids or [])
+            )
             return TrackItem(
                 concept_key=key,
                 label=label,
@@ -310,7 +382,7 @@ class ReadModelService:
                 concept_title=ReviewService.concept_title(concept, concept.id),
                 state=concept_state(state, now),
                 next_review_at=next_review(state, settings),
-                question_count=len(state.active_question_ids or []),
+                question_count=count,
                 question_version=state.question_version,
                 found_in=_found_in(concept, sources),
             )
@@ -374,7 +446,13 @@ class ReadModelService:
         if track.archived_at is None:
             far = datetime.max.replace(tzinfo=timezone.utc)
             due = sorted(
-                (c for c in mine if is_due(state_of[c.id], now, settings)),
+                (
+                    c
+                    for c in mine
+                    if c.id in state_of
+                    and is_due(state_of[c.id], now, settings)
+                    and summary.due_count  # 0 when paused (archived / not enrolled)
+                ),
                 key=lambda c: state_of[c.id].due_at or far,
             )
             for concept in due:
@@ -406,7 +484,15 @@ class ReadModelService:
     async def concept_detail(
         self, user_id: str, concept_id: str, settings: Optional[UserSettings] = None
     ) -> ConceptDetail:
-        concept, state = await owned_concept(self._rt, user_id, concept_id)
+        try:
+            concept, state = await owned_concept(self._rt, user_id, concept_id)
+        except NotOwned:
+            # BE-09: a curated concept is readable before the caller's first
+            # review of it (a blank card: `new`, no timeline).
+            concept = await self._curated_concept(concept_id)
+            if concept is None:
+                raise
+            state = ConceptState(user_id=user_id, concept_id=concept.id, track_id=concept.track_id)
         try:
             track: Optional[Track] = await visible_track(self._rt, user_id, concept.track_id)
         except NotOwned:
@@ -422,6 +508,8 @@ class ReadModelService:
         )
         now = _now()
 
+        # A DSA pattern's problems are its answers: never listed on the concept.
+        versions = [q for q in versions if not is_pattern_match(q)]
         active = rotation([q for q in versions if q.status == QuestionStatus.ACTIVE])
         current = active[state.reps % len(active)] if active else None
         if concept.status == ConceptStatus.SUPERSEDED:
@@ -450,7 +538,16 @@ class ReadModelService:
                 lapses=state.lapses,
             ),
             pending_corrections=list(state.corrections),
+            library=concept.library,
         )
+
+    async def _curated_concept(self, concept_id: str) -> Optional[Concept]:
+        """A Jolt-authored concept of any curated track (one point read per track)."""
+        for track in await self._rt.repos.tracks.list_curated():
+            concept = await self._rt.repos.concepts.get_concept(concept_id, track.id)
+            if concept is not None and concept.curated:
+                return concept
+        return None
 
     @staticmethod
     def _timeline(history: list[Review]) -> list[TimelineEntry]:

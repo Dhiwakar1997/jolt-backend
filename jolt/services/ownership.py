@@ -54,6 +54,15 @@ async def owned_card(rt: Runtime, user_id: str, concept_id: str) -> ConceptState
     return state
 
 
+async def writable_card(rt: Runtime, user_id: str, concept_id: str) -> ConceptState:
+    """The caller's card, on a track they own: curated concepts are read-only
+    (BE-09), so writing questions or text for one is refused like a missing id."""
+    state = await owned_card(rt, user_id, concept_id)
+    if await rt.repos.tracks.get_track(state.track_id, user_id) is None:
+        raise NotOwned("concept not found")
+    return state
+
+
 async def owned_concept(
     rt: Runtime, user_id: str, concept_id: str, *, track_id: Optional[str] = None
 ) -> tuple[Concept, ConceptState]:

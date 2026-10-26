@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Jolt API",
-    "version": "0.7.0"
+    "version": "0.8.0"
   },
   "paths": {
     "/v1/auth/google": {
@@ -1316,6 +1316,47 @@
         ]
       }
     },
+    "/v1/tracks/catalog": {
+      "get": {
+        "tags": [
+          "tracks"
+        ],
+        "summary": "Track Catalog",
+        "description": "Curated tracks anyone can add (BE-09), with `enrolled` for the caller.",
+        "operationId": "track_catalog",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TrackResponse"
+                  },
+                  "type": "array",
+                  "title": "Response Track Catalog"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
     "/v1/tracks/{track_id}": {
       "get": {
         "tags": [
@@ -1652,6 +1693,289 @@
           },
           "404": {
             "description": "Not found, or not owned by the caller",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/tracks/{track_id}/enrol": {
+      "post": {
+        "tags": [
+          "tracks"
+        ],
+        "summary": "Enrol Track",
+        "description": "Add a curated track. Idempotent (enrolling again returns the first\n`enrolled_at`). Cards are created lazily, by the first review.",
+        "operationId": "enrol_track",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "track_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Track Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnrolmentResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not a curated track",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicts with an earlier request (e.g. a reused request id)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "tracks"
+        ],
+        "summary": "Unenrol Track",
+        "description": "Leave a curated track. Idempotent. The caller's cards and answers stay\n(history) but the track's concepts leave the review queue until they enrol again.",
+        "operationId": "unenrol_track",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "track_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Track Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not a curated track",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicts with an earlier request (e.g. a reused request id)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/tracks/{track_id}/library": {
+      "get": {
+        "tags": [
+          "tracks"
+        ],
+        "summary": "Track Library",
+        "description": "A DSA track's pattern library: when to reach for each pattern, the tells,\npseudocode, a walkthrough and its animation (BE-09). Readable without enrolling.",
+        "operationId": "track_library",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "track_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Track Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not a curated track",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/tracks/{track_id}/decision-tree": {
+      "get": {
+        "tags": [
+          "tracks"
+        ],
+        "summary": "Track Decision Tree",
+        "description": "The DSA decision tree, free (decision D3): yes/no questions that walk to a\npattern (BE-09). Readable without enrolling.",
+        "operationId": "track_decision_tree",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "track_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Track Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DecisionTreeResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not a curated track",
             "content": {
               "application/json": {
                 "schema": {
@@ -3206,6 +3530,139 @@
         ],
         "title": "CreatedMcpTokenResponse"
       },
+      "DecisionTreeNodeResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "question",
+              "leaf"
+            ],
+            "title": "Kind"
+          },
+          "prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt",
+            "description": "question: asked in the guided walk"
+          },
+          "short": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Short",
+            "description": "question: the flowchart label"
+          },
+          "yes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Yes",
+            "description": "question: node id on yes"
+          },
+          "no": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "No",
+            "description": "question: node id on no"
+          },
+          "pattern": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pattern",
+            "description": "leaf: the pattern it lands on"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note",
+            "description": "leaf: why"
+          },
+          "concept_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Concept Id",
+            "description": "leaf: the pattern's concept on this track, when it is one"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "kind"
+        ],
+        "title": "DecisionTreeNodeResponse"
+      },
+      "DecisionTreeResponse": {
+        "properties": {
+          "track_id": {
+            "type": "string",
+            "title": "Track Id"
+          },
+          "root": {
+            "type": "string",
+            "title": "Root"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/DecisionTreeNodeResponse"
+            },
+            "type": "array",
+            "title": "Nodes",
+            "description": "In authoring order"
+          }
+        },
+        "type": "object",
+        "required": [
+          "track_id",
+          "root",
+          "nodes"
+        ],
+        "title": "DecisionTreeResponse"
+      },
       "DevSignInRequest": {
         "properties": {
           "email": {
@@ -3232,6 +3689,31 @@
           "email"
         ],
         "title": "DevSignInRequest"
+      },
+      "DifficultyMix": {
+        "properties": {
+          "easy": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Easy",
+            "default": 20
+          },
+          "medium": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Medium",
+            "default": 55
+          },
+          "hard": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Hard",
+            "default": 25
+          }
+        },
+        "type": "object",
+        "title": "DifficultyMix",
+        "description": "Relative weights of the difficulties in a DSA draw (need not sum to 100)."
       },
       "DueItemResponse": {
         "properties": {
@@ -3311,6 +3793,31 @@
           "last_answer"
         ],
         "title": "DueTodayResponse"
+      },
+      "EnrolmentResponse": {
+        "properties": {
+          "track_id": {
+            "type": "string",
+            "title": "Track Id"
+          },
+          "enrolled": {
+            "type": "boolean",
+            "const": true,
+            "title": "Enrolled",
+            "default": true
+          },
+          "enrolled_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Enrolled At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "track_id",
+          "enrolled_at"
+        ],
+        "title": "EnrolmentResponse"
       },
       "ErrorResponse": {
         "properties": {
@@ -3471,6 +3978,63 @@
         "type": "object",
         "title": "HTTPValidationError"
       },
+      "LibraryPatternResponse": {
+        "properties": {
+          "concept_id": {
+            "type": "string",
+            "title": "Concept Id"
+          },
+          "concept_key": {
+            "type": "string",
+            "title": "Concept Key",
+            "description": "The pattern's slug (the syllabus key)"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "The pattern, as the answer grid shows it"
+          },
+          "problem_count": {
+            "type": "integer",
+            "title": "Problem Count",
+            "description": "Playable problems whose answer is this pattern"
+          },
+          "library": {
+            "$ref": "#/components/schemas/PatternLibraryResponse"
+          }
+        },
+        "type": "object",
+        "required": [
+          "concept_id",
+          "concept_key",
+          "name",
+          "problem_count",
+          "library"
+        ],
+        "title": "LibraryPatternResponse"
+      },
+      "LibraryResponse": {
+        "properties": {
+          "track_id": {
+            "type": "string",
+            "title": "Track Id"
+          },
+          "patterns": {
+            "items": {
+              "$ref": "#/components/schemas/LibraryPatternResponse"
+            },
+            "type": "array",
+            "title": "Patterns",
+            "description": "Syllabus order"
+          }
+        },
+        "type": "object",
+        "required": [
+          "track_id",
+          "patterns"
+        ],
+        "title": "LibraryResponse"
+      },
       "McpTokenResponse": {
         "properties": {
           "id": {
@@ -3618,6 +4182,72 @@
         ],
         "title": "OnboardingResponse"
       },
+      "PatternLibraryResponse": {
+        "properties": {
+          "category": {
+            "type": "string",
+            "title": "Category"
+          },
+          "time": {
+            "type": "string",
+            "title": "Time"
+          },
+          "space": {
+            "type": "string",
+            "title": "Space"
+          },
+          "when_to_reach": {
+            "type": "string",
+            "title": "When To Reach"
+          },
+          "tells": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Tells"
+          },
+          "pseudocode": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Pseudocode"
+          },
+          "explanation": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Explanation",
+            "description": "A few short paragraphs: how it works"
+          },
+          "animation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Animation Id",
+            "description": "The step animation (the v1 reel, keyed by this slug); null if none"
+          }
+        },
+        "type": "object",
+        "required": [
+          "category",
+          "time",
+          "space",
+          "when_to_reach",
+          "tells",
+          "pseudocode",
+          "explanation",
+          "animation_id"
+        ],
+        "title": "PatternLibraryResponse"
+      },
       "PatternMatch": {
         "properties": {
           "description": {
@@ -3626,14 +4256,26 @@
           },
           "io_contract": {
             "type": "string",
-            "title": "Io Contract"
+            "title": "Io Contract",
+            "description": "`Input: …` and `Output: …` lines"
+          },
+          "io_input": {
+            "type": "string",
+            "title": "Io Input",
+            "description": "What comes in, in words"
+          },
+          "io_output": {
+            "type": "string",
+            "title": "Io Output",
+            "description": "What goes out, in words"
           },
           "examples": {
             "items": {
               "$ref": "#/components/schemas/PatternMatchExample"
             },
             "type": "array",
-            "title": "Examples"
+            "title": "Examples",
+            "description": "`note`: the example's explanation"
           },
           "difficulty": {
             "type": "string",
@@ -3645,20 +4287,23 @@
             "title": "Difficulty"
           },
           "time_weight": {
-            "type": "number",
-            "title": "Time Weight"
+            "type": "integer",
+            "title": "Time Weight",
+            "description": "Minutes it takes of the session clock (2 / 4 / 7)"
           }
         },
         "type": "object",
         "required": [
           "description",
           "io_contract",
+          "io_input",
+          "io_output",
           "examples",
           "difficulty",
           "time_weight"
         ],
         "title": "PatternMatch",
-        "description": "BE-09 `pattern_match` payload; always null until BE-09."
+        "description": "A `pattern_match` problem as the queue shows it (BE-09). Never the title or\nthe LeetCode link: both name the problem, and stage 2 reveals them."
       },
       "PatternMatchExample": {
         "properties": {
@@ -3785,11 +4430,13 @@
         "properties": {
           "concept_id": {
             "type": "string",
-            "title": "Concept Id"
+            "title": "Concept Id",
+            "description": "pattern_match: the track id (the pattern is the answer, withheld until stage 2); send it back as stage 1's concept_id"
           },
           "concept_title": {
             "type": "string",
-            "title": "Concept Title"
+            "title": "Concept Title",
+            "description": "pattern_match: \"Pattern match\""
           },
           "question_id": {
             "type": "string",
@@ -4305,6 +4952,30 @@
             "type": "integer",
             "title": "Done Today",
             "description": "Answers given since midnight UTC"
+          },
+          "time_budget_minutes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Time Budget Minutes",
+            "description": "DSA sessions: the session clock (null otherwise)"
+          },
+          "time_weight_total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Time Weight Total",
+            "description": "DSA sessions: minutes the drawn problems weigh (≤ the budget)"
           }
         },
         "type": "object",
@@ -4961,7 +5632,7 @@
               }
             ],
             "title": "Match",
-            "description": "pattern_match questions only (BE-09); null today"
+            "description": "pattern_match only: correct (the pattern), partial (an acceptable one), incorrect; null for free_text"
           },
           "question_title": {
             "anyOf": [
@@ -4973,7 +5644,7 @@
               }
             ],
             "title": "Question Title",
-            "description": "pattern_match questions only (BE-09); null today"
+            "description": "pattern_match only: the problem's title, revealed now; null for free_text"
           },
           "retired": {
             "type": "boolean",
@@ -4990,7 +5661,31 @@
               }
             ],
             "title": "Feedback",
-            "description": "The model's feedback, once graded"
+            "description": "The model's feedback, once graded (pattern_match: the coaching line, graded at once)"
+          },
+          "concept_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Concept Id",
+            "description": "The answered concept (for pattern_match, the pattern the queue item withheld)"
+          },
+          "leetcode_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Leetcode Url",
+            "description": "pattern_match only: the problem on leetcode.com"
           }
         },
         "type": "object",
@@ -5054,12 +5749,13 @@
               }
             ],
             "title": "Kind",
-            "description": "BE-09: DSA sessions; every track is `notes` today"
+            "description": "dsa_patterns: a DSA session drawn by the v1 rules from the caller's enrolled DSA tracks (BE-09); notes: due questions without the DSA tracks; omitted: every due question"
           },
           "time_budget_minutes": {
             "anyOf": [
               {
                 "type": "integer",
+                "maximum": 240.0,
                 "minimum": 1.0
               },
               {
@@ -5067,7 +5763,18 @@
               }
             ],
             "title": "Time Budget Minutes",
-            "description": "BE-09 DSA sessions; accepted and ignored today"
+            "description": "DSA sessions: the one continuous clock, in minutes (default 30); problems are drawn until their time weights fill it"
+          },
+          "difficulty_mix": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DifficultyMix"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "DSA sessions: difficulty weights (default 20 / 55 / 25)"
           }
         },
         "type": "object",
@@ -5591,12 +6298,12 @@
               }
             ],
             "title": "Description",
-            "description": "Curated tracks only (BE-09); null"
+            "description": "Curated tracks: the catalog blurb; else null"
           },
           "enrolled": {
             "type": "boolean",
             "title": "Enrolled",
-            "description": "Curated tracks: the caller has concepts on it"
+            "description": "Curated tracks: the caller enrolled in it (always false on their own)"
           },
           "created_at": {
             "type": "string",
@@ -5873,12 +6580,12 @@
               }
             ],
             "title": "Description",
-            "description": "Curated tracks only (BE-09); null"
+            "description": "Curated tracks: the catalog blurb; else null"
           },
           "enrolled": {
             "type": "boolean",
             "title": "Enrolled",
-            "description": "Curated tracks: the caller has concepts on it"
+            "description": "Curated tracks: the caller enrolled in it (always false on their own)"
           },
           "created_at": {
             "type": "string",
@@ -6387,6 +7094,17 @@
             "type": "array",
             "title": "Pending Corrections",
             "description": "Notes waiting for the next sync"
+          },
+          "library": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PatternLibraryResponse"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A DSA pattern's library entry (BE-09); null otherwise"
           },
           "created_at": {
             "type": "string",
