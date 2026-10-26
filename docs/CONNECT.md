@@ -55,6 +55,12 @@ a connector URL with a token like a password, and revoke the token if the URL
 leaks. Where a client can send a header (Codex, Claude Desktop's local config),
 use the header.
 
+**A header session needs the header on every message.** When the stream was
+opened with `Authorization: Bearer …`, each `POST /mcp/messages/?session_id=…`
+must carry the same header; a message without it gets 404 "Could not find
+session". `mcp-remote --header` already sends it on every request. A client
+written by hand must do the same.
+
 ## Claude Desktop
 
 Two ways; use **A** unless you prefer the token not to sit in a URL.

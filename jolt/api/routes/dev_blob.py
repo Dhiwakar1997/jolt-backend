@@ -47,4 +47,10 @@ async def get_blob(container: str, blob_path: str, request: Request, rt: Runtime
     stored = rt.blob.get(blob_path)
     if stored is None:
         raise HTTPException(status_code=404, detail="blob not found")
-    return Response(content=stored.data, media_type=stored.content_type)
+    # Azure Blob sends no Cross-Origin-Resource-Policy, so the app (on another
+    # origin) can show page images; the API-wide `same-site` default would block
+    # them. Content-Disposition mirrors what the blob was stored with (exports).
+    headers = {"Cross-Origin-Resource-Policy": "cross-origin"}
+    if stored.content_disposition:
+        headers["Content-Disposition"] = stored.content_disposition
+    return Response(content=stored.data, media_type=stored.content_type, headers=headers)

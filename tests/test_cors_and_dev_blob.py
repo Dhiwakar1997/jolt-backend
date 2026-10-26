@@ -111,7 +111,20 @@ def test_dev_blob_read_url(served: TestClient):
     got = served.get(_path(read_url))
     assert got.status_code == 200 and got.content == b"bytes"
     assert got.headers["content-type"] == "image/png"
+    # Like Azure Blob: page images load in the app on another origin.
+    assert got.headers["cross-origin-resource-policy"] == "cross-origin"
+    assert "content-disposition" not in got.headers
     assert served.put(_path(read_url), content=b"x").status_code == 403
+
+
+def test_dev_blob_serves_stored_content_disposition(served: TestClient):
+    rt = served.app.state.runtime
+    path = "exports/u1/jolt-export.json"
+    disposition = 'attachment; filename="jolt-export-2026-10-26.json"'
+    asyncio.run(rt.blob.upload_bytes(path, b"{}", "application/json", disposition))
+    got = served.get(_path(asyncio.run(rt.blob.read_url(path))))
+    assert got.status_code == 200
+    assert got.headers["content-disposition"] == disposition
 
 
 def test_dev_blob_routes_absent_outside_memory_mode():

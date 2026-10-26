@@ -272,6 +272,7 @@ class InMemoryCosmosGateway:
 class _StoredBlob:
     data: bytes
     content_type: Optional[str]
+    content_disposition: Optional[str] = None
 
 
 @dataclass
@@ -328,7 +329,7 @@ class InMemoryBlobGateway:
         content_type: str,
         content_disposition: Optional[str] = None,
     ) -> None:
-        self.put(blob_path, data, content_type)
+        self.put(blob_path, data, content_type, content_disposition)
 
     async def list_paths(self, prefix: str) -> list[str]:
         return sorted(p for p in self._blobs if p.startswith(prefix))
@@ -356,9 +357,17 @@ class InMemoryBlobGateway:
     async def delete(self, blob_path: str) -> None:
         self._blobs.pop(blob_path, None)
 
-    def put(self, blob_path: str, data: bytes, content_type: Optional[str] = None) -> None:
+    def put(
+        self,
+        blob_path: str,
+        data: bytes,
+        content_type: Optional[str] = None,
+        content_disposition: Optional[str] = None,
+    ) -> None:
         """Store bytes as the client's direct PUT to the upload URL would."""
-        self._blobs[blob_path] = _StoredBlob(data=data, content_type=content_type)
+        self._blobs[blob_path] = _StoredBlob(
+            data=data, content_type=content_type, content_disposition=content_disposition
+        )
 
     def get(self, blob_path: str) -> Optional[_StoredBlob]:
         return self._blobs.get(blob_path)
