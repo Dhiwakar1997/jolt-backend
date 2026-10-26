@@ -149,8 +149,9 @@ class UserSettings(BaseModel):
     # Most answers a day; review sessions are cut to what is left of it.
     # None: no cap.
     daily_review_cap: Optional[int] = None
-    # How long to keep uploads, in days (a stored preference; nothing deletes
-    # by it yet). Was `User.retention_days` / PUT /v1/settings/retention.
+    # How long to keep uploads, in days. The daily maintenance sweep (BE-10,
+    # jolt/services/maintenance.py) deletes older sources with their blobs and
+    # reads. None: keep forever. Was `User.retention_days` / PUT /v1/settings/retention.
     data_retention_days: Optional[int] = None
     # IANA zone of the learner's day: "today", streaks, the heatmap, the upload
     # date of a session (decision D6) and the sync schedule (GAPS #8).

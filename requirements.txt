@@ -14,6 +14,17 @@ azure-cosmos==4.9.0
 azure-storage-blob==12.24.0
 azure-keyvault-secrets==4.9.0
 azure-identity==1.19.0
+# HTTP transport of the async Azure SDK clients (azure.*.aio). Not a dependency
+# of the SDK packages themselves: without it the first Cosmos/Blob call in
+# Azure fails with "No module named 'aiohttp'" (found in BE-10).
+aiohttp==3.12.15
+
+# --- Observability (BE-10) ---
+# OpenTelemetry -> Application Insights; loaded only when
+# APPLICATIONINSIGHTS_CONNECTION_STRING is set (jolt/telemetry.py).
+azure-monitor-opentelemetry==1.8.11
+opentelemetry-api==1.45.1
+opentelemetry-sdk==1.45.1
 
 # --- Auth ---
 argon2-cffi==23.1.0

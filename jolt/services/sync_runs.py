@@ -26,6 +26,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional
 
+from jolt import telemetry
 from jolt.auth.context import UserContext
 from jolt.domain.models import SyncChange, SyncRun, SyncRunStatus
 from jolt.runtime import Runtime
@@ -75,7 +76,9 @@ class SyncRunService:
             token_id=user.token_id,
             client_label=user.token_label or DEFAULT_CLIENT_LABEL,
         )
-        return await self._repo.create(run)
+        created = await self._repo.create(run)
+        telemetry.record_sync_run(user.user_id, "started", created.client_label)
+        return created
 
     async def current(self, user: UserContext) -> Optional[SyncRun]:
         """The run a tool call made with this token counts towards, if any."""
@@ -119,6 +122,7 @@ class SyncRunService:
             r.finished_at = _now()
 
         run = await self.update(run, close)
+        telemetry.record_sync_run(run.user_id, "finished", run.client_label)
         await self._mark_first_sync(run.user_id, run.finished_at or _now())
         return run
 
@@ -147,6 +151,7 @@ class SyncRunService:
                 saved = await self._repo.replace(run, etag=run.etag)
                 if saved is not None:
                     run = saved
+                    telemetry.record_sync_run(user_id, "incomplete", run.client_label)
                     break
                 fresh = await self._repo.get(run.id, run.user_id)
                 if fresh is None or fresh.status != SyncRunStatus.RUNNING:

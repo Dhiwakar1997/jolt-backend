@@ -15,6 +15,7 @@ from azure.cosmos import PartitionKey
 from azure.cosmos.aio import ContainerProxy, CosmosClient, DatabaseProxy
 
 from jolt.config import Settings, get_settings
+from jolt.telemetry import cosmos_response_hook
 
 # Container name -> partition key path (LLD §6 partition strategy).
 CONTAINER_PARTITION_KEYS: dict[str, str] = {
@@ -89,10 +90,19 @@ def _build_client(settings: Settings) -> CosmosClient:
         # Imported lazily so `key` mode has no Azure Identity dependency at import.
         from azure.identity.aio import DefaultAzureCredential
 
-        return CosmosClient(settings.cosmos_endpoint, credential=DefaultAzureCredential())
+        return CosmosClient(
+            settings.cosmos_endpoint,
+            credential=DefaultAzureCredential(),
+            raw_response_hook=cosmos_response_hook,
+        )
     if not settings.cosmos_key:
         raise RuntimeError("AUTH_MODE=key but COSMOS_KEY is empty. Set COSMOS_KEY in .env.")
-    return CosmosClient(settings.cosmos_endpoint, credential=settings.cosmos_key)
+    # raw_response_hook: the RU charge of every response, per route / tool (BE-10).
+    return CosmosClient(
+        settings.cosmos_endpoint,
+        credential=settings.cosmos_key,
+        raw_response_hook=cosmos_response_hook,
+    )
 
 
 async def init_cosmos(settings: Settings | None = None) -> CosmosGateway:

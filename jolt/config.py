@@ -96,6 +96,27 @@ class Settings(BaseSettings):
     # and by the Blob lifecycle rule on `exports/` (infra/modules/storage.bicep).
     export_url_ttl_seconds: int = Field(default=3600, ge=60, le=7 * 24 * 3600)
 
+    # ---- Production hardening (BE-10) ----
+    # Application Insights (OpenTelemetry, jolt/telemetry.py). Empty: telemetry
+    # is off and no exporter is loaded (tests, local runs). Azure: set by Bicep.
+    applicationinsights_connection_string: str = ""
+    # Per-token rate limits on /v1 and /mcp: in-process token buckets, so they
+    # hold per replica. A bucket holds one minute's worth of requests and
+    # refills continuously; over the limit answers 429 with Retry-After.
+    rate_limit_enabled: bool = True
+    rate_limit_rest_per_minute: int = Field(default=120, ge=1)
+    # MCP tool calls per token (a nightly sync makes dozens in a burst).
+    rate_limit_mcp_per_minute: int = Field(default=300, ge=1)
+    # Coarse cap per client IP over /v1 and /mcp, whatever the token.
+    rate_limit_ip_per_minute: int = Field(default=600, ge=1)
+    # Request body caps (bytes): 413 above them. Uploads go straight to Blob,
+    # so no API body carries a file; MCP extractions can be long markdown.
+    request_max_bytes: int = Field(default=1024 * 1024, ge=1024)
+    mcp_request_max_bytes: int = Field(default=4 * 1024 * 1024, ge=1024)
+    # Maintenance sweep (python -m jolt.maintenance, a scheduled Container Apps
+    # Job): unconfirmed uploads older than this are deleted.
+    abandoned_upload_hours: int = Field(default=24, ge=1)
+
     # ---- Key Vault ----
     keyvault_url: str = ""
 

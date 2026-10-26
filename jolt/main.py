@@ -13,6 +13,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from jolt.api.limits import install_limits
 from jolt.api.routes import (
     auth,
     concepts,
@@ -31,6 +32,7 @@ from jolt.config import Settings, get_settings
 from jolt.mcp.context import set_runtime as set_mcp_runtime
 from jolt.mcp.server import build_mcp_app, install_log_redaction
 from jolt.runtime import Runtime
+from jolt.telemetry import install_telemetry
 
 logger = logging.getLogger("jolt")
 
@@ -70,6 +72,12 @@ def create_app(settings: Settings | None = None, runtime: Runtime | None = None)
     if runtime is not None:
         app.state.runtime = runtime
 
+    # BE-10: rate/size limits, then request metrics (+ Application Insights when
+    # configured). Added before CORS so CORS stays outermost and a 429/413
+    # still carries CORS headers.
+    install_limits(app, cfg)
+    install_telemetry(app, cfg)
+
     # CORS for the browser app (BE-02), from CORS_ORIGINS / CORS_ORIGIN_REGEX.
     # Applied app-wide so it covers /v1 and, in memory mode, the /_dev/blob
     # upload URLs; non-browser clients (MCP agents) ignore it. The token rides
@@ -81,6 +89,7 @@ def create_app(settings: Settings | None = None, runtime: Runtime | None = None)
         allow_credentials=False,
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["*"],
+        expose_headers=["Retry-After"],
         max_age=600,
     )
 

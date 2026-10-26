@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone, tzinfo
 from typing import Optional
 
+from jolt import telemetry
 from jolt.data.leases import SourceLeases
 from jolt.domain.grading import GradingInput
 from jolt.domain.models import (
@@ -243,12 +244,16 @@ class SyncService:
         for source in candidates:
             if not self._is_claimable(source):
                 continue
+            lapsed = source.processing_status == ProcessingStatus.IN_FLIGHT
             if self._exhausted(source):
                 await self._mark_failed(source)  # BE-05: `failed` instead of a retry loop
+                telemetry.record_lease_expiry("source", "failed")
                 continue
             leased = await self._source_leases.claim(source)
             if leased is not None:  # None => lost the etag race to another sync
                 claimed.append(leased)
+                if lapsed:  # an earlier sync's lease ran out (BE-10 metric)
+                    telemetry.record_lease_expiry("source", "reclaimed")
         return claimed
 
     async def get_source_content(self, user_id: str, source_id: str) -> SourceContent:
@@ -308,6 +313,11 @@ class SyncService:
             client_label=client_label,
         )
         extraction = await self._rt.repos.extractions.create(extraction)
+        telemetry.record_extraction(
+            confidence,
+            low=confidence < self._rt.settings.low_confidence_threshold,
+            model=model_id,
+        )
 
         history = await self._rt.repos.extractions.history_for_source(source_id)
         for previous in history:

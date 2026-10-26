@@ -5,6 +5,7 @@ Sources partition by /user_id; extractions by /source_id (history read together)
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Optional
 
 from jolt.data.repositories.base import Repository
@@ -48,6 +49,18 @@ class SourcesRepository(Repository[Source]):
             params.append({"name": "@status", "value": status.value})
         query = f"SELECT * FROM c WHERE {' AND '.join(clauses)} ORDER BY c.created_at DESC"
         return await self._query(query, params, partition_value=user_id)
+
+    async def list_unconfirmed_before(self, cutoff: datetime) -> list[Source]:
+        """Uploads never confirmed and requested before `cutoff`, across users.
+        Maintenance only (the abandoned-upload sweep, BE-10)."""
+        iterator = self._c.query_items(
+            query="SELECT * FROM c WHERE c.confirmed_at = @none AND c.created_at < @cutoff",
+            parameters=[
+                {"name": "@none", "value": None},
+                {"name": "@cutoff", "value": cutoff.isoformat()},
+            ],
+        )
+        return [self._from_doc(doc) async for doc in iterator]
 
     async def list_unprocessed(self, user_id: str, limit: int) -> list[Source]:
         """Claimable sources: unprocessed, or in_flight with an expired lease.

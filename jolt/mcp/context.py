@@ -36,6 +36,11 @@ def set_current_token(token: Optional[str]) -> None:
     _current_token.set(token)
 
 
+def current_token() -> Optional[str]:
+    """The connection's token, unverified (the per-token rate limit keys on it)."""
+    return _current_token.get()
+
+
 class MCPAuthError(Exception):
     pass
 

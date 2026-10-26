@@ -13,7 +13,9 @@ server from it), so the token that opened the stream is the one every tool call
 of that connection sees.
 
 Every tool is wrapped so an exception it raises is also recorded on the caller's
-open sync run (BE-04) before it reaches the agent as an MCP tool error.
+open sync run (BE-04) before it reaches the agent as an MCP tool error. The same
+wrapper applies the per-token rate limit to each tool call and records the
+call's outcome and Cosmos RU (BE-10, jolt/api/limits.py, jolt/telemetry.py).
 """
 
 from __future__ import annotations
@@ -27,10 +29,13 @@ from urllib.parse import parse_qs
 
 from mcp.server.fastmcp import FastMCP
 
+from jolt import telemetry
+from jolt.api import limits
 from jolt.auth.context import bearer_from_header
 from jolt.mcp.context import (
     MCPAuthError,
     authenticate_mcp,
+    current_token,
     get_runtime,
     require_user,
     set_current_token,
@@ -75,13 +80,24 @@ def _recording_errors(name: str, func):
 
     @functools.wraps(func)
     async def wrapper(*args, **kwargs):
-        try:
-            return await func(*args, **kwargs)
-        except MCPAuthError:
-            raise  # no user to record it for
-        except Exception as exc:
-            await _record_error(name, exc)
-            raise
+        # BE-10: per-token rate limit, and the call's outcome and Cosmos RU.
+        outcome = "ok"
+        with telemetry.metering() as charge:
+            try:
+                limits.check_mcp_call(current_token())
+                return await func(*args, **kwargs)
+            except limits.RateLimited:
+                outcome = "rate_limited"
+                raise
+            except MCPAuthError:
+                outcome = "unauthorized"
+                raise  # no user to record it for
+            except Exception as exc:
+                outcome = "error"
+                await _record_error(name, exc)
+                raise
+            finally:
+                telemetry.record_tool_call(name, outcome, charge.total)
 
     wrapper.__signature__ = inspect.signature(func, eval_str=True)
     return wrapper

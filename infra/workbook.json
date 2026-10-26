@@ -1,0 +1,334 @@
+{
+  "version": "Notebook/1.0",
+  "items": [
+    {
+      "type": 9,
+      "content": {
+        "version": "KqlParameterItem/1.0",
+        "parameters": [
+          {
+            "id": "b7f0c6d2-2d47-4c69-9f43-0b6a8f1d3e10",
+            "version": "KqlParameterItem/1.0",
+            "name": "TimeRange",
+            "label": "Time range",
+            "type": 4,
+            "isRequired": true,
+            "value": {
+              "durationMs": 604800000
+            },
+            "typeSettings": {
+              "selectableValues": [
+                {
+                  "durationMs": 86400000
+                },
+                {
+                  "durationMs": 604800000
+                },
+                {
+                  "durationMs": 2592000000
+                }
+              ],
+              "allowCustom": true
+            }
+          }
+        ],
+        "style": "pills",
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components"
+      }
+    },
+    {
+      "type": 1,
+      "content": {
+        "json": "## Jolt API\nCustom metrics from `jolt/telemetry.py` (OpenTelemetry, `customMetrics`) and request telemetry (`requests`). Counters are exported as deltas, so `sum(valueSum)` is the count; histograms carry `valueSum` / `valueCount` per export interval."
+      }
+    },
+    {
+      "type": 1,
+      "content": {
+        "json": "### Nightly sync"
+      }
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "customMetrics | where name == \"jolt.sync.runs\"\n| extend status = tostring(customDimensions.status)\n| summarize runs = sum(valueSum) by bin(timestamp, 1d), status\n| render columnchart",
+        "size": 0,
+        "title": "Sync runs per day, by outcome",
+        "timeContext": {
+          "durationMs": 0
+        },
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components",
+        "visualization": "barchart"
+      },
+      "customWidth": "50"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "customMetrics | where name == \"jolt.sync.runs\"\n| extend user = tostring(customDimensions.user_id), status = tostring(customDimensions.status), client = tostring(customDimensions.client)\n| summarize started = sumif(valueSum, status == \"started\"), finished = sumif(valueSum, status == \"finished\"), incomplete = sumif(valueSum, status == \"incomplete\"), days_with_a_run = dcountif(bin(timestamp, 1d), status == \"started\"), last_run = max(timestamp), clients = make_set(client, 5) by user\n| order by started desc",
+        "size": 0,
+        "title": "Sync frequency per user",
+        "timeContext": {
+          "durationMs": 0
+        },
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components",
+        "visualization": "table"
+      },
+      "customWidth": "50"
+    },
+    {
+      "type": 1,
+      "content": {
+        "json": "### Extraction"
+      }
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "traces\n| where message == \"extraction stored\"\n| extend confidence = todouble(customDimensions.confidence)\n| summarize reads = count() by bucket = round(bin(confidence, 0.1), 1)\n| order by bucket asc\n| render columnchart",
+        "size": 0,
+        "title": "Extraction confidence distribution (per read)",
+        "timeContext": {
+          "durationMs": 0
+        },
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components",
+        "visualization": "barchart"
+      },
+      "customWidth": "50"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "customMetrics | where name == \"jolt.extraction.confidence\"\n| extend low = tostring(customDimensions.low_confidence)\n| summarize reads = sum(valueCount), mean_confidence = round(sum(valueSum) / sum(valueCount), 3), low_confidence = sumif(valueCount, low == \"True\" or low == \"true\") by bin(timestamp, 1d)\n| order by timestamp asc",
+        "size": 0,
+        "title": "Reads per day and mean confidence",
+        "timeContext": {
+          "durationMs": 0
+        },
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components",
+        "visualization": "table"
+      },
+      "customWidth": "50"
+    },
+    {
+      "type": 1,
+      "content": {
+        "json": "### Leases"
+      }
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "customMetrics | where name == \"jolt.lease.expiries\"\n| extend outcome = tostring(customDimensions.outcome)\n| summarize expiries = sum(valueSum) by bin(timestamp, 1d), outcome\n| render columnchart",
+        "size": 0,
+        "title": "Lease expiries per day (reclaimed / failed)",
+        "timeContext": {
+          "durationMs": 0
+        },
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components",
+        "visualization": "barchart"
+      },
+      "customWidth": "50"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "let reads = customMetrics | where name == \"jolt.extraction.confidence\" | summarize reads = sum(valueCount) by day = bin(timestamp, 1d);\ncustomMetrics | where name == \"jolt.lease.expiries\"\n| summarize expiries = sum(valueSum) by day = bin(timestamp, 1d)\n| join kind=fullouter reads on day\n| project day = coalesce(day, day1), expiries = coalesce(expiries, 0.0), reads = coalesce(reads, 0.0)\n| extend rate = iff(reads > 0, round(expiries / reads, 3), real(null))\n| order by day asc",
+        "size": 0,
+        "title": "Lease-expiry rate (expiries per stored read)",
+        "timeContext": {
+          "durationMs": 0
+        },
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components",
+        "visualization": "table"
+      },
+      "customWidth": "50"
+    },
+    {
+      "type": 1,
+      "content": {
+        "json": "### Cosmos DB request units"
+      }
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "customMetrics | where name == \"jolt.cosmos.request_charge\"\n| where tostring(customDimensions.surface) == \"mcp\"\n| extend tool = tostring(customDimensions.operation)\n| summarize RU = round(sum(valueSum), 1), calls = sum(valueCount), RU_per_call = round(sum(valueSum) / sum(valueCount), 2) by tool\n| order by RU desc",
+        "size": 0,
+        "title": "RU per MCP tool",
+        "timeContext": {
+          "durationMs": 0
+        },
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components",
+        "visualization": "table"
+      },
+      "customWidth": "50"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "customMetrics | where name == \"jolt.cosmos.request_charge\"\n| where tostring(customDimensions.surface) == \"rest\"\n| extend route = tostring(customDimensions.operation)\n| summarize RU = round(sum(valueSum), 1), requests = sum(valueCount), RU_per_request = round(sum(valueSum) / sum(valueCount), 2) by route\n| order by RU desc",
+        "size": 0,
+        "title": "RU per REST route",
+        "timeContext": {
+          "durationMs": 0
+        },
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components",
+        "visualization": "table"
+      },
+      "customWidth": "50"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "customMetrics | where name == \"jolt.cosmos.request_charge\"\n| extend surface = tostring(customDimensions.surface)\n| summarize RU = sum(valueSum) by bin(timestamp, 1h), surface\n| render timechart",
+        "size": 0,
+        "title": "RU per hour, REST vs MCP",
+        "timeContext": {
+          "durationMs": 0
+        },
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components",
+        "visualization": "timechart"
+      }
+    },
+    {
+      "type": 1,
+      "content": {
+        "json": "### Errors and limits"
+      }
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "customMetrics | where name == \"jolt.http.requests\"\n| extend cls = tostring(customDimensions.status_class)\n| summarize total = sum(valueSum), e5xx = sumif(valueSum, cls == \"5xx\"), e4xx = sumif(valueSum, cls == \"4xx\") by bin(timestamp, 1h)\n| project timestamp, rate_5xx = round(100.0 * e5xx / total, 2), rate_4xx = round(100.0 * e4xx / total, 2)\n| render timechart",
+        "size": 0,
+        "title": "HTTP error rate (%) per hour",
+        "timeContext": {
+          "durationMs": 0
+        },
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components",
+        "visualization": "timechart"
+      },
+      "customWidth": "50"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "customMetrics | where name == \"jolt.mcp.tool_calls\"\n| extend outcome = tostring(customDimensions.outcome)\n| summarize calls = sum(valueSum) by bin(timestamp, 1h), outcome\n| render timechart",
+        "size": 0,
+        "title": "MCP tool outcomes per hour",
+        "timeContext": {
+          "durationMs": 0
+        },
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components",
+        "visualization": "timechart"
+      },
+      "customWidth": "50"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "customMetrics | where name == \"jolt.http.requests\"\n| where tostring(customDimensions.status_class) == \"5xx\"\n| extend route = tostring(customDimensions.route), method = tostring(customDimensions.method)\n| summarize errors = sum(valueSum) by method, route\n| order by errors desc",
+        "size": 0,
+        "title": "Failing routes (5xx)",
+        "timeContext": {
+          "durationMs": 0
+        },
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components",
+        "visualization": "table"
+      },
+      "customWidth": "50"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "customMetrics | where name == \"jolt.rate_limited\"\n| extend surface = tostring(customDimensions.surface), scope = tostring(customDimensions.scope)\n| summarize refused = sum(valueSum) by bin(timestamp, 1h), series = strcat(surface, \"/\", scope)\n| render timechart",
+        "size": 0,
+        "title": "Rate-limited requests (429) per hour",
+        "timeContext": {
+          "durationMs": 0
+        },
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components",
+        "visualization": "timechart"
+      },
+      "customWidth": "50"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "exceptions\n| summarize count() by type, outerMessage\n| order by count_ desc\n| take 20",
+        "size": 0,
+        "title": "Exceptions",
+        "timeContext": {
+          "durationMs": 0
+        },
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components",
+        "visualization": "table"
+      },
+      "customWidth": "50"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "customMetrics | where name == \"jolt.maintenance.deleted\"\n| extend kind = tostring(customDimensions.kind)\n| summarize deleted = sum(valueSum) by bin(timestamp, 1d), kind\n| render columnchart",
+        "size": 0,
+        "title": "Maintenance sweep deletions per day",
+        "timeContext": {
+          "durationMs": 0
+        },
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components",
+        "visualization": "barchart"
+      },
+      "customWidth": "50"
+    }
+  ],
+  "isLocked": false,
+  "fallbackResourceIds": [],
+  "$schema": "https://github.com/Microsoft/Application-Insights-Workbooks/blob/master/schema/workbook.json"
+}

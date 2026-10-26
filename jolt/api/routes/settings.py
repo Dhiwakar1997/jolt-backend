@@ -84,8 +84,9 @@ class SettingsFields(BaseModel):
         description="Most answers a day; review sessions are cut to what is left. null: no cap"
     )
     data_retention_days: Optional[int] = Field(
-        description="How long to keep uploads, in days (stored preference; not enforced yet). "
-        "null: keep everything. Not FSRS retention: see desired_retention"
+        description="How long to keep uploads, in days: a daily sweep deletes older sources "
+        "with their files and reads (what was learned stays). null: keep everything. "
+        "Not FSRS retention: see desired_retention"
     )
     time_zone: str = Field(
         description="IANA zone of the learner's day (today, streak, heatmap, upload dates)"
