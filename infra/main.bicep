@@ -196,7 +196,7 @@ module keyVault 'modules/keyvault.bicep' = {
     tokenHashPepper: tokenHashPepper
     devAuthSecret: devAuthSecret
     // The deploy workflow reads the dev sign-in secret for its smoke test.
-    devSecretReaderPrincipalId: devAuthEnabled ? identity.outputs.githubIdentityPrincipalId : ''
+    devAuthReaderPrincipalId: devAuthEnabled ? identity.outputs.githubIdentityPrincipalId : ''
   }
 }
 

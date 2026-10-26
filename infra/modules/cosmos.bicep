@@ -22,7 +22,9 @@ var containerDefs = loadJsonContent('../cosmos-containers.json').containers
 // Cosmos DB Built-in Data Contributor (data-plane role, not an ARM role).
 var dataContributorRoleId = '00000000-0000-0000-0000-000000000002'
 
-resource account 'Microsoft.DocumentDB/databaseAccounts@2024-11-15' = {
+// API 2024-05-15: the newest GA version the pinned Bicep CLI has types for, so
+// every property below is validated at build time (newer versions give BCP081).
+resource account 'Microsoft.DocumentDB/databaseAccounts@2024-05-15' = {
   name: accountName
   location: location
   tags: tags
@@ -58,7 +60,7 @@ resource account 'Microsoft.DocumentDB/databaseAccounts@2024-11-15' = {
   }
 }
 
-resource database 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-11-15' = {
+resource database 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-05-15' = {
   parent: account
   name: databaseName
   properties: {
@@ -68,7 +70,7 @@ resource database 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-11-15
   }
 }
 
-resource containers 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = [
+resource containers 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-05-15' = [
   for c in containerDefs: {
     parent: database
     name: c.name
@@ -102,7 +104,7 @@ resource containers 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containe
   }
 ]
 
-resource appData 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@2024-11-15' = {
+resource appData 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@2024-05-15' = {
   parent: account
   name: guid(account.id, appPrincipalId, dataContributorRoleId)
   properties: {
@@ -115,7 +117,7 @@ resource appData 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@2024-
   ]
 }
 
-resource developerData 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@2024-11-15' = if (!empty(developerPrincipalId)) {
+resource developerData 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@2024-05-15' = if (!empty(developerPrincipalId)) {
   parent: account
   name: guid(account.id, developerPrincipalId, dataContributorRoleId)
   properties: {
