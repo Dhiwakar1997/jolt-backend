@@ -14,9 +14,10 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from jolt.api.deps import RuntimeDep, UserDep
+from jolt.api.errors import BAD_REQUEST, NOT_FOUND, UNAUTHORIZED
 from jolt.services.reviews import ReviewError, ReviewService
 
-router = APIRouter(prefix="/v1/reviews", tags=["reviews"])
+router = APIRouter(prefix="/v1/reviews", tags=["reviews"], responses=UNAUTHORIZED)
 
 
 class DueItemResponse(BaseModel):
@@ -61,7 +62,7 @@ async def get_due(user: UserDep, rt: RuntimeDep, limit: int = 100) -> DueRespons
     )
 
 
-@router.post("/{question_id}/stage1", response_model=StageOneResponse)
+@router.post("/{question_id}/stage1", response_model=StageOneResponse, responses=NOT_FOUND)
 async def submit_stage_one(
     question_id: str, body: StageOneRequest, user: UserDep, rt: RuntimeDep
 ) -> StageOneResponse:
@@ -74,7 +75,7 @@ async def submit_stage_one(
     return StageOneResponse(review_id=result.review_id, options=result.options)
 
 
-@router.post("/{review_id}/stage2", response_model=StageTwoResponse)
+@router.post("/{review_id}/stage2", response_model=StageTwoResponse, responses=BAD_REQUEST)
 async def submit_stage_two(
     review_id: str, body: StageTwoRequest, user: UserDep, rt: RuntimeDep
 ) -> StageTwoResponse:

@@ -53,7 +53,13 @@ async def lifespan(app: FastAPI):
 def create_app(settings: Settings | None = None, runtime: Runtime | None = None) -> FastAPI:
     """Build the app. `settings` / `runtime` are injection points for tests."""
     cfg = settings or get_settings()
-    app = FastAPI(title="Jolt API", version="0.2.0", lifespan=lifespan)
+    app = FastAPI(
+        title="Jolt API",
+        version="0.2.0",
+        lifespan=lifespan,
+        # Stable, readable operationIds (the handler name) for generated clients.
+        generate_unique_id_function=lambda route: route.name,
+    )
     app.state.settings = cfg
     if runtime is not None:
         app.state.runtime = runtime

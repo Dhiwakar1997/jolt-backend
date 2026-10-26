@@ -8,8 +8,9 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from jolt.api.deps import RuntimeDep, UserDep
+from jolt.api.errors import NOT_FOUND, UNAUTHORIZED
 
-router = APIRouter(prefix="/v1/sources", tags=["sources"])
+router = APIRouter(prefix="/v1/sources", tags=["sources"], responses=UNAUTHORIZED)
 
 
 class SourceResponse(BaseModel):
@@ -46,7 +47,9 @@ async def list_sources(user: UserDep, rt: RuntimeDep) -> list[SourceResponse]:
     ]
 
 
-@router.get("/{source_id}/extractions", response_model=list[ExtractionResponse])
+@router.get(
+    "/{source_id}/extractions", response_model=list[ExtractionResponse], responses=NOT_FOUND
+)
 async def extraction_history(
     source_id: str, user: UserDep, rt: RuntimeDep
 ) -> list[ExtractionResponse]:

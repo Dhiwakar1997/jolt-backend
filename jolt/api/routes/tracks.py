@@ -6,10 +6,11 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from jolt.api.deps import RuntimeDep, UserDep
+from jolt.api.errors import NOT_FOUND, UNAUTHORIZED
 from jolt.domain.models import Agenda
 from jolt.services.tracks import TrackError, TrackService
 
-router = APIRouter(prefix="/v1/tracks", tags=["tracks"])
+router = APIRouter(prefix="/v1/tracks", tags=["tracks"], responses=UNAUTHORIZED)
 
 
 class SyllabusItemResponse(BaseModel):
@@ -93,7 +94,7 @@ async def create_track(body: CreateTrackRequest, user: UserDep, rt: RuntimeDep) 
     return _track_response(t)
 
 
-@router.post("/{track_id}/agenda/lock", response_model=AgendaResponse)
+@router.post("/{track_id}/agenda/lock", response_model=AgendaResponse, responses=NOT_FOUND)
 async def lock_agenda(track_id: str, user: UserDep, rt: RuntimeDep) -> AgendaResponse:
     """Freeze refinement: subsequent set_agenda and auto-add are rejected/skipped."""
     try:
@@ -103,7 +104,7 @@ async def lock_agenda(track_id: str, user: UserDep, rt: RuntimeDep) -> AgendaRes
     return _agenda_response(agenda)
 
 
-@router.post("/{track_id}/agenda/unlock", response_model=AgendaResponse)
+@router.post("/{track_id}/agenda/unlock", response_model=AgendaResponse, responses=NOT_FOUND)
 async def unlock_agenda(track_id: str, user: UserDep, rt: RuntimeDep) -> AgendaResponse:
     """Resume refinement after a lock."""
     try:
@@ -113,7 +114,7 @@ async def unlock_agenda(track_id: str, user: UserDep, rt: RuntimeDep) -> AgendaR
     return _agenda_response(agenda)
 
 
-@router.get("/{track_id}/coverage", response_model=CoverageResponse)
+@router.get("/{track_id}/coverage", response_model=CoverageResponse, responses=NOT_FOUND)
 async def coverage(track_id: str, user: UserDep, rt: RuntimeDep) -> CoverageResponse:
     try:
         report = await TrackService(rt).coverage(user.user_id, track_id)

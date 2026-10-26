@@ -6,9 +6,10 @@ from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel
 
 from jolt.api.deps import RuntimeDep, UserDep
+from jolt.api.errors import BAD_REQUEST, UNAUTHORIZED
 from jolt.services.credentials import CredentialError, CredentialService
 
-router = APIRouter(prefix="/v1/settings", tags=["settings"])
+router = APIRouter(prefix="/v1/settings", tags=["settings"], responses=UNAUTHORIZED)
 
 
 class ApiKeyRequest(BaseModel):
@@ -26,7 +27,19 @@ class RetentionRequest(BaseModel):
     retention_days: int | None = None
 
 
-@router.post("/api-key", response_model=ApiKeyResponse)
+class RetentionResponse(BaseModel):
+    retention_days: int | None
+
+
+@router.post(
+    "/api-key",
+    response_model=ApiKeyResponse,
+    responses={
+        **BAD_REQUEST,
+        # Same status as request validation, but with a string `detail`.
+        422: {"description": "Validation error, or the provider rejected the key"},
+    },
+)
 async def set_api_key(body: ApiKeyRequest, user: UserDep, rt: RuntimeDep) -> ApiKeyResponse:
     try:
         stored = await CredentialService(rt).capture(user.user_id, body.provider, body.key)
@@ -43,7 +56,7 @@ async def list_api_keys(user: UserDep, rt: RuntimeDep) -> list[ApiKeyResponse]:
     return [ApiKeyResponse(provider=k.provider, last4=k.last4, status=k.status) for k in keys]
 
 
-@router.delete("/api-key/{provider}", status_code=204)
+@router.delete("/api-key/{provider}", status_code=204, responses=BAD_REQUEST)
 async def delete_api_key(provider: str, user: UserDep, rt: RuntimeDep) -> Response:
     try:
         await CredentialService(rt).delete(user.user_id, provider)
@@ -52,9 +65,9 @@ async def delete_api_key(provider: str, user: UserDep, rt: RuntimeDep) -> Respon
     return Response(status_code=204)
 
 
-@router.put("/retention")
-async def set_retention(body: RetentionRequest, user: UserDep, rt: RuntimeDep) -> dict:
+@router.put("/retention", response_model=RetentionResponse)
+async def set_retention(body: RetentionRequest, user: UserDep, rt: RuntimeDep) -> RetentionResponse:
     u = user.user
     u.retention_days = body.retention_days
     await rt.repos.users.upsert(u)
-    return {"retention_days": body.retention_days}
+    return RetentionResponse(retention_days=body.retention_days)

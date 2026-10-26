@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from jolt.api.deps import RuntimeDep, UserDep
+from jolt.api.errors import BAD_REQUEST, UNAUTHORIZED
 from jolt.services.uploads import UploadError, UploadService
 
-router = APIRouter(prefix="/v1/uploads", tags=["uploads"])
+router = APIRouter(prefix="/v1/uploads", tags=["uploads"], responses=UNAUTHORIZED)
 
 
 class UploadRequest(BaseModel):
@@ -26,6 +29,10 @@ class ConfirmRequest(BaseModel):
     sha256: str | None = None
 
 
+class ConfirmResponse(BaseModel):
+    status: Literal["ready"]
+
+
 @router.post("/request", response_model=UploadResponse)
 async def request_upload(body: UploadRequest, user: UserDep, rt: RuntimeDep) -> UploadResponse:
     ticket = await UploadService(rt).request_upload(
@@ -34,12 +41,12 @@ async def request_upload(body: UploadRequest, user: UserDep, rt: RuntimeDep) -> 
     return UploadResponse(source_id=ticket.source_id, upload_url=ticket.upload_url)
 
 
-@router.post("/{source_id}/confirm")
+@router.post("/{source_id}/confirm", response_model=ConfirmResponse, responses=BAD_REQUEST)
 async def confirm_upload(
     source_id: str, body: ConfirmRequest, user: UserDep, rt: RuntimeDep
-) -> dict:
+) -> ConfirmResponse:
     try:
         await UploadService(rt).confirm_upload(user.user_id, source_id, body.sha256)
     except UploadError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    return {"status": "ready"}
+    return ConfirmResponse(status="ready")

@@ -8,8 +8,9 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from jolt.api.deps import RuntimeDep, UserDep
+from jolt.api.errors import NOT_FOUND, UNAUTHORIZED
 
-router = APIRouter(prefix="/v1/progress", tags=["progress"])
+router = APIRouter(prefix="/v1/progress", tags=["progress"], responses=UNAUTHORIZED)
 
 
 class ConceptStatePoint(BaseModel):
@@ -29,7 +30,7 @@ class ConceptDetailResponse(BaseModel):
     timeline: list[ConceptStatePoint]
 
 
-@router.get("/concepts/{concept_id}", response_model=ConceptDetailResponse)
+@router.get("/concepts/{concept_id}", response_model=ConceptDetailResponse, responses=NOT_FOUND)
 async def concept_detail(concept_id: str, user: UserDep, rt: RuntimeDep) -> ConceptDetailResponse:
     state = await rt.repos.concept_states.for_concept(user.user_id, concept_id)
     if state is None:

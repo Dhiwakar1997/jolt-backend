@@ -9,7 +9,8 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import Depends, Header, HTTPException, Request, status
+from fastapi import Depends, HTTPException, Request, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from jolt.auth.context import UserContext, bearer_from_header, resolve_token
 from jolt.runtime import Runtime
@@ -22,12 +23,18 @@ def get_runtime(request: Request) -> Runtime:
     return rt
 
 
+# Declares the `HTTPBearer` security scheme in the OpenAPI contract. It never
+# rejects on its own (auto_error=False): the raw header is still parsed by
+# `bearer_from_header`, which also tolerates a bare token.
+_bearer_scheme = HTTPBearer(auto_error=False, description="App token: `Bearer <token>`")
+
+
 async def get_user_context(
     request: Request,
-    authorization: Annotated[str | None, Header()] = None,
+    _credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer_scheme)] = None,
 ) -> UserContext:
     rt = get_runtime(request)
-    token = bearer_from_header(authorization)
+    token = bearer_from_header(request.headers.get("authorization"))
     if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
