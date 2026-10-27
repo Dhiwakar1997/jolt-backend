@@ -2,10 +2,15 @@
 venv/
 __pycache__/
 *.pyc
+*.egg-info/
 .pytest_cache/
+.mypy_cache/
 .git/
 .env
 .env.*
+**/.env
+**/.env.*
+!.env.example
 tests/
 jolt-lld.md
 .github/

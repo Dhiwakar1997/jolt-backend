@@ -1,0 +1,79 @@
+name: Image
+
+# Builds the container image and publishes it to GitHub Container Registry
+# (ghcr.io/dhiwakar1997/jolt-backend) with the workflow's own GITHUB_TOKEN: no
+# registry credential is stored. Pull requests build without pushing; pushes to
+# `main` and `v*` tags push. Decision: docs/adr/0001-publish-images-to-ghcr.md.
+#
+# Tags: `sha-<short>` always, `main` from main, `<major>.<minor>.<patch>` from a
+# `v*` tag. Never `latest`: a deploy names a commit.
+#
+# Separate from ci.yml because deploy-dev.yml reuses ci.yml with only
+# `contents: read`, which a `packages: write` job inside it would exceed.
+# deploy-dev.yml still builds to ACR until the Azure deploy moves to GHCR.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: image-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  checks:
+    uses: ./.github/workflows/ci.yml
+
+  image:
+    name: Build and publish
+    needs: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ghcr.io/${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image tags and labels
+        id: meta
+        # Lowercases the image name, which GHCR requires.
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          # The default (latest=auto) would add `latest` on semver tags.
+          flavor: latest=false
+          tags: |
+            type=sha,format=short
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # GET /health reports it (the sha- tag alone does not).
+          build-args: APP_VERSION=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

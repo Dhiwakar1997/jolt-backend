@@ -24,6 +24,15 @@ USER 10001
 
 EXPOSE 8000
 
+# Liveness only: GET /health answers once the lifespan has run and touches no
+# store, so it does not report Cosmos/Blob outages. Start-up failures (missing
+# serving secrets, or Cosmos unreachable when signing in with a key) exit the
+# process instead and the host restarts it. Container Apps ignores HEALTHCHECK
+# and uses its own probes; this is for `docker run` and other hosts.
+# slim has no curl; the standard library is enough.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4)"]
+
 # Container Apps ingress terminates TLS and forwards to Uvicorn on 8000;
 # --proxy-headers makes request URLs report the original https scheme and host.
 # The per-IP rate limit does not trust the client-written part of

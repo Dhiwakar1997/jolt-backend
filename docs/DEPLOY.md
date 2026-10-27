@@ -74,6 +74,9 @@ GitHub pushes through the same OIDC identity that deploys. That matches LLD §5.
 ("Managed Identity everywhere, no key material in images or env"). The cost is
 the Basic tier, about US$5 a month. GHCR would be free but a private package needs
 a long-lived PAT stored as a Container App registry secret.
+*Proposed change:* [ADR 0001](./adr/0001-publish-images-to-ghcr.md) moves the
+image to GHCR. CI already publishes it there (`.github/workflows/image.yml`);
+the deploys below still use ACR until the Azure side moves.
 
 **Cosmos free tier** (mentioned in LLD §10) applies only to provisioned
 throughput, not to serverless. The brief asks for serverless; with dev traffic it
